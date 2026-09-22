@@ -429,6 +429,24 @@ GitHub requires both the check and the commit status when both share a required
 context. Missing approval, failed CI, or evaluation errors fail the review status.
 Missing or running CI leaves it pending and keeps merging blocked. CI completion
 automatically evaluates it again. Approval comments do not rerun the test suite.
+
+Every ten minutes and on manual dispatch, the resolver reconciles CI completions
+from five minutes before the previous successful scheduled pass started until
+five minutes ago (sixty-minute fallback, six-hour cap). Passes tile without gaps;
+late or dropped cron ticks only widen the next window, up to the cap. Run listing
+uses a creation boundary three hours before the window and reads until a short
+page or a page's oldest run predates that boundary. A ten-page ceiling warns and
+continues with the runs already read. Scheduled and dispatched resolver passes
+share one concurrency group without canceling an active pass; GitHub keeps one
+pending pass, which still starts from the last successful window.
+
+The resolver reads each head's `openclaw/ci-gate` commit status and schedules
+normal review only when it is missing or pending and predates CI completion. A
+review that ends pending stops reselection; wholly skipped runs are ignored. It
+never checks out PR code. Each pass costs one hosted `ubuntu-24.04` resolver job,
+run-list reads plus paginated combined-status reads per newly completed head,
+and no Blacksmith registrations.
+
 The Security Review Actions job succeeds when evaluation completes, including
 when the required commit status blocks merging for missing approval or failed CI.
 This prevents an earlier evaluation from leaving a stale failed job after automatic
@@ -597,7 +615,8 @@ that CI bypass.
 
 Results apply to the PR head evaluated by the workflow. New PR heads, base-branch
 retargeting, command comment events, and CI completion reevaluate automatically;
-unrelated pushes to `main` do not. Sensitive-path policy and permission changes
+ten-minute reconciliation recovers lost CI-completion deliveries. Unrelated pushes
+to `main` do not. Sensitive-path policy and permission changes
 take effect on the next automatic evaluation. Guard execution does not require
 manual dispatches or manual reruns.
 

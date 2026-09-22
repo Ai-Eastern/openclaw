@@ -28,6 +28,13 @@ const run = {
   head_repository: { id: 99, owner: { login: "contributor" } },
   pull_requests: [{ number: 42 }],
 };
+const scheduledRunsPath = `${prefix}/actions/workflows/security-review.yml/runs?event=schedule&status=success&per_page=1`;
+const ciRunsPath = `${prefix}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&created=%3E%3D2026-01-01T20%3A00%3A00.000Z&per_page=100&page=1`;
+const completedRun = {
+  ...run,
+  created_at: "2026-01-01T22:30:00Z",
+  updated_at: "2026-01-01T23:40:00Z",
+};
 function recordedPullRequest(number: number) {
   return {
     context: "openclaw/ci-gate",
@@ -57,6 +64,13 @@ function evaluate(options: Options = {}) {
     [`${prefix}/pulls/42`]: { body: { ...pullRequest, ...options.pullRequest } },
     [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: { body: [{ number: 42 }] },
     [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: [] },
+    [scheduledRunsPath]: { body: { workflow_runs: [] } },
+    [ciRunsPath]: { body: { workflow_runs: [{ ...completedRun, ...options.run }] } },
+    [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
+      body: {
+        statuses: [{ ...recordedPullRequest(42), created_at: "2026-01-01T23:30:00Z" }],
+      },
+    },
     ...options.responses,
   };
   writeFileSync(
@@ -417,10 +431,14 @@ describe("automatic security review event resolution", () => {
     },
   );
 
-  it("rejects manual inputs rather than providing a dispatch escape hatch", () => {
-    expect(
-      evaluate({ eventName: "workflow_dispatch", event: { inputs: { pr_number: "42" } } }),
-    ).toMatchObject({ status: 1, requests: [] });
+  it("ignores manual inputs; dispatch only reconciles completed CI runs", () => {
+    const result = evaluate({
+      eventName: "workflow_dispatch",
+      event: { inputs: { pr_number: "42" } },
+      responses: { [ciRunsPath]: { body: { workflow_runs: [] } } },
+    });
+    expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
+    expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
   });
 
   it.each(["success", "failure", "cancelled"])(
@@ -530,5 +548,256 @@ describe("automatic security review event resolution", () => {
     expect(result.status).toBe(1);
     expect(result.output).toBe("");
     expect(result.requests.at(-1)?.path).toContain(`/commits/${head}/pulls?`);
+  });
+});
+
+describe("scheduled reconciliation", () => {
+  it("covers the previous pass's grace period without reading older head statuses", () => {
+    const olderHead = "b".repeat(40);
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [scheduledRunsPath]: {
+          body: { workflow_runs: [{ created_at: "2026-01-01T23:45:00Z" }] },
+        },
+        [ciRunsPath.replace("20%3A00", "20%3A40")]: {
+          body: {
+            workflow_runs: [
+              { ...completedRun, updated_at: "2026-01-01T23:43:00Z" },
+              { ...completedRun, id: 122, head_sha: olderHead, updated_at: "2026-01-01T23:39:00Z" },
+            ],
+          },
+        },
+      },
+    });
+    expect(result.status, result.error).toBe(0);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+    expect(result.requests.filter(({ path }) => path.includes("/status?"))).toEqual([
+      { path: `${prefix}/commits/${head}/status?per_page=100&page=1`, method: "GET" },
+    ]);
+  });
+
+  it.each(["schedule", "workflow_dispatch"])(
+    "%s schedules a stale pending head before publishing its matrix",
+    (eventName) => {
+      const result = evaluate({ eventName });
+      expect(result.status, result.error).toBe(0);
+      expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+      expect(result.output).toBe(`matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\n`);
+      expect(result.published).toMatchObject([
+        {
+          path: `${prefix}/statuses/${head}`,
+          hadOutput: false,
+          body: {
+            context: "openclaw/ci-gate",
+            state: "pending",
+            description: "PR #42: Review scheduled; CI and security review have not completed",
+          },
+        },
+      ]);
+      expect(result.requests).toContainEqual({ path: ciRunsPath, method: "GET" });
+      expect(result.requests.find(({ path }) => path.includes("created="))?.path).toContain(
+        "created=%3E%3D",
+      );
+    },
+  );
+
+  it.each([
+    { state: "success", created_at: "2026-01-01T23:30:00Z" },
+    { state: "failure", created_at: "2026-01-01T23:30:00Z" },
+    { state: "error", created_at: "2026-01-01T23:30:00Z" },
+    { state: "pending", created_at: "2026-01-01T23:41:00Z" },
+    { state: "pending", created_at: completedRun.updated_at },
+  ])("does not reselect a settled or newer review: %j", (status) => {
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
+          body: { statuses: [{ context: "OpenClaw/CI-Gate", ...status }] },
+        },
+      },
+    });
+    expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
+    expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
+  });
+
+  it.each([
+    { updated_at: "2026-01-01T23:56:00Z" },
+    { updated_at: "2026-01-01T22:59:59Z" },
+    { conclusion: "skipped" },
+    { status: "in_progress" },
+  ])(
+    "ignores CI outside the completion window or without substantive completion: %j",
+    (changedRun) => {
+      const result = evaluate({ eventName: "schedule", run: changedRun });
+      expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
+      expect(result.requests).toEqual([
+        { path: scheduledRunsPath, method: "GET" },
+        { path: ciRunsPath, method: "GET" },
+      ]);
+    },
+  );
+
+  it("selects a head with no ci-gate status", () => {
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
+          body: { statuses: [{ context: "unrelated/status", state: "success" }] },
+        },
+      },
+    });
+    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
+    expect(result.published).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      gate: "settled",
+      statuses: [{ context: "openclaw/ci-gate", state: "success" }],
+      selected: false,
+    },
+    { gate: "missing", statuses: [], selected: true },
+  ])("reads remaining commit-status pages for a $gate gate", ({ statuses, selected }) => {
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
+          body: {
+            statuses: Array.from({ length: 100 }, (_, index) => ({
+              context: `unrelated/status-${index}`,
+              state: "success",
+            })),
+          },
+        },
+        [`${prefix}/commits/${head}/status?per_page=100&page=2`]: {
+          body: { statuses },
+        },
+      },
+    });
+    expect(result.status, result.error).toBe(0);
+    expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
+    expect(result.published).toHaveLength(selected ? 1 : 0);
+    expect(result.requests.filter(({ path }) => path.includes("/status?"))).toEqual([
+      { path: `${prefix}/commits/${head}/status?per_page=100&page=1`, method: "GET" },
+      { path: `${prefix}/commits/${head}/status?per_page=100&page=2`, method: "GET" },
+    ]);
+  });
+
+  it("dedupes reruns by the highest run id before reading the head status", () => {
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [ciRunsPath]: {
+          body: {
+            workflow_runs: [
+              { ...completedRun, id: 124 },
+              { ...completedRun, updated_at: "2026-01-01T23:20:00Z" },
+            ],
+          },
+        },
+      },
+    });
+    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
+    expect(result.requests.filter(({ path }) => path.includes("/status?"))).toEqual([
+      { path: `${prefix}/commits/${head}/status?per_page=100&page=1`, method: "GET" },
+    ]);
+    expect(result.published).toHaveLength(1);
+  });
+
+  it.each([
+    { stop: "a short page", pages: 2, lastPageSize: 1, crossesBoundary: false, warns: false },
+    {
+      stop: "a full page whose oldest run predates the creation boundary",
+      pages: 2,
+      lastPageSize: 100,
+      crossesBoundary: true,
+      warns: false,
+    },
+    { stop: "the page ceiling", pages: 10, lastPageSize: 100, crossesBoundary: false, warns: true },
+  ])("stops at $stop and selects the runs already read", (scenario) => {
+    const responses: Record<string, Reply> = {};
+    const listingPaths: string[] = [];
+    for (let page = 1; page <= scenario.pages; page += 1) {
+      const lastPage = page === scenario.pages;
+      const path = ciRunsPath.replace(/&page=1$/u, `&page=${page}`);
+      listingPaths.push(path);
+      responses[path] = {
+        body: {
+          workflow_runs: Array.from(
+            { length: lastPage ? scenario.lastPageSize : 100 },
+            (_, index) => ({
+              ...completedRun,
+              id: page * 100 + index,
+              // Only the final page has a completion old enough for selection.
+              updated_at: lastPage ? completedRun.updated_at : "2026-01-01T23:56:00Z",
+              // Put the oldest run first to check the whole page, not its last row.
+              created_at:
+                lastPage && scenario.crossesBoundary && index === 0
+                  ? "2026-01-01T19:59:59Z"
+                  : completedRun.created_at,
+            }),
+          ),
+        },
+      };
+    }
+    const result = evaluate({ eventName: "schedule", responses });
+    expect(result.status, result.error).toBe(0);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+    expect(result.requests.filter(({ path }) => path.includes("/workflows/ci.yml/runs"))).toEqual(
+      listingPaths.map((path) => ({ path, method: "GET" })),
+    );
+    expect(result.error.includes("::warning::")).toBe(scenario.warns);
+    expect(result.published).toHaveLength(1);
+  });
+
+  it.each([
+    { previous: "2026-01-01T23:46:00Z", queryHour: "20%3A41", selected: false },
+    { previous: "2026-01-01T10:00:00Z", queryHour: "15%3A00", selected: true },
+    { previous: "invalid", queryHour: "20%3A00", selected: true },
+  ])(
+    "bounds the window from the previous successful pass: $previous",
+    ({ previous, queryHour, selected }) => {
+      const result = evaluate({
+        eventName: "schedule",
+        responses: {
+          [scheduledRunsPath]: { body: { workflow_runs: [{ created_at: previous }] } },
+          [ciRunsPath.replace("20%3A00", queryHour)]: { body: { workflow_runs: [completedRun] } },
+        },
+      });
+      expect(result.status, result.error).toBe(0);
+      expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
+      expect(result.requests.some(({ path }) => path.includes("/status?"))).toBe(selected);
+    },
+  );
+
+  it.each(["2026-01-01T23:00:00Z", "2026-01-01T23:55:00Z"])(
+    "includes completion at the fallback window boundary %s",
+    (updated_at) => {
+      expect(
+        evaluate({
+          eventName: "schedule",
+          run: { updated_at },
+          responses: {
+            [`${prefix}/commits/${head}/status?per_page=100&page=1`]: { body: { statuses: [] } },
+          },
+        }),
+      ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
+    },
+  );
+
+  it("uses the current PR head when multiple completed heads name the same PR", () => {
+    const oldHead = "b".repeat(40);
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [ciRunsPath]: {
+          body: { workflow_runs: [completedRun, { ...completedRun, id: 122, head_sha: oldHead }] },
+        },
+        [`${prefix}/commits/${oldHead}/status?per_page=100&page=1`]: { body: { statuses: [] } },
+      },
+    });
+    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
+    expect(result.published).toHaveLength(1);
   });
 });
