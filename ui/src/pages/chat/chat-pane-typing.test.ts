@@ -530,6 +530,40 @@ describe("chat pane typing presence", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("retires simultaneous expirations together without promoting expired peers or removing a renewed draft", () => {
+    vi.useFakeTimers();
+    const { pane, state } = createTypingPane();
+    const event = (index: number) => ({
+      sessionKey: state.sessionKey,
+      sessionId: "session-a",
+      agentId: "work",
+      actor: { type: "human" as const, id: "peer-" + index, label: "Peer " + index },
+      typing: true,
+      preview: "Draft " + index,
+      ts: 1,
+    });
+    for (let index = 0; index < 1000; index += 1) {
+      pane.handleSessionTypingEvent(event(index));
+    }
+    vi.advanceTimersByTime(29_800);
+    pane.handleSessionTypingEvent({ ...event(999), preview: "Renewed during exit" });
+    const requestUpdate = vi.spyOn(pane, "requestUpdate");
+    vi.advanceTimersByTime(200);
+    expect(requestUpdate).toHaveBeenCalledTimes(1);
+    expect(pane.typingActors.size).toBe(1);
+    expect(pane.typingActorViews()).toEqual([
+      { id: "peer-999", label: "Peer 999", preview: "Renewed during exit" },
+    ]);
+    expect(pane.typingOverflow).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(1);
+    // A boolean-only actor has its own 2.5s deadline, not the draft deadline.
+    pane.handleSessionTypingEvent({ ...event(1000), preview: undefined });
+    vi.advanceTimersByTime(2_500);
+    expect([...pane.typingActors.keys()]).toEqual(["peer-999"]);
+    pane.clearTypingActors();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("keeps generic overflow truthful through idle, resume, exit cancellation, and reset", () => {
     vi.useFakeTimers();
     const { pane, state } = createTypingPane();

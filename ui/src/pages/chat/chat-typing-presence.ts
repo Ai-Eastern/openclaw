@@ -6,12 +6,13 @@ import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 
 export type ChatTypingActorState = {
   label: string;
+  retireAt: number;
   paused?: boolean;
   preview?: string;
   exitDurationMs?: number;
 };
 
-export type ChatTypingActorView = ChatTypingActorState & {
+export type ChatTypingActorView = Omit<ChatTypingActorState, "retireAt"> & {
   id: string;
 };
 

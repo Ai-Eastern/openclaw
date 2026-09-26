@@ -464,6 +464,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     const idleDeadline = now + TYPING_DRAFT_IDLE_MS;
     const actor: ChatTypingActorState = {
       label: event.actor.label ?? event.actor.id,
+      retireAt: event.preview ? idleDeadline : now + activeMs,
       ...(event.preview ? { preview: event.preview } : {}),
     };
     const previous = this.typingActors.get(event.actor.id);
@@ -483,6 +484,16 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       const remaining = idleDeadline - Date.now();
       if (!actor.preview || remaining <= 0) {
         this.removeTypingActor(event.actor.id);
+        // Native timers run separate tasks. Retire every already-due peer before
+        // projecting, rather than promoting expired previews and rendering once
+        // per callback during a busy-room expiry burst. Renewed peers keep their
+        // new deadlines. Stop, send, and session cleanup still settle immediately.
+        const retireBefore = Date.now();
+        for (const [id, peer] of this.typingActors) {
+          if (peer.retireAt <= retireBefore) {
+            this.removeTypingActor(id);
+          }
+        }
       } else {
         // Keep one cancellable timer for active, draft, and exit phases. The
         // animation finishes inside the idle limit, even after a delayed timer.
