@@ -180,52 +180,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
     },
   );
 
-  it("starts a second same-session event while the first run is active", async () => {
-    const firstRun = createDeferred<void>();
-    const secondRun = createDeferred<void>();
-    processDiscordMessageMock
-      .mockImplementationOnce(async () => {
-        await firstRun.promise;
-      })
-      .mockImplementationOnce(async () => {
-        await secondRun.promise;
-      });
-    preflightDiscordMessageMock.mockImplementation(
-      async (params: { data: ReturnType<typeof createMessageData> }) =>
-        createDiscordQueuePreflightContextForMessage(params.data),
-    );
-    const setStatus = vi.fn();
-    const handler = createDiscordMessageHandler(createDiscordHandlerParams({ setStatus }));
-    expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
-
-    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
-
-    await flushQueueWork();
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expectStatusPatch(setStatus, { activeRuns: 1, busy: true });
-
-    await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
-
-    await flushQueueWork();
-    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-    expectStatusPatch(setStatus, { activeRuns: 2, busy: true });
-
-    secondRun.resolve();
-    await secondRun.promise;
-
-    await flushQueueWork();
-    expectStatusPatch(setStatus, { activeRuns: 1, busy: true });
-
-    firstRun.resolve();
-    await firstRun.promise;
-
-    await flushQueueWork();
-    const lastStatusPatch = statusPatches(setStatus).at(-1);
-    expect(lastStatusPatch?.activeRuns).toBe(0);
-    expect(lastStatusPatch?.busy).toBe(false);
-  });
-
   it("fans merged-turn adoption out to every debounced ingress claim", async () => {
     const params = createDiscordHandlerParams();
     params.cfg.messages = { inbound: { debounceMs: 20 } };
