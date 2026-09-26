@@ -164,7 +164,6 @@ internal object AndroidScreenshotFixture {
           modelCatalog()
         }
 
-
         "question.list" -> {
           Json.encodeToString(QuestionListResult(if (workScene) emptyList() else questionRecords.get().filter { it.status == "pending" && it.expiresAtMs > System.currentTimeMillis() }))
         }

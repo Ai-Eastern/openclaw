@@ -52,7 +52,6 @@ internal sealed class ChatTimelineItem {
     val settledToolKeys: Set<String> = emptySet(),
   ) : ChatTimelineItem()
 
-
   data class QuestionPrompt(
     val prompt: ChatQuestionPrompt,
   ) : ChatTimelineItem()

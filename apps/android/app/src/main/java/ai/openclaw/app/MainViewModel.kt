@@ -2107,7 +2107,6 @@ class MainViewModel private constructor(
     ensureRuntime().chat.skipQuestion(prompt)
   }
 
-
   internal suspend fun sendChatForOwnerAwaitAcceptance(
     owner: ChatComposerOwner,
     message: String,

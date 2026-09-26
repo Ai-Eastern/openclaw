@@ -1888,7 +1888,6 @@ private fun ChatMessageList(
                       key(toolBridge) { ToolActivityDisclosure(item, sessionKey) }
                     }
 
-
                     is ChatTimelineItem.QuestionPrompt -> {
                       ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
                     }

@@ -3883,7 +3883,6 @@ class ChatController internal constructor(
         handleAgentEvent(payloadJson)
       }
 
-
       "question.requested" -> {
         if (payloadJson.isNullOrBlank()) return
         handleQuestionRequested(payloadJson)
