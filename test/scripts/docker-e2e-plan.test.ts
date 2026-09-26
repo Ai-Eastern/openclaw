@@ -1498,17 +1498,20 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
   });
 
-  it("plans legacy operator state with tracked and formerly bundled plugins and serial admission", () => {
+  it("plans legacy operator state with native, tracked, and formerly bundled plugins and serial admission", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.6.33 2026.6.34 2026.9.1",
+      upgradeSurvivorBaselines: "2026.6.33 2026.6.34 2026.9.1 2026.9.4 2026.9.6",
       upgradeSurvivorScenarios: "legacy-operator-state",
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
       "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.1-legacy-operator-state",
+      "published-upgrade-survivor-2026.9.4-legacy-operator-state",
+      "published-upgrade-survivor-2026.9.6-legacy-operator-state",
     ]);
     expect(plan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/codex",
       "@openclaw/discord",
       "@openclaw/duckduckgo-plugin",
     ]);

@@ -893,7 +893,7 @@ class ChatController internal constructor(
     updateErrorText(null)
     clearChatMetadata()
     disableSwarmProgress()
-    clearLiveHistoryMarker()
+    liveHistoryMarker = null
     synchronized(pendingRuns) {
       disconnectedPendingRunIds.addAll(pendingRuns)
     }
@@ -1018,7 +1018,7 @@ class ChatController internal constructor(
         refreshHealth = false,
       )
       clearProgressCard()
-      clearLiveHistoryMarker()
+      liveHistoryMarker = null
       publishSessions(emptyList())
       publishRunPresentation()
       clearQuestions()
@@ -1069,14 +1069,6 @@ class ChatController internal constructor(
     // Only local hydration gates the handoff. Never await live history or network health here.
     cacheReady.await()
     publishOutbox()
-  }
-
-  /** Purges cached transcripts and queued sends for one retired authentication scope. */
-  internal suspend fun clearGatewayCache(gatewayId: String) {
-    clearGatewayCache(gatewayId) { gateway ->
-      transcriptCache?.clearGateway(gateway)
-      commandOutbox.clearGateway(gateway)
-    }
   }
 
   /** Serializes an owner-provided cross-store purge with every chat cache/outbox mutation. */
@@ -2107,13 +2099,6 @@ class ChatController internal constructor(
     return commandOutbox.branchState(gatewayId, snapshot.outboxScope())
   }
 
-  private suspend fun requestSessionBranches(snapshot: SessionActionSnapshot): List<SessionBranch> =
-    requestSessionBranches(
-      gatewayId = snapshot.gatewayScope?.gatewayId,
-      sessionKey = snapshot.sessionKey,
-      ownerAgentId = snapshot.ownerAgentId,
-    )
-
   private suspend fun requestSessionBranches(
     gatewayId: String?,
     sessionKey: String,
@@ -2179,12 +2164,7 @@ class ChatController internal constructor(
     }
   }
 
-  private fun activeBranchLeafEntryId(branches: List<SessionBranch>): String? =
-    branches
-      .singleOrNull { it.active }
-      ?.leafEntryId
-      ?.trim()
-      ?.takeIf { it.isNotEmpty() }
+  private fun activeBranchLeafEntryId(branches: List<SessionBranch>): String? = branches.singleOrNull { it.active }?.leafEntryId
 
   private suspend fun refreshSessionBranches(
     snapshot: SessionActionSnapshot,
@@ -2203,7 +2183,7 @@ class ChatController internal constructor(
       }
     if (isCurrentSessionAction(snapshot)) _sessionBranchesLoading.value = true
     return try {
-      val branches = requestSessionBranches(snapshot)
+      val branches = requestSessionBranches(snapshot.gatewayScope?.gatewayId, snapshot.sessionKey, snapshot.ownerAgentId)
       if (!isCurrent()) return false
       val activeLeaf = if (branches.isEmpty()) null else activeBranchLeafEntryId(branches) ?: return false
       val gatewayId = snapshot.gatewayScope?.gatewayId
@@ -2963,8 +2943,6 @@ class ChatController internal constructor(
     }
   }
 
-  private suspend fun waitForPendingSessionSettings(sessionKey: String): Boolean = waitForPendingSessionSettings(sessionSettingsKey(sessionKey))
-
   private suspend fun waitForPendingSessionSettings(settingsKey: SessionSettingsKey): Boolean {
     var pending = pendingSettingsMutations[settingsKey]?.tail ?: return true
     while (true) {
@@ -3154,7 +3132,7 @@ class ChatController internal constructor(
         }
         updateErrorText(null)
         _healthOk.value = false
-        clearLiveHistoryMarker()
+        liveHistoryMarker = null
         clearPendingRuns()
         clearLiveRunUi()
         _sessionId.value = null
@@ -3165,18 +3143,6 @@ class ChatController internal constructor(
       }
     if (selectionChanged) refreshProgressCard()
     return generation
-  }
-
-  private fun clearLiveHistoryMarker() {
-    liveHistoryMarker = null
-  }
-
-  private fun markLiveHistoryApplied(
-    sessionKey: String,
-    sessionId: String?,
-    generation: Long,
-  ) {
-    liveHistoryMarker = LiveHistoryMarker(sessionKey = sessionKey, sessionId = sessionId, generation = generation)
   }
 
   private fun hasCurrentLiveHistory(sessionKey: String): Boolean = hasCurrentHistorySnapshot(sessionKey) && _healthOk.value
@@ -3284,7 +3250,7 @@ class ChatController internal constructor(
 
     // Session settings and sends share one ordering boundary; the first post-selection turn
     // must not leave with stale model or thinking state while sessions.patch is in flight.
-    if (!waitForPendingSessionSettings(sessionKey)) return false
+    if (!waitForPendingSessionSettings(sessionSettingsKey(sessionKey))) return false
     if (!canAdmit() || !ownsCapturedUi()) return false
     if (chatModelSendBlocked(_healthOk.value, _selectedModelRef.value, _modelCatalog.value)) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
@@ -3323,12 +3289,8 @@ class ChatController internal constructor(
         } catch (_: Throwable) {
           false
         }
-      if (deleted) {
-        publishOutbox()
-        return false
-      }
       publishOutbox()
-      return true
+      return !deleted
     }
     if (!_healthOk.value) {
       // Captured for reconnect: the queued bubble is visible and flush delivers it later.
@@ -3359,14 +3321,7 @@ class ChatController internal constructor(
     }
     // Atomically claim the row for this direct dispatch: a vanished row (user delete) or a
     // concurrent flush claim must not lead to a second send of the same idempotency key.
-    val claimed =
-      try {
-        commandOutbox.claimForSendingIfAttempt(journaled.id, journaled.attemptVersion, 0, null)
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        null
-      }
+    val claimed = claimOutboxRowOrNull(journaled, retryCount = 0, lastError = null)
     publishOutbox()
     if (claimed == null) {
       // The claim could not be made durable, so the admitted row still has no dispatcher.
@@ -3751,15 +3706,10 @@ class ChatController internal constructor(
     return rows.any { other ->
       other.id != row.id &&
         other.createdAtMs < row.createdAtMs &&
-        sameOutboxScope(other, row) &&
+        other.outboxScope() == row.outboxScope() &&
         outboxRowUnresolved(other)
     }
   }
-
-  private fun sameOutboxScope(
-    left: ChatOutboxItem,
-    right: ChatOutboxItem,
-  ): Boolean = left.outboxScope() == right.outboxScope()
 
   // Queued/sending rows are still ahead in FIFO order, and an orphaned accepted row holds its
   // session only until history proof confirms or parks it (a bounded window). Parked failed
@@ -4673,7 +4623,7 @@ class ChatController internal constructor(
                     ?.takeIf { it.key == sessionKey }
                     ?.observedSessionId = sessionId
                 }
-                markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
+                liveHistoryMarker = LiveHistoryMarker(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
                 if (historyLoadErrorGeneration == generation) {
                   updateErrorText(null)
                 }
@@ -5159,15 +5109,11 @@ class ChatController internal constructor(
     }
   }
 
-  private fun scheduleSwarmRefresh() {
-    scheduleSwarmRefresh(delayMs = 250)
-  }
-
   private fun refreshSwarmSessions() {
     scheduleSwarmRefresh(delayMs = 0)
   }
 
-  private fun scheduleSwarmRefresh(delayMs: Long) {
+  private fun scheduleSwarmRefresh(delayMs: Long = 250) {
     synchronized(swarmLock) {
       if (!swarmEnabled) return
       val requestCacheScope = currentCacheScope() ?: return
@@ -5970,9 +5916,11 @@ class ChatController internal constructor(
 
   private suspend fun claimOutboxRowOrNull(
     item: ChatOutboxItem,
+    retryCount: Int = item.retryCount,
+    lastError: String? = item.lastError,
   ): Int? =
     try {
-      commandOutbox.claimForSendingIfAttempt(item.id, item.attemptVersion, item.retryCount, item.lastError)
+      commandOutbox.claimForSendingIfAttempt(item.id, item.attemptVersion, retryCount, lastError)
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
@@ -7963,12 +7911,8 @@ class ChatController internal constructor(
 
   private fun shouldSendThinkingLevel(): Boolean {
     val selection = _thinkingLevelSelection.value
-    return if (selection.isGatewayProvided) {
-      selection.options.any { it.id != "off" }
-    } else {
-      // Missing picker metadata must not overwrite a saved request level with Off.
-      true
-    }
+    // Missing picker metadata must not overwrite a saved request level with Off.
+    return !selection.isGatewayProvided || selection.options.any { it.id != "off" }
   }
 
   private fun updateSessionFromHistory(
@@ -8695,18 +8639,11 @@ internal fun applyMainSessionKey(
   currentSessionKey: String,
   appliedMainSessionKey: String,
   nextMainSessionKey: String,
-): MainSessionState {
-  if (currentSessionKey == appliedMainSessionKey) {
-    return MainSessionState(
-      currentSessionKey = nextMainSessionKey,
-      appliedMainSessionKey = nextMainSessionKey,
-    )
-  }
-  return MainSessionState(
-    currentSessionKey = currentSessionKey,
+): MainSessionState =
+  MainSessionState(
+    currentSessionKey = if (currentSessionKey == appliedMainSessionKey) nextMainSessionKey else currentSessionKey,
     appliedMainSessionKey = nextMainSessionKey,
   )
-}
 
 /**
  * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
@@ -8733,7 +8670,6 @@ internal fun reconcileMessageIds(
     message.copy(
       id = previousMessage.id,
       content = preserveOptimisticAudioDuration(previous = previousMessage, incoming = message),
-      entryId = message.entryId,
     )
   }
 }
@@ -8806,7 +8742,6 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
   }
   val contentKey = messageContentIdentityKey(message) ?: return null
   val timestamp = message.timestampMs?.toString().orEmpty()
-  if (timestamp.isEmpty() && contentKey.isEmpty()) return null
   return listOf(contentKey, timestamp).joinToString(separator = "|")
 }
 
@@ -8949,10 +8884,7 @@ internal fun resolveSelectedActiveRunCount(
   hasAdvertisedRun: Boolean,
 ): Int =
   maxOf(
-    buildSet {
-      addAll(localRunIds)
-      addAll(advertisedRunIds)
-    }.size,
+    localRunIds.union(advertisedRunIds).size,
     if (hasAdvertisedRun) 1 else 0,
   )
 

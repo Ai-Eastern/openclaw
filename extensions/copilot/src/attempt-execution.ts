@@ -606,10 +606,10 @@ export async function runCopilotExecution(context: {
       params.abortSignal?.removeEventListener("abort", onAbort);
     } else {
       await bridge?.awaitCompactionChain();
+      bridge?.detach();
       await bridge?.awaitAgentEventChain();
       cleanupToolBridge?.();
       await cleanupByokProxy?.();
-      bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
       if (session) {
         try {

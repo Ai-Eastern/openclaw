@@ -27,6 +27,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
 import { runCopilotAttempt } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
@@ -2998,39 +2999,7 @@ describe("runCopilotAttempt", () => {
     );
   });
 
-  it("cleanup on success", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    await runCopilotAttempt(makeParams(), { pool });
-
-    const session = requireSession(sdk);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
-
-  it("cleanup on send error", async () => {
-    const error = new Error("send failed");
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockImplementationOnce(async () => {
-        session.emit("user.message", { content: "hello" });
-        throw error;
-      });
-    });
-    const pool = makeFakePool(sdk);
-
-    const result = await runCopilotAttempt(makeParams(), { pool });
-    const session = requireSession(sdk);
-
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
-    expect(
-      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
-    ).toBe(false);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
+  registerCopilotCleanupTests({ makeParams, requireSession });
 
   it("cleanup on disconnect throw", async () => {
     const primaryError = new Error("send failed");

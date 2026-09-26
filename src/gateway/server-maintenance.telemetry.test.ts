@@ -183,6 +183,12 @@ describe("gateway telemetry maintenance", () => {
         expect(calls).toBe(phase === "first" ? 1 : 2);
       }
       markGatewayRestartDraining();
+      if (owner === "plugin-state") {
+        state.scheduler.beginClose();
+        const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
+        expect(admission?.assertActive).toBeTypeOf("function");
+        expect(() => admission?.assertActive()).not.toThrow();
+      }
       let stopped = false;
       const stopping = timers.stopPeriodicTasks().then(() => {
         stopped = true;
@@ -198,6 +204,10 @@ describe("gateway telemetry maintenance", () => {
       cleanup.resolve();
       await stopping;
       expect(stopped).toBe(true);
+      if (owner === "plugin-state") {
+        const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
+        expect(() => admission?.assertActive()).toThrow();
+      }
     } finally {
       operation.resolve();
       cleanup.resolve();

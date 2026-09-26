@@ -75,6 +75,7 @@ export function deferBackgroundCompactionCleanup(params: {
         params.bridge.settleCompactionWait();
       }
       params.bridge.detach();
+      await params.bridge.awaitAgentEventChain();
       try {
         await params.session.disconnect();
       } catch {}

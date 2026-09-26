@@ -780,6 +780,7 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       continue;
     }
     if (scenario === "legacy-operator-state") {
+      requiredPackages.add("@openclaw/codex");
       requiredPackages.add("@openclaw/discord");
       requiredPackages.add("@openclaw/duckduckgo-plugin");
       continue;

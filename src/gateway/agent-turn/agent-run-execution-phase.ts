@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import {
@@ -13,53 +17,42 @@ import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-sess
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
-  type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
+  resolveReplySourceTurnId,
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import type { MediaFact } from "../../media/media-facts.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
-import type { CommandLaneConfiguration } from "../../process/lanes.js";
-import {
-  annotateInterSessionPromptText,
-  type InputProvenance,
-} from "../../sessions/input-provenance.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
-import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
+import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
+import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import {
   buildAbortedAgentPayload,
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
-import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
-import {
-  yieldAfterAgentAcceptedAck,
-  type RestoredCronContinuation,
-} from "./agent-handler-helpers.js";
+import { yieldAfterAgentAcceptedAck } from "./agent-handler-helpers.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import {
   resolveAgentRestartRecoveryContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
 } from "./agent-restart-recovery-context.js";
-import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import {
@@ -67,59 +60,14 @@ import {
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
 import {
   finalizePreparedAgentRunUserTurn,
   releasePreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
-import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
-export async function startAgentRunExecution(params: {
-  assertContextCurrent?: () => void;
-  prepared: PreparedAgentRunDispatch;
-  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
-  request: AgentRunRequest;
-  cfg: OpenClawConfig;
-  cfgForAgent?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  resolvedSessionKey?: string;
-  requestedSessionKey?: string;
-  resolvedSessionId?: string;
-  agentId?: string;
-  activeSessionAgentId: string;
-  delivery: AgentDeliveryPhaseResult;
-  isNewSession: boolean;
-  isRawModelRun: boolean;
-  isOneShotModelRun: boolean;
-  isRestartRecoveryResumeRun: boolean;
-  suppressVisibleSessionEffects: boolean;
-  images: Array<{ type: "image"; data: string; mimeType: string }>;
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  inputProvenance?: InputProvenance;
-  runId: string;
-  agentDedupeKeys: readonly string[];
-  swarmExecutionLane?: CommandLaneConfiguration;
-  spawnedBy?: string;
-  groupId?: string;
-  groupChannel?: string;
-  groupSpace?: string;
-  bestEffortDeliver: boolean;
-  lifecycleGeneration: string;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
-  preserveUserFacingSessionModelState: boolean;
-  sessionEffects?: "visible" | "internal";
-  skipAgentInitialSessionTouch: boolean;
-  restoredCronContinuation?: RestoredCronContinuation;
-  canUseInternalRuntimeHandoff: boolean;
-  client: AgentTurnPrincipal | null;
-  context: AgentTurnContext;
-  io: AgentTurnIo;
-  releaseCronContinuationClaimWithRecovery: (
-    outcome?: { terminalOutcome: AgentRunTerminalOutcome },
-    onRecovered?: () => void,
-  ) => Promise<boolean>;
-}): Promise<void> {
+export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
   const { prepared } = params;
   const diagnostics = createAgentRunDiagnostics(
     params.resolvedSessionKey,
@@ -410,7 +358,15 @@ export async function startAgentRunExecution(params: {
             restartRecoveryChannelContext?.currentThreadTs ??
             (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
         };
-        setChannelSourceTurnId(runContext, restartRecoveryChannelContext?.sourceTurnId);
+        setChannelSourceTurnId(
+          runContext,
+          resolveReplySourceTurnId({
+            sourceTurnId: restartRecoveryChannelContext?.sourceTurnId,
+            admissionRunId: params.runId,
+            ingressProvider: runContext.messageChannel,
+            entry: params.sessionEntry,
+          }),
+        );
         setChannelSourceTurnSameThreadRequired(
           runContext,
           restartRecoveryChannelContext?.sameChannelThreadRequired,
@@ -424,6 +380,13 @@ export async function startAgentRunExecution(params: {
         }
         // Awaited routing can retire this owner before final dispatch.
         params.assertContextCurrent?.();
+        const callerContext = resolveChatSendCallerContext(params.client);
+        const clientCaps = [...callerContext.GatewayClientCaps];
+        const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
+        const supportsTaskSuggestions =
+          isOperatorUiClient(params.client?.connect.client) &&
+          params.client?.connect.scopes?.includes("operator.admin") === true &&
+          hasGatewayClientCap(clientCaps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
@@ -482,6 +445,10 @@ export async function startAgentRunExecution(params: {
                 accountId: params.delivery.resolvedAccountId,
                 threadId: prepared.resolvedThreadId,
                 runContext,
+                clientCaps,
+                gatewayUiCommandTarget,
+                approvalReviewerDeviceId: callerContext.ApprovalReviewerDeviceId,
+                taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
                 ...(prepared.userTurn.bashElevated
                   ? { bashElevated: prepared.userTurn.bashElevated }
                   : {}),
