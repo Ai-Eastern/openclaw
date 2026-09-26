@@ -362,17 +362,23 @@ export async function readSessionHistoryPageInWorker(
     };
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
-      const sourceReads = await prepareGatewaySessionStoreReadSourcesAsync({
-        cfg,
-        currentSource,
-        env,
-        registryPath: stateContext.admission.databasePath,
-      });
+      // Only display-history projections resolve subagent lineage across stores.
+      const sourceReads =
+        capturedRequest.kind === "rpc" ||
+        capturedRequest.kind === "http" ||
+        capturedRequest.kind === "delta"
+          ? await prepareGatewaySessionStoreReadSourcesAsync({
+              cfg,
+              currentSource,
+              env,
+              registryPath: stateContext.admission.databasePath,
+            })
+          : undefined;
       const assertStateCurrent = () => {
         signal?.throwIfAborted();
         stateContext.maintenanceScope?.assertAdmission();
         stateContext.admission.assertCurrent();
-        sourceReads.assertSourceCurrent();
+        sourceReads?.assertSourceCurrent();
       };
       assertStateCurrent();
       const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
@@ -388,7 +394,7 @@ export async function readSessionHistoryPageInWorker(
           environment: stateContext.environment,
           coordinatorRuntime: stateContext.coordinatorRuntime,
         },
-        ...(sourceReads.request
+        ...(sourceReads?.request
           ? { sourceDiscovery: sourceReads.request }
           : { sourceDatabases: {} }),
         ...(entryValidationKey ? { entryValidationKey } : {}),
@@ -523,7 +529,7 @@ export async function readSessionHistoryPageInWorker(
           throw error;
         }
       }
-      await sourceReads.revalidate(() => {
+      await sourceReads?.revalidate(() => {
         owner.assertCurrent();
         assertStateCurrent();
       });
@@ -532,7 +538,7 @@ export async function readSessionHistoryPageInWorker(
         assertCurrent: () => {
           owner.assertCurrent();
           assertStateCurrent();
-          sourceReads.assertCurrent();
+          sourceReads?.assertCurrent();
         },
       };
     });
