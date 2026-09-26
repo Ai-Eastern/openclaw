@@ -49,6 +49,12 @@ test("automatic list and search projection reuse conventional state-directory pr
           metadata,
           async () => {
             const observations = [];
+            const lstatProbes: Array<{
+              search: string;
+              runtime: string;
+              path: string;
+              error: Error;
+            }> = [];
             const stateDirectoryProbes: Array<{
               search: string;
               runtime: string;
@@ -88,7 +94,20 @@ test("automatic list and search projection reuse conventional state-directory pr
                   }
                   return existsSync(pathname);
                 });
-                const lstat = vi.spyOn(fsSync, "lstatSync");
+                const originalLstat = fsSync.lstatSync;
+                let capturedLstats = 0;
+                const lstat = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+                  if (capturedLstats < 3) {
+                    capturedLstats += 1;
+                    lstatProbes.push({
+                      search: search ?? "list",
+                      runtime: agentRuntimeOverride ?? "auto",
+                      path: String(args[0]),
+                      error: new Error("Session projection lstat probe"),
+                    });
+                  }
+                  return Reflect.apply(originalLstat, fsSync, args);
+                });
                 const readlink = vi.spyOn(fsSync, "readlinkSync");
                 const realpath = vi.spyOn(fsSync.realpathSync, "native");
                 const stat = vi.spyOn(fsSync, "statSync");
@@ -127,7 +146,23 @@ test("automatic list and search projection reuse conventional state-directory pr
                 auto: counts[1],
               });
             }
-            expect(observations, JSON.stringify(stateDirectoryProbes, null, 2)).toEqual(
+            // Stack formatting can touch the filesystem, so wait until all spies are restored.
+            expect(
+              observations,
+              JSON.stringify(
+                {
+                  stateDirectoryProbes,
+                  lstatProbes: lstatProbes.map(({ search, runtime, path: pathname, error }) => ({
+                    search,
+                    runtime,
+                    path: pathname,
+                    stack: error.stack,
+                  })),
+                },
+                null,
+                2,
+              ),
+            ).toEqual(
               observations.map(({ surface, pinned }) => ({ surface, pinned, auto: pinned })),
             );
           },
