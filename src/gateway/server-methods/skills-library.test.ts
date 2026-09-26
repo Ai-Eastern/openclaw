@@ -1,6 +1,6 @@
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
@@ -12,6 +12,7 @@ import {
   loadSessionEntry,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as fsSafe from "../../infra/fs-safe.js";
 import * as libraryBundle from "../../skills/library/bundle.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { mutateSkillLibrary, saveSkillLibrary } from "../../skills/library/service.js";
@@ -92,37 +93,58 @@ function retainedFilesHarness() {
 }
 
 describe("skill library retained support files", () => {
-  it("does not write client bytes after asynchronous file preparation observes hot disable", async () => {
+  it("rejects client file creation at the real filesystem mutation admission", async () => {
     const { call, cfg, root } = retainedFilesHarness();
-    const open = fs.open;
-    let write: MockInstance<FileHandle["writeFile"]> | undefined;
-    using opening = vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
-      const handle = await open(target, flags, mode);
-      if (typeof target === "string" && target.endsWith("pixel.png")) {
-        write = vi.spyOn(handle, "writeFile");
-        cfg.gateway.uploads.enabled = false;
-      }
-      return handle;
-    });
-    try {
-      const result = await call("skills.library.save", {
-        slug: "file-policy",
-        content,
-        expectedRevision: null,
-        files: [image],
+    const openRoot = fsSafe.root;
+    let admissionReached = false;
+    let imageCreated = false;
+    using roots = vi.spyOn(fsSafe, "root").mockImplementation(async (directory, defaults) => {
+      let creatingImage = false;
+      const opened = await openRoot(directory, {
+        ...defaults,
+        assertBeforeMutation: () => {
+          if (creatingImage) {
+            admissionReached = true;
+            cfg.gateway.uploads.enabled = false;
+          }
+          defaults?.assertBeforeMutation?.();
+        },
       });
-      expect.soft(result[0]).toBe(false);
-      expect
-        .soft(result[2])
-        .toMatchObject({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } });
-      expect(opening).toHaveBeenCalled();
-      expect(write).toBeDefined();
-      expect(write).not.toHaveBeenCalled();
-      const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
-      expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
-    } finally {
-      write?.mockRestore();
-    }
+      const create = opened.create.bind(opened);
+      opened.create = async (relativePath, data, options) => {
+        creatingImage = relativePath.endsWith("pixel.png");
+        try {
+          // Keep the byte/string and streaming overloads intact in this pass-through.
+          if (typeof data === "string" || Buffer.isBuffer(data)) {
+            await create(relativePath, data, options);
+          } else {
+            await create(relativePath, data, options);
+          }
+          if (creatingImage) {
+            imageCreated = true;
+          }
+        } finally {
+          creatingImage = false;
+        }
+      };
+      return opened;
+    });
+    const result = await call("skills.library.save", {
+      slug: "file-policy",
+      content,
+      expectedRevision: null,
+      files: [image],
+    });
+    expect.soft(result[0]).toBe(false);
+    expect
+      .soft(result[2])
+      .toMatchObject({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } });
+    expect(roots).toHaveBeenCalled();
+    expect(admissionReached).toBe(true);
+    // A later denial and cleanup must not hide an earlier successful file creation.
+    expect(imageCreated).toBe(false);
+    const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
+    expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
   });
 
   it("does not publish client files when uploads turn off after real bundle staging", async () => {

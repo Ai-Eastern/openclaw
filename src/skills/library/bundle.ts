@@ -297,6 +297,7 @@ export async function stageSkillLibraryBundle(
   assertCurrent?.();
   const staging = await fs.mkdtemp(path.join(parent, `.staging-${process.pid}-`));
   try {
+    const stagingRoot = await root(staging, { assertBeforeMutation: assertCurrent });
     const directories = new Set([staging]);
     for (const file of bundle.files) {
       const target = path.join(staging, file.path);
@@ -307,15 +308,11 @@ export async function stageSkillLibraryBundle(
         directories.add(directory);
         directory = path.dirname(directory);
       }
-      assertCurrent?.();
-      const handle = await fs.open(target, "wx", file.executable ? 0o500 : 0o400);
-      try {
-        assertCurrent?.();
-        await handle.writeFile(file.bytes);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await stagingRoot.create(`./${file.path}`, file.bytes, {
+        mode: (file.executable ? 0o500 : 0o400) & ~process.umask(),
+        mkdir: false,
+        durable: "file",
+      });
     }
     for (const directory of [...directories].toSorted((a, b) => b.length - a.length)) {
       await syncDirectory(directory);

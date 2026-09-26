@@ -22898,6 +22898,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
     public let risk: AnyCodable?
     public let tags: [String]?
     public let fulldescription: String?
+    public let parameters: [[String: AnyCodable]]?
     public let defaultprofiles: [AnyCodable]
 
     public init(
@@ -22910,6 +22911,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         risk: AnyCodable? = nil,
         tags: [String]? = nil,
         fulldescription: String? = nil,
+        parameters: [[String: AnyCodable]]? = nil,
         defaultprofiles: [AnyCodable])
     {
         self.id = id
@@ -22921,6 +22923,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         self.risk = risk
         self.tags = tags
         self.fulldescription = fulldescription
+        self.parameters = parameters
         self.defaultprofiles = defaultprofiles
     }
 
@@ -22934,6 +22937,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         case risk
         case tags
         case fulldescription = "fullDescription"
+        case parameters
         case defaultprofiles = "defaultProfiles"
     }
 }
