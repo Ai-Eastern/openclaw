@@ -657,7 +657,7 @@ describe("chat typing status", () => {
     expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
     expect(
       indicator?.querySelectorAll(
-        ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot), .chat-group-footer .chat-author-avatar",
+        ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot), .chat-group-footer .chat-author-avatar, .agent-chat__typing-person .chat-author-avatar",
       ),
     ).toHaveLength(expectedAvatars);
     expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(actors.length);

@@ -3,17 +3,27 @@ import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../../i18n/index.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
-import type { ChatTypingActorView } from "../chat-typing-presence.ts";
+import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 export function renderChatTypingIndicator(
   actors: readonly ChatTypingActorView[] | undefined,
   avatarPlacement: "gutter" | "footer" | "none" = "gutter",
+  overflow?: ChatTypingOverflow,
 ) {
   if (!actors?.length) {
     return null;
   }
   const active = actors.filter((actor) => !actor.paused);
+  const overflowLabel = overflow
+    ? t(
+        overflow.state === "active"
+          ? "chat.sessionSuggestions.typingSeveral"
+          : overflow.state === "mixed"
+            ? "chat.sessionSuggestions.typingMixed"
+            : "chat.sessionSuggestions.draftsSeveral",
+      )
+    : "";
   const status =
     active.length === 0
       ? ""
@@ -24,7 +34,7 @@ export function renderChatTypingIndicator(
           });
   return html`<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside">
     ${repeat(
-      actors,
+      actors.slice(0, 2),
       (actor) => actor.id,
       (actor) => {
         // session.typing actors are authenticated Gateway profiles, like sent user turns.
@@ -80,6 +90,45 @@ export function renderChatTypingIndicator(
         </div>`;
       },
     )}
-    <span class="sr-only" role="status">${status}</span>
+    ${
+      overflow
+        ? html`<div
+            class="agent-chat__typing-row"
+            ?data-exiting=${overflow.exitDurationMs !== undefined}
+            style=${overflow.exitDurationMs === undefined ? nothing : `--chat-typing-exit-duration: ${overflow.exitDurationMs}ms`}
+          >
+            <div class="agent-chat__typing-row-content">
+              <div class="agent-chat__typing-overflow">${overflowLabel}</div>
+            </div>
+          </div>`
+        : actors.length > 2
+          ? html`<div class="agent-chat__typing-overflow" aria-live="off">
+              ${repeat(
+                actors.slice(2, 7),
+                (actor) => actor.id,
+                (actor) => html`<div
+                  class="agent-chat__typing-row"
+                  ?data-exiting=${actor.exitDurationMs !== undefined}
+                  style=${actor.exitDurationMs === undefined ? nothing : `--chat-typing-exit-duration: ${actor.exitDurationMs}ms`}
+                >
+                  <div class="agent-chat__typing-row-content">
+                    <span class="agent-chat__typing-person">
+                      ${avatarPlacement === "none" ? nothing : renderChatAuthorAvatar({ id: actor.id, name: actor.label, identity: { type: "profile", id: actor.id } })}
+                      <span class="agent-chat__typing-person-name" title=${actor.label}
+                        >${actor.label}</span
+                      >
+                      <span class="agent-chat__typing-state"
+                        >${t(actor.paused ? "chat.sessionSuggestions.pausedDraftState" : "chat.sessionSuggestions.typingDraftState")}</span
+                      >
+                    </span>
+                  </div>
+                </div>`,
+              )}
+            </div>`
+          : nothing
+    }
+    <span class="sr-only" role="status"
+      >${[status, overflow?.state !== "idle" ? overflowLabel : ""].filter(Boolean).join(" ")}</span
+    >
   </div>`;
 }

@@ -3237,6 +3237,9 @@ export const en: TranslationMap & {
       dismiss: "Dismiss {author}'s suggestion",
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
+      typingSeveral: "Several people are typing…",
+      typingMixed: "Some people are typing; others have drafts",
+      draftsSeveral: "Several people have drafts",
       typingDraftState: "is typing...",
       pausedDraftState: "Draft",
       state: {

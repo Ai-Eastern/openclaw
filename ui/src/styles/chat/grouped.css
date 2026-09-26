@@ -1061,6 +1061,38 @@ img.chat-avatar {
   white-space: nowrap;
 }
 
+.agent-chat__typing-overflow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+  padding: 4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-chat__typing-overflow > .agent-chat__typing-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.agent-chat__typing-person {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.agent-chat__typing-person-name {
+  min-width: 0;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
 .agent-chat__typing-preview-text {
   display: block;
   white-space: pre-wrap;

@@ -52,7 +52,11 @@ import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./cha
 import type { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import type { ChatTypingActorState, ChatTypingActorView } from "./chat-typing-presence.ts";
+import type {
+  ChatTypingActorState,
+  ChatTypingActorView,
+  ChatTypingOverflow,
+} from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
@@ -134,6 +138,8 @@ export type TestChatPane = HTMLElement & {
   clearTypingActorForSessionMessage: (payload: unknown) => void;
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
+  typingOverflow?: ChatTypingOverflow;
+  clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string) => void;
   refreshSessionSuggestions: () => Promise<void>;
