@@ -57,6 +57,7 @@ import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
@@ -172,8 +173,7 @@ export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readonly chatStream = new GatewayChatStreamProjection();
   private readonly historyLifetime = new AbortController();
-  private readyPromise: Promise<void>;
-  private resolveReady?: () => void;
+  private ready = createDeferredCore();
   private pendingConnectError?: Error;
   private readonly modelCatalogs = new Map<string | undefined, GatewayModelCatalogEntry>();
   readonly connection: ResolvedGatewayConnection;
@@ -188,10 +188,6 @@ export class GatewayChatClient implements TuiBackend {
 
   constructor(connection: ResolvedGatewayConnection) {
     this.connection = connection;
-
-    this.readyPromise = new Promise((resolve) => {
-      this.resolveReady = resolve;
-    });
 
     this.client = new GatewayClient({
       url: connection.url,
@@ -219,7 +215,7 @@ export class GatewayChatClient implements TuiBackend {
       onHelloOk: (hello) => {
         this.pendingConnectError = undefined;
         this.hello = hello;
-        this.resolveReady?.();
+        this.ready.resolve();
         this.onConnected?.();
       },
       onEvent: (evt) => {
@@ -235,9 +231,7 @@ export class GatewayChatClient implements TuiBackend {
         this.chatStream.clear();
         this.modelCatalogs.clear();
         // Reset so waitForReady() blocks again until the next successful reconnect.
-        this.readyPromise = new Promise((resolve) => {
-          this.resolveReady = resolve;
-        });
+        this.ready = createDeferredCore();
         if (this.pendingConnectError && this.onConnectError) {
           // Dedupe is per close-cycle: clearing here lets the next reconnect
           // attempt report its own failure cause. Holding the guard until a
@@ -325,7 +319,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async waitForReady() {
-    await this.readyPromise;
+    await this.ready.promise;
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
@@ -351,21 +345,15 @@ export class GatewayChatClient implements TuiBackend {
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.runId ? { runId: opts.runId } : {}),
     };
-    if (opts.runId) {
-      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
-        "chat.abort",
-        params,
-      );
-    }
     try {
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
         "chat.abort",
-        { ...params, preserveSideRuns: true },
+        opts.runId ? params : { ...params, preserveSideRuns: true },
       );
     } catch (err) {
       // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
       // so mixed-version TUI stops still work, even without BTW isolation.
-      if (!isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
+      if (opts.runId || !isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
         throw err;
       }
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
@@ -443,9 +431,9 @@ export class GatewayChatClient implements TuiBackend {
     const signal = this.historyLifetime.signal;
     for (;;) {
       signal.throwIfAborted();
-      const connection = this.readyPromise;
+      const connection = this.ready;
       const hello = this.hello;
-      const isCurrentConnection = () => connection === this.readyPromise && hello === this.hello;
+      const isCurrentConnection = () => connection === this.ready && hello === this.hello;
       try {
         const [description, listing] = await Promise.all([
           this.client.request<Pick<TuiSessionDescription, "session">>(
@@ -468,7 +456,7 @@ export class GatewayChatClient implements TuiBackend {
           throw error;
         }
       }
-      await racePromiseWithAbortSignal(this.readyPromise, signal);
+      await racePromiseWithAbortSignal(this.ready.promise, signal);
     }
   }
 
