@@ -387,12 +387,16 @@ async function cloneGitCheckoutTransactionally(params: {
         a === ".git" ? 1 : b === ".git" ? -1 : 0,
       );
       const moved: string[] = [];
+      let publishError: { value: unknown } | undefined;
       try {
         for (const entry of entries) {
           await fs.rename(path.join(stagingDir, entry), path.join(targetDir, entry));
           moved.push(entry);
         }
       } catch (error) {
+        publishError = { value: error };
+      }
+      if (publishError) {
         const rollbackErrors: unknown[] = [];
         for (const entry of moved.toReversed()) {
           try {
@@ -404,11 +408,11 @@ async function cloneGitCheckoutTransactionally(params: {
         if (rollbackErrors.length > 0) {
           cleanupStaging = false;
           throw new AggregateError(
-            [error, ...rollbackErrors],
+            [publishError.value, ...rollbackErrors],
             `Could not publish or fully roll back the cloned checkout at ${targetDir}; recovery files remain at ${stagingDir}`,
           );
         }
-        throw error;
+        throw publishError.value;
       }
       published = true;
       return targetDir;
