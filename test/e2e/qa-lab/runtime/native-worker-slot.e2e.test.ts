@@ -2,11 +2,25 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { createQaGatewayChild } from "../../extensions/qa-lab/api.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { AgentJobTerminalSnapshot } from "../../../../src/gateway/agent-turn/types.js";
+import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
-  MODEL_REF,
-  PROOF_TIMEOUT_MS,
-} from "../../test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-fixture.js";
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../../../src/infra/kysely-sync.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
+import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-db.generated.js";
+import type { NativeRuntimeConfig } from "../../../../src/worker/native-runtime-config.js";
+import {
+  nodeWorkerPlanHash,
+  parseNodeWorkerLaunchInput,
+} from "../../../../src/worker/node-supervisor-protocol.js";
+import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -16,21 +30,7 @@ import {
   wireMessageText,
   type PairedNodeWorkerHost,
   type WireGateway,
-} from "../../test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import {
-  runQaGatewayFixture,
-  stopQaGatewayFixture,
-} from "../../test/helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { AgentJobTerminalSnapshot } from "../gateway/agent-turn/types.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
-import type { NativeRuntimeConfig } from "./native-runtime-config.js";
-import { nodeWorkerPlanHash, parseNodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
+} from "./paired-node-worker-wire-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const [providerId, modelId] = MODEL_REF.split("/");
