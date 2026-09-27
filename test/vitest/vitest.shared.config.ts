@@ -541,7 +541,8 @@ export const sharedVitestConfig = {
       deps: {
         // Vite versions unoptimized imports; native transitive imports do not.
         // Keep editor classes and parser properties in one module graph.
-        inline: [/@(?:codemirror|lezer)\//u],
+        // Web Awesome must use Vite's Lit graph instead of loading Lit through native Node.
+        inline: [/@(?:codemirror|lezer)\//u, "@awesome.me/webawesome"],
         external: dependencyExternalPatterns,
       },
     },
