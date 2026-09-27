@@ -1,7 +1,7 @@
 /**
  * Early gateway startup helper tests.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
@@ -14,6 +14,7 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
@@ -96,12 +97,15 @@ const log = {
 function earlyRuntimeInput(
   overrides: Partial<StartGatewayEarlyRuntimeInput> = {},
 ): StartGatewayEarlyRuntimeInput {
+  const scheduler = createTestGatewayScheduler();
+  onTestFinished(() => scheduler.stop());
   const maintenanceState = createGatewayMaintenanceStateForTest({
     healthSummary: {} as never,
     healthVersion: 0,
     presenceVersion: 0,
   });
   return {
+    scheduler,
     minimalTestGateway: true,
     isClosing: () => false,
     cfgAtStart: {} as never,
