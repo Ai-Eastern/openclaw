@@ -1,6 +1,7 @@
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 
 export type WorkerEnvironmentPlacementFacts = Pick<
   WorkerEnvironmentRecord,
@@ -34,4 +35,5 @@ export type WorkerPlacementConflictBinding = {
 export type WorkerSessionPlacementReadResult = {
   projection: WorkerSessionPlacementProjection;
   conflictSessionIds: ReadonlySet<string>;
+  pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
 };

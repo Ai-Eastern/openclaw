@@ -15,6 +15,7 @@ import {
 } from "./placement-record.js";
 import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { publishPlacementWorkspaceResultState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
 type WorkspaceResultDatabase = Pick<
@@ -140,6 +141,7 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
   );
+  publishPlacementWorkspaceResultState(db, sessionId);
 }
 
 export function readWorkerWorkspaceReconciliationFacts(
@@ -149,6 +151,7 @@ export function readWorkerWorkspaceReconciliationFacts(
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
   reconcilingSessionIds: ReadonlySet<string>;
   pendingResultSessionIds: ReadonlySet<string>;
+  pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
 } {
   const placements = new Map<string, WorkerSessionPlacementRecord>();
   const pendingResults: StateDatabase["worker_workspace_pending_results"][] = [];
@@ -174,6 +177,7 @@ export function readWorkerWorkspaceReconciliationFacts(
       pendingResults.push(row);
     }
   }
+  const decodedPendingResults = new Map<string, WorkerWorkspacePendingResult>();
   const reconcilingSessionIds = new Set(
     pendingResults.flatMap((row) => {
       const placement = placements.get(row.session_id);
@@ -189,6 +193,7 @@ export function readWorkerWorkspaceReconciliationFacts(
         workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
         stagedResultRef: row.staged_result_ref,
       };
+      decodedPendingResults.set(pending.sessionId, pending);
       const isPostTerminal =
         placement?.turnClaim?.owner === "worker" || row.staged_result_ref !== null;
       return isPostTerminal && isCurrentWorkerWorkspacePendingResultOwner(placement, pending)
@@ -200,6 +205,7 @@ export function readWorkerWorkspaceReconciliationFacts(
     placements,
     reconcilingSessionIds,
     pendingResultSessionIds: new Set(pendingResults.map((row) => row.session_id)),
+    pendingResults: decodedPendingResults,
   };
 }
 
@@ -263,6 +269,7 @@ export function insertWorkerWorkspacePendingResult(
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
   );
   if (result.numAffectedRows === 1n) {
+    publishPlacementWorkspaceResultState(db, placement.sessionId);
     sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return;
   }
@@ -328,6 +335,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
     if (!row || !matchesWorkspaceResultClaim(placement, row, claim)) {
       throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
     }
+    publishPlacementWorkspaceResultState(db, placement.sessionId);
     sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return row;
   };
@@ -503,6 +511,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace result changed for ${pending.sessionId}`);
         }
+        publishPlacementWorkspaceResultState(db, pending.sessionId);
         sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
       });
     },

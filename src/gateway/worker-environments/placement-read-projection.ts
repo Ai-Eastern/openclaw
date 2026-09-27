@@ -21,7 +21,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
   conflictBindings: readonly WorkerPlacementConflictBinding[],
 ): WorkerSessionPlacementReadResult {
   return runSqliteDeferredTransactionSync(db, () => {
-    const { placements, reconcilingSessionIds, pendingResultSessionIds } =
+    const { placements, reconcilingSessionIds, pendingResultSessionIds, pendingResults } =
       readWorkerWorkspaceReconciliationFacts(db, sessionIds);
     const workspaceRecoveryPendingSessionIds = new Set(pendingResultSessionIds);
     for (let offset = 0; offset < sessionIds.length; offset += 250) {
@@ -86,6 +86,6 @@ export function readWorkerSessionPlacementProjectionInDatabase(
         conflictSessionIds.add(record.sessionId);
       }
     }
-    return { projection, conflictSessionIds };
+    return { projection, conflictSessionIds, pendingResults };
   });
 }

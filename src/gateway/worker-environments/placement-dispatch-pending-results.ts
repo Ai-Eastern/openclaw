@@ -180,6 +180,8 @@ export async function recoverPendingWorkspaceResults(
     }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
+    const reclaimResult =
+      pending.claimId === pending.runId && pending.claimId.startsWith("reclaim-");
     if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
       continue;
     }
@@ -320,7 +322,7 @@ export async function recoverPendingWorkspaceResults(
                 currentEnvironment?.leaseId === environment?.leaseId &&
                 isCurrentActiveWorkerEnvironment(current, currentEnvironment) &&
                 !placements.getPlacementMove(pending.sessionId) &&
-                !(pending.claimId === pending.runId && pending.claimId.startsWith("reclaim-"))
+                !reclaimResult
               );
             };
             const preserveEnvironment = canPreserveEnvironment();
@@ -349,6 +351,7 @@ export async function recoverPendingWorkspaceResults(
             const teardownRequired =
               !preserveEnvironment &&
               (!sameGatewayInstance ||
+                reclaimResult ||
                 Boolean(stagedResultRef) ||
                 (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed"));
             if (active.state === "active" && teardownRequired) {
@@ -598,6 +601,7 @@ export async function recoverPendingWorkspaceResults(
                   conflictPaths,
                   priorConflict: priorWorkspaceResultConflict,
                   stagedResultRef: recordedStagedResultRef,
+                  retainPriorConflict: reclaimResult && !reconciliation.changed,
                   workspace,
                   report: recovery.reportConflict,
                 });
@@ -613,7 +617,7 @@ export async function recoverPendingWorkspaceResults(
                     if (!preserveEnvironment) {
                       await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
                     }
-                    if (sameGatewayInstance || preserveEnvironment) {
+                    if ((sameGatewayInstance && !reclaimResult) || preserveEnvironment) {
                       assertPreservedEnvironment();
                       await quiescence.resume();
                     } else {
@@ -622,13 +626,13 @@ export async function recoverPendingWorkspaceResults(
                     }
                     quiescenceHandled = true;
                   },
-                  ...(sameGatewayInstance && !preserveEnvironment
+                  ...(sameGatewayInstance && !reclaimResult && !preserveEnvironment
                     ? {}
                     : {
                         complete: completeResult,
                       }),
                   afterComplete: async () => {
-                    if (!sameGatewayInstance && !preserveEnvironment) {
+                    if ((!sameGatewayInstance || reclaimResult) && !preserveEnvironment) {
                       await environments
                         .stopTunnel(active.environmentId, active.activeOwnerEpoch)
                         .catch(() => undefined);
