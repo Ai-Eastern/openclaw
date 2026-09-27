@@ -56,7 +56,6 @@ import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-ide
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
 import {
-  cloneSessionEntry,
   getSessionKysely,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -466,8 +465,8 @@ async function patchSqliteSessionEntrySnapshot(
         if (!writeBase) {
           return null;
         }
-        const patch = await params.update(cloneSessionEntry(writeBase), {
-          existingEntry: existing ? cloneSessionEntry(existing) : undefined,
+        const patch = await params.update(structuredClone(writeBase), {
+          existingEntry: existing ? structuredClone(existing) : undefined,
         });
         // A fallback supplies identity, not an existing node's immutable creation policy.
         const mergeBase = existing ? writeBase : undefined;
@@ -475,7 +474,7 @@ async function patchSqliteSessionEntrySnapshot(
         const merged = !creationPatch
           ? undefined
           : options.replaceEntry
-            ? cloneSessionEntry(patch as SessionEntry)
+            ? structuredClone(patch as SessionEntry)
             : options.preserveActivity
               ? mergeSessionEntryPreserveActivity(mergeBase, creationPatch)
               : mergeSessionEntry(mergeBase, creationPatch);
@@ -520,7 +519,7 @@ async function patchSqliteSessionEntrySnapshot(
           }, databaseOptions);
           try {
             if (next && result) {
-              options.onCommitted?.(cloneSessionEntry(result));
+              options.onCommitted?.(structuredClone(result));
             }
           } finally {
             publish?.();

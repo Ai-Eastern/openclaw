@@ -782,6 +782,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
         };
       } catch (error) {
         let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
+        let cause = error;
         try {
           const rolledBack = await rollbackJsonFileWriteIfUnchanged({
             target: includeTarget,
@@ -798,20 +799,16 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             });
           }
         } catch (rollbackError) {
-          throw new ConfigWritePostCommitError({
-            configPath: includeTarget.absolutePath,
-            rollbackStatus,
-            cause: new AggregateError(
-              [error, rollbackError],
-              `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-              { cause: rollbackError },
-            ),
-          });
+          cause = new AggregateError(
+            [error, rollbackError],
+            `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+            { cause: rollbackError },
+          );
         }
         throw new ConfigWritePostCommitError({
           configPath: includeTarget.absolutePath,
           rollbackStatus,
-          cause: error,
+          cause,
         });
       }
     },
