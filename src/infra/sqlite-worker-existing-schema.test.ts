@@ -111,7 +111,10 @@ describe("existing-schema shared-state workers", () => {
         type: "flows.list",
         input: { ownerKey: "agent:main:expired" },
       }),
-    ).rejects.toThrow("schema admission has ended");
+    ).rejects.toMatchObject({
+      code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+      message: "Existing shared-state schema admission has ended.",
+    });
     for (const read of [
       () => captured.source.current(),
       () => captured.source.workerContext(),

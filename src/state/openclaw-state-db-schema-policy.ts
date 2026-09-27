@@ -65,7 +65,6 @@ export function withExistingOpenClawStateSchema<T>(
 
 function assertSchemaScopeActive(scope: ExistingSchemaScope | undefined): void {
   if (scope && !scope.active) {
-    // An idle cached actor can retire after its caller's read authority ends.
     throw new StateDatabaseReadAdmissionInvalidatedError(
       "Existing shared-state schema admission has ended.",
     );
