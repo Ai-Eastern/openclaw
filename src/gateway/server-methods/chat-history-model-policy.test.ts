@@ -17,6 +17,7 @@ import {
   projectOperatorModelRead,
 } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { SerializedJsonArray } from "../serialized-json.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
@@ -209,6 +210,12 @@ describe("historical model disclosure", () => {
         Buffer.byteLength(JSON.stringify(payload)),
       );
       expect(payload).toEqual(before);
+      expect(
+        projectOperatorModelRead(
+          { context, client: f.client, agentId: "main" },
+          { messages: new SerializedJsonArray(Buffer.from(JSON.stringify([message]))) },
+        ).messages,
+      ).toEqual([projected]);
       setUserProfileRole(f.person.id, "staff");
       invalidateOperatorRolePolicy(f.person.id);
       expect(

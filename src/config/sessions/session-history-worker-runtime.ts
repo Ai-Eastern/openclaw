@@ -220,6 +220,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
     return {
       kind: "rpc",
       params: {
+        encodeResponse: params.encodeResponse,
         entry: capturedEntry,
         provider: params.provider,
         sessionId: params.sessionId,

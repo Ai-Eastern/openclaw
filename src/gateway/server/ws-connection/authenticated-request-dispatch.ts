@@ -425,6 +425,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 {
                   req,
                   respond: respondWithAuthority,
+                  acceptsSerializedJson: true,
                   client,
                   isWebchatConnect: params.isWebchatConnect,
                   hasCurrentClientAuthority,

@@ -1,3 +1,4 @@
+import type { EncodedChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -22,6 +23,7 @@ import type { SessionTranscriptWorkerReadError } from "./session-transcript-work
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryPage = {
+  encodedResponse?: EncodedChatHistoryResponsePage;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
@@ -41,6 +43,7 @@ export type ChatHistoryPage = {
 };
 
 export type ChatHistoryPageParams = {
+  encodeResponse?: boolean;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
   sessionId: string | undefined;
