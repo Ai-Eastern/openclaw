@@ -58,6 +58,14 @@ suite.define(() => {
         const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
         const nonAutomationKeys = [releaseKey, incidentNotesKey];
         const sessionList = {
+          activityPulse: {
+            since: new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime(),
+            hours: Array.from({ length: 24 }, () => 0),
+            sessions: 0,
+            started: 0,
+            people: 0,
+            running: 0,
+          },
           people: [
             {
               identity: { type: "profile", id: "profile-alice" },
@@ -368,6 +376,8 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
         await expect.poll(() => activityPage.count()).toBe(1);
+        await activityPage.locator(".activity-pulse__bars").waitFor();
+        expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(24);
         // The title sits centered in the toolbar row; the intro copy and the
         // mode tabs share the content's left edge below it.
         const introLeft = await activityPage

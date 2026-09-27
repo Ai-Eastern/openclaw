@@ -4,6 +4,53 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
 
+it("refreshes the sessions pulse at local midnight and leaves current work unaggregated", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 8, 27, 23, 59));
+  const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
+  const request = vi.spyOn(client, "request").mockResolvedValue({
+    ts: 1,
+    path: "",
+    count: 0,
+    sessions: [],
+    defaults: { model: null, modelProvider: null, contextTokens: null },
+  });
+  const controller = new SessionActivityController({
+    addController() {},
+    removeController() {},
+    requestUpdate() {},
+    updateComplete: Promise.resolve(true),
+  });
+  const filters = { personId: null, time: "all" as const, query: "" };
+  try {
+    await controller.load(client, filters);
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.list",
+      expect.objectContaining({ activityPulseSince: new Date(2026, 8, 27).getTime() }),
+      expect.anything(),
+    );
+    await controller.load(client, filters);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date(2026, 8, 28));
+    await controller.load(client, filters);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.list",
+      expect.objectContaining({ activityPulseSince: new Date(2026, 8, 28).getTime() }),
+      expect.anything(),
+    );
+
+    await controller.load(client, "current");
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activityPulseSince");
+  } finally {
+    controller.hostDisconnected();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  }
+});
+
 it.each([
   { duration: 1_000, requestsPerMinute: 10 },
   { duration: 2_000, requestsPerMinute: 7 },

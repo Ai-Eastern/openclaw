@@ -32,6 +32,87 @@ describe("session activity semantics", () => {
     expect(container.querySelectorAll("main")).toHaveLength(0);
   });
 
+  it("renders today's pulse totals and hourly activity above the session list", () => {
+    const since = new Date(2026, 8, 27).getTime();
+    const now = since + 14.5 * 3_600_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const input = props({ rows: [row("Recent session", { id: "owner" }, now)] });
+    const hours = Array.from({ length: 24 }, () => 0);
+    hours[10] = 12;
+    hours[14] = 3;
+    input.result!.activityPulse = {
+      since,
+      hours,
+      sessions: 38,
+      started: 12,
+      people: 6,
+      running: 3,
+    };
+
+    render(renderSessionActivityView(input), container);
+
+    const main = container.querySelector(".activity-feed__main")!;
+    const pulse = main.querySelector(".activity-pulse")!;
+    expect(main.firstElementChild).toBe(pulse);
+    expect(
+      pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("38 sessions · 12 started · 6 people · 3 running now");
+    expect(pulse.querySelector(".activity-pulse__running")).not.toBeNull();
+    const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
+    expect(bars).toHaveLength(24);
+    expect(pulse.querySelectorAll('[data-hour="current"]')).toHaveLength(1);
+    expect(bars[14]?.getAttribute("data-hour")).toBe("current");
+    expect(bars[13]?.getAttribute("data-hour")).toBe("past");
+    expect(bars[15]?.getAttribute("data-hour")).toBe("future");
+    const peakHour = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(
+      since + 10 * 3_600_000,
+    );
+    expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain("38");
+    expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain(peakHour);
+    expect(bars[10]?.getAttribute("title")).toBe(`${peakHour} · 12 sessions`);
+  });
+
+  it("keeps a zero-activity pulse and omits an unavailable people count", () => {
+    const since = new Date(2026, 8, 27).getTime();
+    const input = props();
+    input.result!.activityPulse = {
+      since,
+      hours: Array.from({ length: 24 }, () => 0),
+      sessions: 0,
+      started: 0,
+      running: 0,
+    };
+    render(renderSessionActivityView(input), container);
+
+    const pulse = container.querySelector(".activity-pulse")!;
+    expect(
+      pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("0 sessions · 0 started · 0 running now");
+    expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(24);
+    expect(pulse.querySelector(".activity-pulse__running")).toBeNull();
+
+    render(renderSessionActivityView(props()), container);
+    expect(container.querySelector(".activity-pulse")).toBeNull();
+  });
+
+  it.each([1, 885])(
+    "shows the list footer only when %s matching sessions exceed the visible rows",
+    (totalCount) => {
+      const input = props({ rows: [row("Visible session", { id: "owner" }, Date.now())] });
+      input.result!.totalCount = totalCount;
+      render(renderSessionActivityView(input), container);
+
+      const main = container.querySelector(".activity-feed__main")!;
+      const footer = main.querySelector(".activity-feed__footer");
+      if (totalCount > 1) {
+        expect(footer?.textContent).toBe("Showing 1 of 885 sessions");
+        expect(main.lastElementChild).toBe(footer);
+      } else {
+        expect(footer).toBeNull();
+      }
+    },
+  );
+
   it("opens the displayed Activity rows when the sidebar is stale", () => {
     const rows = (["chat", "dashboard"] as const).map((face, index) =>
       row(
@@ -172,6 +253,11 @@ describe("session activity semantics", () => {
         surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
       )!;
       expect(item.textContent).toContain("Stored session");
+      if (surface === "activity") {
+        expect(item.parentElement?.classList.contains("activity-feed__session-row--link")).toBe(
+          Boolean(expectedKey),
+        );
+      }
       if (!expectedKey) {
         expect(item.hasAttribute("href")).toBe(false);
         item.click();
@@ -333,6 +419,26 @@ describe("session activity semantics", () => {
 });
 
 describe("session activity people filter", () => {
+  it("places the partial-history status after the people rows instead of in the main feed", () => {
+    const input = props();
+    input.result!.peopleIncomplete = true;
+    render(renderSessionActivityView(input), container);
+
+    const panel = container.querySelector(".activity-feed__people-panel")!;
+    const note = panel.querySelector('[role="status"]');
+    expect(note?.textContent).toContain(
+      "People and counts describe visible recorded session associations",
+    );
+    expect(panel.lastElementChild).toBe(note);
+    expect(container.querySelector(".activity-feed__main")?.textContent).not.toContain(
+      "People and counts describe visible recorded session associations",
+    );
+
+    input.result!.peopleIncomplete = false;
+    render(renderSessionActivityView(input), container);
+    expect(panel.querySelector('[role="status"]')).toBeNull();
+  });
+
   it("uses the server people facet, excludes raw identities, and maps presence by exact profile id", () => {
     const now = Date.now();
 

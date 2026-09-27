@@ -374,6 +374,7 @@ export class SessionActivityController implements ReactiveController {
       this.host.requestUpdate();
       return Promise.resolve();
     }
+    const now = new Date();
     const request =
       filters === "current"
         ? {
@@ -389,6 +390,11 @@ export class SessionActivityController implements ReactiveController {
             includeGlobal: true,
             includeUnknown: true,
             includePeople: true,
+            activityPulseSince: new Date(
+              now.getFullYear(),
+              now.getMonth(),
+              now.getDate(),
+            ).getTime(),
             excludeSubagents: true,
             includeActivitySummary: true,
             includeDerivedTitles: true,

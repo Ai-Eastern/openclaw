@@ -3292,6 +3292,22 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
+          {
+            match: { includePeople: true, sortBy: "activity" },
+            response: {
+              ...pagedSessionsListResponse(activitySessions, 0, MOCK_SESSION_OWNERS),
+              activityPulse: {
+                since: new Date(new Date(activityTime).setHours(0, 0, 0, 0)).getTime(),
+                hours: Array.from({ length: 24 }, (_, hour) =>
+                  hour === 10 ? 12 : hour === new Date(activityTime).getHours() ? 4 : 0,
+                ),
+                sessions: 38,
+                started: 12,
+                people: 6,
+                running: 3,
+              },
+            },
+          },
           ...buildSessionListCases(
             fixture === "sidebar-roster" ? sessions : [...sessions, ...archivedSessions],
             {},
