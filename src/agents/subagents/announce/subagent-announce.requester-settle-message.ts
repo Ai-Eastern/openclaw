@@ -18,6 +18,7 @@ export function buildRequesterSettleWakeMessage(params: {
   requireVisibleReply: boolean;
   parentOnly?: boolean;
   children: readonly SubagentRunRecord[];
+  recoveryChildren: readonly SubagentRunRecord[];
   preserveModelRouteNotice: boolean;
 }): string {
   // The scheduling row need not be the rerouted child. Keep every current
@@ -38,7 +39,7 @@ export function buildRequesterSettleWakeMessage(params: {
     routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
-  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.children);
+  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   return [
     "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",

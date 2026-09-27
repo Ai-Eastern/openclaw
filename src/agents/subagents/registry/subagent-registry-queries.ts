@@ -37,6 +37,19 @@ function isDeliveryTerminalForRequesterSettle(entry: Pick<SubagentRunRecord, "de
   );
 }
 
+export function matchesSubagentRequesterSession(
+  entry: Pick<
+    SubagentRunRecord,
+    "completionRequesterSessionId" | "completionRequesterLifecycleRevision"
+  >,
+  requester: { sessionId: string; lifecycleRevision?: string },
+): boolean {
+  return (
+    entry.completionRequesterSessionId === requester.sessionId &&
+    entry.completionRequesterLifecycleRevision === requester.lifecycleRevision
+  );
+}
+
 /** Lists requester-owned runs, optionally scoped to a requester run or session incarnation. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -73,8 +86,10 @@ export function listRunsForRequesterFromRuns(
     if (
       entry.requesterSessionKey === key &&
       (options?.requesterSessionId === undefined ||
-        (entry.completionRequesterSessionId === options.requesterSessionId &&
-          entry.completionRequesterLifecycleRevision === options.requesterLifecycleRevision)) &&
+        matchesSubagentRequesterSession(entry, {
+          sessionId: options.requesterSessionId,
+          lifecycleRevision: options.requesterLifecycleRevision,
+        })) &&
       (!latestRuns || latestRuns.getLatestSubagentRun(entry.childSessionKey) === entry) &&
       (!options?.requesterAgentId || entry.requesterAgentId === options.requesterAgentId) &&
       (options?.requesterStorePath === undefined ||

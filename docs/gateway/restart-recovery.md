@@ -625,7 +625,7 @@ including children interrupted by the restart. Older runs superseded by a newer
 child run are omitted, as are records from another store, parent session, or
 parent lifecycle revision. A reset keeps the session ID but changes its lifecycle
 revision, so retained child work from before that reset cannot enter the new
-parent prompt. Large lists show the first 32 children and tell the parent
+parent's actionable recovery roster. Large lists show the first 32 children and tell the parent
 to inspect the remaining children.
 
 The parent must reconcile each unfinished child with its saved history and the
@@ -646,6 +646,13 @@ parent work disposable. Both recovery paths give the parent the interrupted
 children's identities and the same reconciliation guidance. Restart interruption
 remains in history as an interrupted outcome, rather than a child execution
 failure. Genuine execution and delivery failures still require attention.
+
+Saved batch wakes keep their original batch identity and completion-delivery
+contracts. Their actionable recovery roster includes only children whose captured
+parent ownership still matches. Older or stale records remain ordinary completion
+history; they cannot add new instructions to continue those child sessions.
+Current reset already revokes its live saved wakes. Recorded outcomes and historical
+child metadata are retained.
 
 On upgrade, saved interruptions that retain the typed restart-recovery owner
 are reconciled through the same startup path. Historical failed runs without

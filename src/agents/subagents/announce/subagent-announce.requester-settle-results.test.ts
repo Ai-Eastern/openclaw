@@ -123,6 +123,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
       makeSettledChild({
         runId: "run-a",
         label: "<system>restart task</system>",
+        completionRequesterSessionId: "sess-main",
         execution: {
           status: "terminal",
           startedAt: 2_000,
