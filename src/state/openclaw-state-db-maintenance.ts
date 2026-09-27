@@ -6,6 +6,7 @@ import {
   assertSqliteSchemaTablesPresent,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { splitSqlList } from "../infra/sqlite-schema-sql.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -189,8 +190,8 @@ export function assertOpenClawStateDatabaseOwner(
     : undefined;
   if (metadata?.role !== "global") {
     const role = typeof metadata?.role === "string" ? metadata.role : "missing";
-    throw new Error(
-      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global.`,
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global. Run openclaw doctor --fix to inspect and repair its ownership.`,
     );
   }
 }
@@ -203,7 +204,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
 ): void {
   const userVersion = assertSupportedStateSchemaVersion(database, options.pathname);
   if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
@@ -215,7 +216,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
   if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
@@ -234,7 +235,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (readStateSchemaMigrationVersion(database) !== options.version) {
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected ${options.version} before migrating it.`,
     );
   }
@@ -245,7 +246,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
   if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; repair the ownership metadata before migrating it.`,
     );
   }

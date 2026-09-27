@@ -5,6 +5,7 @@ import {
   createSqliteTableContractReader,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
@@ -39,7 +40,7 @@ export function inspectCurrentStateStartupSchema(
       .limit(1),
   );
   if (metadata?.schema_version !== foundVersion) {
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${databasePath} metadata schema version ${typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid"} does not match ${foundVersion}.`,
     );
   }

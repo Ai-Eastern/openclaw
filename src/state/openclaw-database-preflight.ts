@@ -11,6 +11,7 @@ import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import { readSqliteWriterAppVersion as readWriterAppVersion } from "../infra/sqlite-schema-header.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { hasStateDatabaseSourceExclusion } from "../infra/state-database-coordinator.js";
@@ -123,6 +124,7 @@ export async function assertOpenClawDatabasesReady(
     },
     options.operation === "doctor" ? "maintenance" : "runtime",
   );
+  const failures: Error[] = [];
   for (const refusal of schemas.agentRefusals ?? []) {
     if (
       !options.config ||
@@ -131,13 +133,21 @@ export async function assertOpenClawDatabasesReady(
           refusal.code !== "agent-database-inspection-pending")) &&
         !canIsolateAgentDatabase(options.config, refusal.agentId))
     ) {
-      throw new AgentDatabaseAdmissionError(refusal);
+      failures.push(new AgentDatabaseAdmissionError(refusal));
     }
   }
   if (schemas.incompatible.length > 0) {
-    throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible, {
-      operation: options.operation,
-    });
+    failures.push(
+      new OpenClawDatabaseSchemaPreflightError(schemas.incompatible, {
+        operation: options.operation,
+      }),
+    );
+  }
+  if (failures.length > 0) {
+    // A failed read must not hide another required store's proven repair or version refusal.
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, "Required OpenClaw databases failed startup admission.");
   }
   if (schemas.indeterminate.length === 0) {
     if (options.operation === "gateway-startup") {
@@ -370,7 +380,7 @@ export async function preflightOpenClawDatabaseSchemas(
             stateVersion,
           );
           if (blockingIssues.length > 0) {
-            throw new Error(
+            throw new SqliteSchemaMismatchError(
               `OpenClaw state database ${statePath} requires repair: ${blockingIssues.map((issue) => issue.message).join("; ")}; run openclaw doctor --fix.`,
             );
           }

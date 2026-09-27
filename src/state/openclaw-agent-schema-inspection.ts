@@ -68,7 +68,6 @@ export function inspectAgentDatabaseSchema(
   }
   const version = readSqliteUserVersion(database);
   const inspection: AgentSchemaInspection = { version };
-  let checkingShape = false;
   try {
     if (version > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
@@ -105,7 +104,6 @@ export function inspectAgentDatabaseSchema(
       agentId != null &&
       (!input.requireStartupMigrationReadiness || version > 0)
     ) {
-      checkingShape = true;
       assertOpenClawAgentDatabaseForMaintenance(database, {
         agentId,
         pathname: input.pathname,
@@ -114,7 +112,7 @@ export function inspectAgentDatabaseSchema(
     }
     return inspection;
   } catch (error) {
-    if (input.requireStartupMigrationReadiness && !checkingShape) {
+    if (input.requireStartupMigrationReadiness) {
       return { ...inspection, failure: toStringifiedError(error) };
     }
     // Preserve the observed version even when shape validation fails, so Doctor

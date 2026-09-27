@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   withArtifactPreservingStateReads,
   withSynchronousArtifactPreservingStateSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
+import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
@@ -188,7 +191,13 @@ async function readConfigSnapshotWithPreparation(
           valid: false,
           runtimeConfig: {},
           hash: rawHash,
-          issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
+          issues: [
+            {
+              path: "",
+              errorCode: "CONFIG_SOURCE_INVALID",
+              message: `JSON5 parse failed: ${parsedRes.error}`,
+            },
+          ],
           warnings: [],
           legacyIssues: [],
         }),
@@ -238,9 +247,10 @@ async function readConfigSnapshotWithPreparation(
           issues: [
             {
               path: "",
-              ...(error instanceof ConfigIncludeReadError || !(error instanceof ConfigIncludeError)
-                ? { errorCode: "CONFIG_READ_FAILED" }
-                : {}),
+              errorCode:
+                error instanceof ConfigIncludeReadError || !(error instanceof ConfigIncludeError)
+                  ? "CONFIG_READ_FAILED"
+                  : "CONFIG_SOURCE_INVALID",
               message,
             },
           ],
@@ -446,7 +456,13 @@ async function readConfigSnapshotWithPreparation(
     );
   } catch (error) {
     preparation?.assertCurrent();
-    if (findStartupMaintenanceRequiredError(error)) {
+    if (
+      findStartupMaintenanceRequiredError(error) ||
+      collectNestedErrorCandidates(error).some(
+        (failure) =>
+          failure instanceof OpenClawStateOwnershipError || isSqliteSchemaMismatchError(failure),
+      )
+    ) {
       throw error;
     }
     const nodeError = error as NodeJS.ErrnoException;

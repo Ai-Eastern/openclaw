@@ -13,17 +13,13 @@ import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js"
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
-  isAgentDatabaseOwnershipMismatchError,
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
@@ -34,9 +30,9 @@ import {
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
   refuseStartupMigrationsForLiveGatewayOwner,
+  rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
   throwStartupMigrationIdentityChanged,
-  throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
 import { completeDoctorPluginMetadataSnapshot } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
@@ -253,9 +249,12 @@ export async function readAdmittedConfigSnapshot(params: {
           pluginValidation: "core-only",
         }),
       );
-      // State admission depends on readable config; retain its failure instead of
-      // reclassifying a second storage failure as required offline maintenance.
-      if (isConfigReadFailure(selected)) {
+      // Retain definitive source failures before storage admission. Provisional
+      // plugin migration issues still need the full snapshot's validation below.
+      if (
+        isConfigReadFailure(selected) ||
+        selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+      ) {
         return { snapshot: selected };
       }
       const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
@@ -313,16 +312,7 @@ export async function readAdmittedConfigSnapshot(params: {
       }
       return { ...read, ...(recovery ? { recovery } : {}) };
     } catch (error) {
-      // Only explicit maintenance or a proven owner mismatch can park a managed Gateway.
-      // Unavailable reads, scratch allocation, and cleanup retain their ordinary failure.
-      if (
-        error instanceof ExitError ||
-        (!findStartupMaintenanceRequiredError(error) &&
-          !isAgentDatabaseOwnershipMismatchError(error))
-      ) {
-        throw error;
-      }
-      return throwStartupMigrationRefusal(formatErrorMessage(error), error);
+      return rethrowStartupConfigFailure(error);
     }
   });
 }
