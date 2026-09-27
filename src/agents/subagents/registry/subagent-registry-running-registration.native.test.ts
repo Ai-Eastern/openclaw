@@ -363,7 +363,10 @@ it.each(["none", "before rollback commit", "after rollback commit"] as const)(
         const durable = loadSubagentRegistryFromSqlite();
         const durableMarker = durable.get(predecessor.runId)?.killReconciliation?.supersededAt;
         if (successorTiming === "none") {
-          expect(durable.get(predecessor.runId)?.label).toBe(predecessor.label);
+          expect(predecessor.label).toBe("Updated while successor task creation is pending");
+          expect(durable.get(predecessor.runId)?.label).toBe(
+            "Updated while successor task creation is pending",
+          );
           expect(durableMarker).toBeUndefined();
         }
         if (successorTiming === "after rollback commit") {
