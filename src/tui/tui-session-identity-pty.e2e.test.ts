@@ -247,6 +247,74 @@ it("submits provider-specific thinking labels with one Enter", async () => {
   }
 }, 65_000);
 
+it("keeps session modes scoped while trace changes and delivery stays process-owned", async () => {
+  const modeStartupTimeoutMs = 20_000;
+  const modeFixture = await startTuiFixture({
+    env: {
+      OPENCLAW_TUI_PTY_DELIVER: "1",
+      OPENCLAW_TUI_PTY_MODEL: "fixture-model",
+    },
+  });
+  try {
+    await modeFixture.run.waitForOutput("local ready", modeStartupTimeoutMs);
+    await modeFixture.run.waitForOutput("deliver:on", modeStartupTimeoutMs);
+    await modeFixture.run.write("/session agent:main:mode-source\r", { delay: false });
+    await modeFixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", "agent:main:mode-source"),
+    );
+    await modeFixture.run.waitForOutput(
+      "trace:raw | reasoning:stream | deliver:on",
+      modeStartupTimeoutMs,
+    );
+
+    await modeFixture.run.write("/session agent:main:mode-target\r", { delay: false });
+    await modeFixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
+    );
+    const targetRows = await waitForSynchronizedFrameRows(
+      modeFixture.run,
+      (rows) =>
+        rows.some((row) => row.trim() === "session agent:main:mode-target") &&
+        rows.some((row) => row.includes("| session mode-target | fixture-model |")),
+      modeStartupTimeoutMs,
+    );
+    const targetOutput = targetRows.join("\n");
+    expect(targetOutput).toContain("deliver:on");
+    expect(targetOutput).not.toContain("fast:auto");
+    expect(targetOutput).not.toContain("verbose full");
+    expect(targetOutput).not.toContain("trace:raw");
+    expect(targetOutput).not.toContain("reasoning:stream");
+
+    await modeFixture.run.write("/trace on\r", { delay: false });
+    await modeFixture.waitForLogEntry(
+      (entry) => entry.method === "patchSession" && objectFieldEquals(entry, "traceLevel", "on"),
+    );
+    await modeFixture.run.waitForOutput("trace | deliver:on", modeStartupTimeoutMs);
+
+    await modeFixture.run.write("delivery proof\r", { delay: false });
+    const sent = await modeFixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "sendChat" && objectFieldEquals(entry, "message", "delivery proof"),
+    );
+    expect(sent.payload).toMatchObject({ deliver: true });
+    console.log(
+      `[behavior-evidence] tui-session-footer ${JSON.stringify({
+        terminal: "real PTY",
+        sourceModesVisible: true,
+        targetModesCleared: true,
+        traceTransitionVisible: true,
+        fixedDeliveryPropagated: true,
+      })}`,
+    );
+  } finally {
+    await modeFixture.cleanup();
+  }
+}, 25_000);
+
 it("clears the previous display name when the selected session is unnamed", async () => {
   const fixture = await startTuiFixture();
   try {
