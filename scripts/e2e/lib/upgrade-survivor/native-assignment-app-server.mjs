@@ -38,6 +38,7 @@ const phases = new Set([
   "verify-repeat",
 ]);
 const threads = new Map();
+const injectedItemsByThread = new Map();
 const loaded = new Set();
 const closeTurns = new Map();
 let turnSequence = 0;
@@ -131,6 +132,7 @@ function startThread(params, id = parentId) {
       response.thread.preview = "Synthetic native upgrade assignment";
     }
     threads.set(id, response.thread);
+    injectedItemsByThread.set(id, []);
   }
   loaded.add(id);
   return { ...response, thread: thread(id) };
@@ -305,6 +307,33 @@ function handle(socket, phase, message) {
     case "thread/resume":
       thread(params.threadId);
       return result(startThread(params, params.threadId));
+    case "thread/inject_items": {
+      thread(params.threadId);
+      if (
+        !Array.isArray(params.items) ||
+        !params.items.every(
+          (item) =>
+            item?.type === "message" &&
+            item.role === "developer" &&
+            Array.isArray(item.content) &&
+            item.content.every(
+              (part) => part?.type === "input_text" && typeof part.text === "string",
+            ),
+        )
+      ) {
+        throw new Error("Native upgrade fixture injection requires developer text items");
+      }
+      // Raw model context has no transcript turn and must not expose policy text in proof logs.
+      const items = injectedItemsByThread.get(params.threadId);
+      items.push(...structuredClone(params.items));
+      log("fixture-state", phase, {
+        event: "response-items-appended",
+        threadId: params.threadId,
+        appendedCount: params.items.length,
+        totalCount: items.length,
+      });
+      return result({});
+    }
     case "thread/read": {
       const selected = thread(params.threadId);
       return result({ thread: { ...selected, turns: params.includeTurns ? selected.turns : [] } });

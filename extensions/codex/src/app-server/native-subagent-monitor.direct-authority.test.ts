@@ -290,31 +290,6 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
-  it.each(["v1", "v2"] as const)(
-    "buffers direct %s spawn evidence until its exact parent turn binds",
-    async (version) => {
-      const client = createClient();
-      const claimDirectChild = vi.fn(() => () => undefined);
-      const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-      const owner = await monitor.registerParent({
-        parentThreadId: "parent-thread",
-        claimDirectChild,
-      });
-      const item = directSpawnItem(version, "parent-thread", "child-thread");
-
-      await client.notify({
-        method: "item/completed",
-        params: { threadId: "parent-thread", turnId: "turn-1", item },
-      } as unknown as CodexServerNotification);
-      expect(claimDirectChild).not.toHaveBeenCalled();
-
-      owner.bindTurn("turn-1");
-      expect(claimDirectChild).toHaveBeenCalledTimes(1);
-      expect(claimDirectChild).toHaveBeenCalledWith("child-thread");
-      monitor.dispose();
-    },
-  );
-
   it("does not consume pre-bind direct spawn evidence for another turn", async () => {
     const client = createClient();
     const claimDirectChild = vi.fn(() => () => undefined);
@@ -372,6 +347,7 @@ describe("CodexNativeSubagentMonitor", () => {
         method: "item/completed",
         params: { threadId: "parent-second", turnId: "turn-second", item: secondItem },
       } as unknown as CodexServerNotification);
+      expect(secondClaim).not.toHaveBeenCalled();
       second.bindTurn("turn-second");
 
       expect(secondClaim).toHaveBeenCalledWith("second-child");

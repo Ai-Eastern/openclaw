@@ -9,6 +9,7 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR/candidate-cohort.json" \
       "$ARTIFACT_DIR"/native-assignment-{eligibility,baseline,first-hop,proof,ready,phase}.json \
       "$ARTIFACT_DIR/native-assignment-messages.jsonl" "$ARTIFACT_DIR/native-assignment-server.log" \
+      "$ARTIFACT_DIR"/native-recover{,-wait}.{out,err} \
       "$ARTIFACT_DIR/backup-rollback.json" \
       "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json \
       "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json.err \

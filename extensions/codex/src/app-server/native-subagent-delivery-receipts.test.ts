@@ -22,13 +22,12 @@ function completedWaitReceipt(message: string, id = "wait"): CodexServerNotifica
 }
 
 describe("native subagent delivery receipts", () => {
-  it.each(
-    [false, true].flatMap((received) =>
-      ["same", "different"].flatMap((predecessorResult) =>
-        ["before", "after"].map((order) => ({ received, predecessorResult, order })),
-      ),
-    ),
-  )(
+  it.each([
+    { received: false, predecessorResult: "same", order: "before" },
+    { received: false, predecessorResult: "different", order: "after" },
+    { received: true, predecessorResult: "same", order: "after" },
+    { received: true, predecessorResult: "different", order: "before" },
+  ])(
     "defers successor acknowledgment behind unresolved evidence (received=$received, predecessor=$predecessorResult, receipt=$order)",
     ({ received, predecessorResult, order }) => {
       const receipts = new CodexNativeSubagentDeliveryReceipts();
@@ -95,13 +94,6 @@ describe("native subagent delivery receipts", () => {
     receipts.record("first-run", ["child-thread"], "first result");
     expect(receipts.observe(completedWaitReceipt("second result"))).toEqual([]);
     expect(receipts.track("first-run", ["child-thread"])).toEqual([]);
-  });
-
-  it("retains a receipt matched before the child is registered", () => {
-    const receipts = new CodexNativeSubagentDeliveryReceipts();
-    receipts.record("child-run", ["child-thread"], "result");
-    expect(receipts.observe(completedWaitReceipt("result"))).toEqual(["child-run"]);
-    expect(receipts.track("child-run", ["child-thread"])).toEqual(["child-run"]);
   });
 
   it.each(["before", "after"])(

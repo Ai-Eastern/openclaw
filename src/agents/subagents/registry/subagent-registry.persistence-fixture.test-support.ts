@@ -12,6 +12,7 @@ import { listOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
 
@@ -93,7 +94,9 @@ export async function closeSubagentPersistenceFixtureDatabases(params: {
 export function useSubagentPersistenceFixture() {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
-  const settle = () => settleSubagentRegistryPersistenceWork();
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  const settle = (keepObserving = true) =>
+    settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
 
   beforeEach(() => {
     // Failed cleanup retains this case's stores and capture until its work retires.
@@ -106,12 +109,13 @@ export function useSubagentPersistenceFixture() {
     resetSubagentPersistenceGatewayCalls(callGateway);
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
+    settleRootWork = observeRootWork();
   });
 
   afterEach(async () => {
     const failures: unknown[] = [];
     try {
-      await settle();
+      await settle(false);
     } catch (error) {
       failures.push(error);
     }

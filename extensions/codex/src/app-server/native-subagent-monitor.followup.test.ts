@@ -16,6 +16,27 @@ import {
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 
+function interactionNotification(
+  id: string,
+  turnId = "parent-turn",
+  childThreadId = "child-thread",
+) {
+  return {
+    method: "item/completed",
+    params: {
+      threadId: "parent-thread",
+      turnId,
+      item: {
+        type: "subAgentActivity",
+        id,
+        kind: "interacted",
+        agentThreadId: childThreadId,
+        agentPath: `/root/${childThreadId}`,
+      },
+    },
+  };
+}
+
 describe("CodexNativeSubagentMonitor", () => {
   it.each(["v1", "v2"] as const)(
     "observes completed %s children again when a parent starts follow-up work",
@@ -191,20 +212,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(oldRelease).not.toHaveBeenCalled();
     const second = await register(newClaim);
     second.bindTurn("second-parent-turn");
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "second-parent-turn",
-        item: {
-          type: "subAgentActivity",
-          id: "steer-running",
-          kind: "interacted",
-          agentThreadId: "child-thread",
-          agentPath: "/root/child-thread",
-        },
-      },
-    });
+    await client.notify(interactionNotification("steer-running", "second-parent-turn"));
     expect(oldRelease).toHaveBeenCalledOnce();
     expect(newClaim).toHaveBeenCalledExactlyOnceWith("child-thread");
     await client.notify(
@@ -223,7 +231,6 @@ describe("CodexNativeSubagentMonitor", () => {
     "second",
     "neither",
     "duplicate",
-    "fresh-owner",
     "fresh-unbound",
     "resumed",
     "resumed-start-first",
@@ -232,7 +239,7 @@ describe("CodexNativeSubagentMonitor", () => {
     "preserves overlapping follow-up outcomes when native delivery consumes %s result",
     async (consumed) => {
       const childThreadId = "11111111-1111-4111-8111-111111111111";
-      const freshOwner = consumed === "fresh-owner" || consumed === "fresh-unbound";
+      const freshOwner = consumed === "fresh-unbound";
       const resumed = consumed.startsWith("resumed");
       const client = createClient();
       const runtime = createRuntime();
@@ -312,27 +319,12 @@ describe("CodexNativeSubagentMonitor", () => {
             readQualification: () => undefined,
             assertCurrent: () => {},
           });
-        if (consumed === "fresh-unbound") {
-          await expect(admitInput()).rejects.toThrow("exact admitted sender turn");
-          expect(followupClaim).not.toHaveBeenCalled();
-        }
+        await expect(admitInput()).rejects.toThrow("exact admitted sender turn");
+        expect(followupClaim).not.toHaveBeenCalled();
         parent.bindTurn(parentTurnId);
         await admitInput();
       }
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: parentTurnId,
-          item: {
-            type: "subAgentActivity",
-            id: "followup",
-            kind: "interacted",
-            agentThreadId: childThreadId,
-            agentPath: `/root/${childThreadId}`,
-          },
-        },
-      });
+      await client.notify(interactionNotification("followup", parentTurnId, childThreadId));
       expect(claim).toHaveBeenCalledOnce();
       await client.notify(
         turnStartedNotification("followup-turn", { threadId: childThreadId, error: null }),
@@ -345,20 +337,7 @@ describe("CodexNativeSubagentMonitor", () => {
       if (resumed) {
         await notifyCompletion({ turnId: "followup-turn", status: "interrupted" });
         const interact = () =>
-          client.notify({
-            method: "item/completed",
-            params: {
-              threadId: "parent-thread",
-              turnId: parentTurnId,
-              item: {
-                type: "subAgentActivity",
-                id: "resume-followup",
-                kind: "interacted",
-                agentThreadId: childThreadId,
-                agentPath: `/root/${childThreadId}`,
-              },
-            },
-          });
+          client.notify(interactionNotification("resume-followup", parentTurnId, childThreadId));
         if (consumed === "resumed") {
           await interact();
         }

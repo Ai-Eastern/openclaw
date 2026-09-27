@@ -107,20 +107,7 @@ export async function prepareGatewayLifecycle(params: {
     current?: import("./desktop/node-source.js").NodeDesktopService;
   } = {};
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
-  const {
-    nodeRegistry,
-    nodeWorkerSupervisorTransport,
-    nodePresenceTimers,
-    nodeHasSessionSubscribers,
-    nodeSendToSession,
-    nodeSendToAllSubscribed,
-    nodeSubscribe,
-    nodeUnsubscribe,
-    nodeUnsubscribeAll,
-    broadcastVoiceWakeChanged,
-    broadcastVoiceWakeRoutingChanged,
-    hasTalkNodeConnected,
-  } = createGatewayNodeSessionRuntime({
+  const { nodeWorkerSupervisorTransport, ...nodeRuntime } = createGatewayNodeSessionRuntime({
     broadcast,
     sessionEventSubscribers,
     sessionMessageSubscribers,
@@ -144,6 +131,7 @@ export async function prepareGatewayLifecycle(params: {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
     },
   });
+  const { nodeRegistry, nodePresenceTimers, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
   const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
     getConfig: getRuntimeConfig,
     nodeRegistry,
@@ -660,18 +648,8 @@ export async function prepareGatewayLifecycle(params: {
     subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
     unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
     restartRecoveryCandidates,
-    nodeRegistry,
+    ...nodeRuntime,
     nodeDesktopService,
-    nodePresenceTimers,
-    nodeHasSessionSubscribers,
-    nodeSendToSession,
-    nodeSendToAllSubscribed,
-    nodeSubscribe,
-    nodeUnsubscribe,
-    nodeUnsubscribeAll,
-    broadcastVoiceWakeChanged,
-    broadcastVoiceWakeRoutingChanged,
-    hasTalkNodeConnected,
     watchNodeHttpRuntime,
     terminalSessions,
     runtimeState,

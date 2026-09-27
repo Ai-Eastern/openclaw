@@ -211,12 +211,48 @@ it.each([true, false])(
     expect(onPendingContinuation).toHaveBeenCalledOnce();
     const settlement = onPendingContinuation.mock.calls[0]?.[0];
     expect(settlement).toBeDefined();
-    await settlement?.settle(delivered);
+    await Promise.all([settlement?.settle(delivered), settlement?.settle(!delivered)]);
     expect(settleRequester).toHaveBeenCalledOnce();
     expect(settleRequester.mock.calls[0]?.[0]).toMatchObject({
       requesterYielded: delivered,
     });
-    await settlement?.settle(delivered);
+    await settlement?.settle(!delivered);
     expect(settleRequester).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["refusal", "persistence failure"] as const)(
+  "releases an implicit continuation after settlement %s",
+  async (failure) => {
+    const context = createContext();
+    context.execution.result.meta = { durationMs: 0, continuationPending: true };
+    const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
+    context.opts = { onPendingContinuation };
+    await prepare("ordinary", context);
+    const settlement = expectDefined(
+      onPendingContinuation.mock.calls[0]?.[0],
+      "implicit continuation settlement",
+    );
+    settleRequester.mockImplementationOnce(() => {
+      if (failure === "persistence failure") {
+        throw new Error("native settlement persistence failed");
+      }
+      return false;
+    });
+
+    await expect(Promise.all([settlement.settle(true), settlement.settle(true)])).rejects.toThrow(
+      failure === "persistence failure"
+        ? "native settlement persistence failed"
+        : "accepted continuation children could not transfer terminal delivery",
+    );
+    expect(settleRequester).toHaveBeenCalledOnce();
+
+    await settlement.settle(false);
+    expect(settleRequester.mock.calls.map(([params]) => params.requesterYielded)).toEqual([
+      true,
+      false,
+    ]);
+    await settlement.settle(true);
+    expect(settleRequester).toHaveBeenCalledTimes(2);
   },
 );

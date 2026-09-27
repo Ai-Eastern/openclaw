@@ -569,44 +569,49 @@ export async function prepareReplyAgentPayloads(state: {
     if (requesterSessionKey && acceptedSessionSpawns?.length && statusPayload) {
       let progressPresentation: ProgressContinuationState | undefined;
       if (implicitContinuation) {
+        let settlementPromise: Promise<void> | undefined;
         const settlement: PendingContinuationSettlement = {
-          settle: async (statusDelivered) => {
-            const presentation = progressPresentation;
-            progressPresentation = undefined;
-            try {
-              const { settleRequesterAfterSessionSpawns } =
-                await import("../../agents/subagents/registry/subagent-registry.js");
-              const requester = {
-                requesterSessionKey,
-                requesterAgentId: followupRun.run.agentId,
-                requesterTurnRunId: runId,
-                acceptedSessionSpawns,
-              };
-              const requesterYielded = statusDelivered || presentation !== undefined;
+          settle: (statusDelivered) =>
+            (settlementPromise ??= (async () => {
+              const presentation = progressPresentation;
+              progressPresentation = undefined;
               try {
-                if (
-                  !settleRequesterAfterSessionSpawns({
-                    ...requester,
-                    requesterYielded,
-                    ...(presentation ? { progressPresentation: presentation } : {}),
-                  })
-                ) {
-                  throw new Error(
-                    "accepted continuation children could not transfer terminal delivery",
-                  );
+                const { settleRequesterAfterSessionSpawns } =
+                  await import("../../agents/subagents/registry/subagent-registry.js");
+                const requester = {
+                  requesterSessionKey,
+                  requesterAgentId: followupRun.run.agentId,
+                  requesterTurnRunId: runId,
+                  acceptedSessionSpawns,
+                };
+                const requesterYielded = statusDelivered || presentation !== undefined;
+                try {
+                  if (
+                    !settleRequesterAfterSessionSpawns({
+                      ...requester,
+                      requesterYielded,
+                      ...(presentation ? { progressPresentation: presentation } : {}),
+                    })
+                  ) {
+                    throw new Error(
+                      "accepted continuation children could not transfer terminal delivery",
+                    );
+                  }
+                } catch (error) {
+                  // Adoption is positive visibility even when the later transport
+                  // outcome is unknown. A failed handoff must still release the child.
+                  if (!statusDelivered && requesterYielded) {
+                    settleRequesterAfterSessionSpawns({ ...requester, requesterYielded: false });
+                  }
+                  throw error;
                 }
-              } catch (error) {
-                // Adoption is positive visibility even when the later transport
-                // outcome is unknown. A failed handoff must still release the child.
-                if (!statusDelivered && requesterYielded) {
-                  settleRequesterAfterSessionSpawns({ ...requester, requesterYielded: false });
-                }
-                throw error;
+              } finally {
+                getReplyPayloadMetadata(statusPayload)?.progressContinuation?.close();
               }
-            } finally {
-              getReplyPayloadMetadata(statusPayload)?.progressContinuation?.close();
-            }
-          },
+            })().catch((error: unknown) => {
+              settlementPromise = undefined;
+              throw error;
+            })),
         };
         opts?.onPendingContinuation?.(settlement);
       }

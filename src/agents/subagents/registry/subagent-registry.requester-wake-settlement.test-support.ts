@@ -135,7 +135,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     registry.addSubagentRunForTests({
       runId: "run-main-stale",
       childSessionKey: "agent:main:subagent:stale",
-      requesterSessionKey,
+      requesterSessionKey: "agent:main:subagent:batch",
       requesterDisplayKey: "main",
       requesterAgentId: "main",
       task: "main stale settle blocker",

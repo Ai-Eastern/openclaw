@@ -13,7 +13,7 @@ import type {
   CodexTurn,
 } from "./protocol.js";
 
-type CodexHistoryItemEntry = {
+export type CodexHistoryItemEntry = {
   turnId: string;
   item: CodexThreadItem;
   turn?: Omit<CodexTurn, "items">;

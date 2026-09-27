@@ -55,12 +55,7 @@ export class CodexNativeSubagentCompletionDelivery {
 
   private async deliverAttempt(state: ParentState, childState: ChildState): Promise<void> {
     const completion = childState.pendingCompletion;
-    if (
-      !completion ||
-      !this.dependencies.isCurrentChild(childState) ||
-      !this.dependencies.isCurrentParent(state) ||
-      this.dependencies.isRetiredParent(state)
-    ) {
+    if (!completion || !this.isCurrent(state, childState)) {
       return;
     }
     if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
@@ -91,10 +86,7 @@ export class CodexNativeSubagentCompletionDelivery {
             }
           : {}),
         isSourceSessionAdmissionAllowed: () =>
-          this.dependencies.isCurrentChild(childState) &&
-          this.dependencies.isCurrentParent(state) &&
-          !this.dependencies.isRetiredParent(state) &&
-          this.claim(state, childState),
+          this.isCurrent(state, childState) && this.claim(state, childState),
         childSessionKey: childState.runId,
         childSessionId: completion.childThreadId,
         announceId: `codex-native:${childState.nativeParentThreadId}:${readCodexNativeSubagentRunId(childState.runId)?.turnId ? childState.runId : completion.childThreadId}:${completion.status}`,
@@ -188,9 +180,7 @@ export class CodexNativeSubagentCompletionDelivery {
       if (
         !child ||
         !deliveryParent ||
-        !this.dependencies.isCurrentChild(child) ||
-        !this.dependencies.isCurrentParent(state) ||
-        this.dependencies.isRetiredParent(state) ||
+        !this.isCurrent(state, child) ||
         !this.dependencies.isCurrentParent(deliveryParent) ||
         this.dependencies.isRetiredParent(deliveryParent)
       ) {
@@ -244,6 +234,14 @@ export class CodexNativeSubagentCompletionDelivery {
       completionDeliveryOwners.delete(deliveryOwnerKey);
     }
     childState.deliveryOwnerKey = undefined;
+  }
+
+  private isCurrent(state: ParentState, child: ChildState): boolean {
+    return (
+      this.dependencies.isCurrentChild(child) &&
+      this.dependencies.isCurrentParent(state) &&
+      !this.dependencies.isRetiredParent(state)
+    );
   }
 
   private prepareDelivery(state: ParentState, child: ChildState): boolean {

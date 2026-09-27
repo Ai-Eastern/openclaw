@@ -76,6 +76,7 @@ beforeEach(() => {
   mocks.database = "original-db";
   mocks.context = {
     admission: {
+      coordinationKey: "original-db",
       databasePath: "/synthetic/state.sqlite",
       identity: { key: "original-db", canonicalPath: "/synthetic/state.sqlite" },
       assertCurrent: () => {},

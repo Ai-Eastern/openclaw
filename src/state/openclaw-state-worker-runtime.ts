@@ -48,9 +48,8 @@ import {
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import {
-  readManagedImageRecordInDatabase,
-  listManagedImageRecordEntriesInDatabase,
-  listManagedImageOriginalMediaIdsInDatabase,
+  executeManagedImageRecordCommand,
+  isManagedImageRecordCommand,
 } from "../gateway/managed-image-record-store.kernel.js";
 import {
   executeOperatorApprovalCommand,
@@ -64,7 +63,10 @@ import { isPlacementTurnClaimCommand } from "../gateway/worker-environments/plac
 import { executePlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
-import { readDeferredPluginMigrationsInWorker } from "../infra/deferred-plugin-migrations.worker.js";
+import {
+  readDeferredPluginMigrationsInWorker,
+  recordDeferredPluginMigrationsInWorker,
+} from "../infra/deferred-plugin-migrations.worker.js";
 import * as deliveryQueue from "../infra/delivery-queue.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
@@ -467,14 +469,8 @@ export function executeSharedStateCommand(
     default:
       break;
   }
-  if (command.type === "managedImages.read") {
-    return readManagedImageRecordInDatabase(database.db, command.input.attachmentId);
-  }
-  if (command.type === "managedImages.entries") {
-    return listManagedImageRecordEntriesInDatabase(database.db, command.input.sessionKey);
-  }
-  if (command.type === "managedImages.originalMediaIds") {
-    return listManagedImageOriginalMediaIdsInDatabase(database.db);
+  if (isManagedImageRecordCommand(command)) {
+    return executeManagedImageRecordCommand(command, database);
   }
   if (isApnsRegistrationWorkerCommand(command)) {
     return executeApnsRegistrationCommand(command, database);
@@ -499,6 +495,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "plugins.deferredMigrations.record") {
+    return recordDeferredPluginMigrationsInWorker(command.input, writeOptions);
+  }
   if (
     command.type === "nativeHookRelay.write" ||
     command.type === "nativeHookRelay.renew" ||

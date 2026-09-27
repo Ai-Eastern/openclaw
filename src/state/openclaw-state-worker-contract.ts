@@ -1,3 +1,4 @@
+import type { ZodIssue } from "zod";
 import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
@@ -29,10 +30,7 @@ import type {
   RepositoryGitHubPublicationPendingQuery,
   RepositoryGitHubPublicationStatusRow,
 } from "../gateway/github-repository-publication.kernel.js";
-import type {
-  ManagedImageRecord,
-  ManagedImageRecordEntry,
-} from "../gateway/managed-image-record-store.types.js";
+import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type {
   SessionGroupCatalogMutation,
@@ -44,6 +42,8 @@ import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-envir
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,
+  DeferredPluginMigrationRecordInput,
+  recordDeferredPluginMigrationsInTransaction,
   readDeferredPluginMigrationCompletions,
 } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
@@ -102,6 +102,7 @@ import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 
@@ -145,7 +146,8 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
   TranscriptWriteOperations &
   NodeWorkerJournalWorkerOperations &
   SkillUploadWorkerOperations &
-  OpenClawStateLeaseLifecycleOperations & {
+  OpenClawStateLeaseLifecycleOperations &
+  ManagedImageRecordWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "worktrees.reapRunLeases": { input: { scopes: string[] }; output: void };
     "worktrees.releaseRunLease": {
@@ -221,9 +223,6 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
     };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
-    "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
-    "managedImages.entries": { input: { sessionKey?: string }; output: ManagedImageRecordEntry[] };
-    "managedImages.originalMediaIds": { input: undefined; output: string[] };
     "doctor.databaseBloat": {
       input: undefined;
       output: ReturnType<typeof readSqliteDatabaseBloat>;
@@ -272,6 +271,18 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
     "plugins.metadata.sourceAdmission.publish": {
       input: PluginSourceAdmissionPublication;
       output: boolean;
+    };
+    "plugins.deferredMigrations.record": {
+      input: Omit<DeferredPluginMigrationRecordInput, "env"> & {
+        identity: OpenClawStateLeaseIdentity;
+      };
+      output:
+        | {
+            kind: "recorded";
+            transitions: ReturnType<typeof recordDeferredPluginMigrationsInTransaction>;
+          }
+        | { kind: "conflict"; pending: readonly DeferredPluginMigration[] }
+        | { kind: "invalid"; issues: ZodIssue[] };
     };
     "plugins.deferredMigrations.read": {
       input: { artifactPreservingReadOnly: boolean };
