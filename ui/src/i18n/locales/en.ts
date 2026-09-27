@@ -2441,7 +2441,7 @@ export const en: TranslationMap & {
     lastActive: "· {time}",
     unresolvedIdentities: "Unresolved identities",
     clearPersonFilter: "Clear person filter",
-    showing: "Showing {shown} of {total} sessions",
+    showing: "Showing {shown} of {total}",
     today: "Today",
     yesterday: "Yesterday",
     unknownDate: "Unknown date",

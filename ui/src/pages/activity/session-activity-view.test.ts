@@ -174,7 +174,7 @@ describe("session activity semantics", () => {
       const main = container.querySelector(".activity-feed__main")!;
       const footer = main.querySelector(".activity-feed__footer");
       if (totalCount > 1) {
-        expect(footer?.textContent).toBe("Showing 1 of 885 sessions");
+        expect(footer?.textContent).toBe("Showing 1 of 885");
         expect(main.lastElementChild).toBe(footer);
       } else {
         expect(footer).toBeNull();
