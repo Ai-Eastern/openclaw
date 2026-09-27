@@ -31,6 +31,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/reply-turn-admission.store-owner.test.ts",
   "src/auto-reply/reply/reply-turn-admission.test.ts",
   "src/auto-reply/reply/reply-turn-admission.worker.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.ordinary-hook-route-change.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.plugin-claim-route-change.test.ts",
   "test/line-question-gateway.test.ts",
   "src/commands/channels/dead-letters.test.ts",
   "src/commands/doctor-channel-ingress.test.ts",
