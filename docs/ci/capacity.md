@@ -470,9 +470,9 @@ host explicitly exercised four methods workers; production admission keeps the
 larger memory reserve. These replays establish the tested row, not a whole-CI
 latency guarantee.
 
-The planner retains aggregate work for packing and reports the test-step wall
-separately. Parallel predictions follow the executor's ordered two-slot queue,
-so the longest child is never divided by two. Once-per-job runtime preparation
+The planner retains aggregate work limits and also admits parallel bins only when
+the executor's ordered two-slot queue fits 300 test seconds. The reported test-step
+wall uses that same queue, so the longest child is never divided by two. Once-per-job runtime preparation
 is separate: 52 recent 8-class builds took 41–55 seconds, so its planning reserve
 is 60 seconds. The private-QA reserve remains 104 seconds. Include checkout,
 setup, preparation, dependency waits, and the final gate in workflow projections.

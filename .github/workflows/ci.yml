@@ -1856,10 +1856,12 @@ jobs:
           const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
           const includeReleaseOnlyRuntimeTests =
             !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
+          const includePrExemptRuntimeTests = !runtimePullRequest;
           const startupCorpusTestFiles =
             typeof nodeTestPlan.resolveStartupCorpusTestFiles === "function"
               ? nodeTestPlan.resolveStartupCorpusTestFiles({
                   includeReleaseOnlyRuntimeTests,
+                  includePrExemptRuntimeTests,
                   ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
                 })
               : undefined;
@@ -1887,6 +1889,10 @@ jobs:
           let changedNodeTestShards = null;
           let changedNodeTestFallbackReason;
           let changedExtensionFallbackShards = [];
+          const prExemptExtensionTestShards = includePrExemptRuntimeTests &&
+            typeof changedNodeTestPlan.createPrExemptExtensionTestShards === "function"
+              ? changedNodeTestPlan.createPrExemptExtensionTestShards()
+              : [];
           if (compactPullRequest && runNodeFull) {
             // Compact core excludes plugins; a failed planner is not a complete fallback.
             if (changedPaths === null) {
@@ -1905,6 +1911,7 @@ jobs:
               dedicatedNativeChecks: { macos: runMacos, ios: runIosBuild, android: runAndroid },
               includeReleaseOnlyToolingShards: false,
               includeReleaseOnlyRuntimeTests,
+              includePrExemptRuntimeTests,
               runnerBackend: nodeRunnerBackend,
               releaseFastLane,
               onFallback: (reason) => {
@@ -1922,7 +1929,9 @@ jobs:
                 channelContractShards = createChannelContractTestShards();
               }
               changedExtensionFallbackShards =
-                changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
+                changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths, {
+                  includePrExemptRuntimeTests,
+                });
             } else {
               console.log(`Node test plan changed-set: ${changedNodeTestShards.filter((shard) => !shard.requiresDist).length} rows`);
             }
@@ -2005,15 +2014,17 @@ jobs:
                     includeReleaseOnlyPluginShards: false,
                     includeReleaseOnlyToolingShards: !mainValidation && (eventName === "workflow_dispatch" || !isCanonicalRepository),
                     includeReleaseOnlyRuntimeTests,
+                    includePrExemptRuntimeTests,
                     ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
                     // Keep the legacy boolean for historical target planners;
                     // current planners use the event-specific mode.
                     compact: compactPlanMode !== undefined,
                     compactMode: compactPlanMode,
-                    compactNodeJobCap: nodeMatrixLimit - changedExtensionFallbackShards.filter((shard) => !shard.requiresDist).length,
+                    compactNodeJobCap: nodeMatrixLimit - [...changedExtensionFallbackShards, ...prExemptExtensionTestShards].filter((shard) => !shard.requiresDist).length,
                     runnerBackend: nodeRunnerBackend,
                   }),
                   ...changedExtensionFallbackShards,
+                  ...prExemptExtensionTestShards,
                 ]
             : [];
           if (ciQualification && !mainQualification && process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson") {
@@ -2040,6 +2051,7 @@ jobs:
             typeof nodeTestPlan.createUiTestShardGroups === "function"
               ? nodeTestPlan.createUiTestShardGroups({
                   includeReleaseOnlyTests: includeReleaseOnlyUiTests,
+                  includePrExemptRuntimeTests,
                   changedPaths: changedPaths ?? [],
                 })
               : null;
@@ -2332,7 +2344,10 @@ jobs:
             checks_windows_matrix: createMatrix(
               runWindows
                 ? windowsTestPlan
-                  ? windowsTestPlan.createWindowsTestShards(packageScripts).map((shard) => ({
+                  ? windowsTestPlan.createWindowsTestShards(packageScripts, {
+                      includePrExemptRuntimeTests,
+                      ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
+                    }).map((shard) => ({
                       ...shard,
                       runtime: "node",
                       task: "test",
@@ -6452,6 +6467,7 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessClientTests
             -only-testing:OpenClawTests/CloudflareAccessTransferTests
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
+            -only-testing:OpenClawTests/ChatTypingFocusTests
           )
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(

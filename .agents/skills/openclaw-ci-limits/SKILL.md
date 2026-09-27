@@ -449,8 +449,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Gateway-exclusive serial bins and numbered tooling bins use a 300s test
   budget. Ordinary self-hosted bins share promoted capacity across logical
   classes; the existing group exchange fills stranded slots without raising caps.
-  Matrix predictions use the ordered two-slot test wall, while admission keeps
-  aggregate work and separately charges the measured 60s runtime preparation.
+  Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
+  matrix predictions use that same queue. Admission retains aggregate work caps
+  and separately charges the measured 60s runtime preparation.
   Compatible two-slot bins use the time budget without the ten-group cutoff;
   serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
   exclusive bins retain 150s by default, and groups above their serial cap stay alone.
