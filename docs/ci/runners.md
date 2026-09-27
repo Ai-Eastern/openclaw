@@ -9,7 +9,7 @@ read_when:
 ## Runners
 
 Pull requests route preflight, the failure monitor, every static-check family,
-artifact builds, Windows tests, Control UI E2E, and the final aggregate gate
+artifact builds, Windows tests, Control UI unit and E2E tests, and the final aggregate gate
 directly to GitHub-hosted capacity. This PR policy takes
 precedence over the default backend routes below without changing the repository
 variable. Hybrid PR core lint uses five separate rows and retains six separate
@@ -53,8 +53,9 @@ balance file cost and the 16-file ceiling together. Measured heavy singleton fil
 and Gateway agent-chat groups have dedicated rows.
 Hosted PRs may emit up to 224 compact rows and 256 total Node rows,
 with a 200-row concurrency cap. Other backends retain their existing caps. The
-optional PR hosted admission budget is 300 jobs; main retains 45. These are
-per-run bounds, not a reservation of the organization’s shared hosted pool.
+PR hosted census warns above 300 jobs; direct PR placement remains hosted.
+Main retains its 45-job optional admission budget. These counts do not reserve
+capacity in the organization’s shared hosted pool.
 Qualification records job-created-to-started waits separately from prerequisite
 waits and complete job walls.
 

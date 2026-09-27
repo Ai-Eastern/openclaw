@@ -3891,6 +3891,7 @@ setImmediate(() => {
       "checks-fast-channel-contracts-shard",
       "checks-node-compat",
       "skills-python",
+      "checks-ui",
     ]) {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson"] as const) {
@@ -3902,9 +3903,11 @@ setImmediate(() => {
           evaluateWorkflowExpression(expression, { ...context, runnerBackend, eventName: "push" }),
           `${jobName}: push/${runnerBackend}`,
         ).toBe(
-          runnerBackend === "" || runnerBackend === "blacksmith"
-            ? "blacksmith-4vcpu-ubuntu-2404"
-            : "ubuntu-24.04",
+          jobName === "checks-ui" && ["hybrid", "runson"].includes(runnerBackend)
+            ? "blacksmith-8vcpu-ubuntu-2404"
+            : runnerBackend === "" || runnerBackend === "blacksmith"
+              ? "blacksmith-4vcpu-ubuntu-2404"
+              : "ubuntu-24.04",
         );
       }
     }
@@ -4145,7 +4148,6 @@ setImmediate(() => {
       "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
-      "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
     } as const;
     const expectedHybridForkRunners = {
       ...expectedHybridFirstAttemptRunners,
@@ -9663,9 +9665,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(resolveValue(ui.name)).toBe(
         scenario.compatibilityTarget ? "checks-ui" : `checks-ui (${shard}/3)`,
       );
-      expect(evaluateWorkflowExpression(ui["runs-on"], rowContext)).toBe(
-        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
-      );
+      expect(evaluateWorkflowExpression(ui["runs-on"], rowContext)).toBe("ubuntu-24.04");
       const env = Object.fromEntries(
         Object.entries({ ...ui.env, ...test.env }).map(([key, value]) => [
           key,
@@ -10809,6 +10809,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(evaluateWorkflowExpression(expression, { ...context, matrix }), `${name} PR`).toBe(
         [
           "build-artifacts",
+          "checks-ui",
           "checks-ui-e2e",
           "ci-gate",
           "checks-windows",

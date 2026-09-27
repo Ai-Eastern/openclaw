@@ -21,7 +21,7 @@ rows, 256 total Node rows, and at most 200 active Node jobs. These hosted-only
 bounds add no Blacksmith registrations. The compact row bound leaves room above
 the 211-row inventory measured on September 26 without increasing simultaneous
 runner demand or the per-row work budget. PR preflight, monitor, security and static checks,
-artifact build, Windows, Node, Control UI E2E, and aggregate gate use hosted capacity; hourly main and
+artifact build, Windows, Node, Control UI unit and E2E tests, and aggregate gate use hosted capacity; hourly main and
 manual/release routing retain the policies described below. Measure hosted
 assignment waits against the shared organization pool before expanding admission.
 The broad PR in [run 36274529895](https://github.com/openclaw/openclaw/actions/runs/36274529895)
@@ -31,8 +31,9 @@ two aligned peaks need 518 slots before other workflows. Staggered runs can
 overlap more efficiently, but average occupancy alone does not establish a
 queue-free concurrency limit. This run was cancelled after a test failure, so
 its observed peak is capacity evidence, not complete latency qualification.
-The PR base budget includes every Control UI E2E row and the aggregate gate;
-the browser-extension row is counted once rather than as an optional offload.
+The PR base census includes the three Control UI unit rows, every Control UI
+E2E row, and the aggregate gate. UI rows retain hosted placement when the census
+exceeds 300 jobs; each row is counted once, outside optional main offload.
 Windows PR planning uses its measured hosted file costs for up to twelve rows,
 with one Vitest worker per row. Main and manual targets retain five rows.
 The twelve PR extension-package compile stripes add eleven hosted jobs and repeat
@@ -845,11 +846,11 @@ not enable auto-merge. See
 
 ## Bounded hybrid hosted offload
 
-Current automatic PRs count their hosted preflight and monitor in the base
-inventory and use a 295-row base threshold and 300-row optional-offload limit.
-Their static checks route hosted directly. The 40/45 limits and conditional
-check placement below describe main and historical PR policies, not the current
-hosted PR override. Neither budget reserves capacity in the shared hosted pool.
+Current automatic PRs count preflight, the monitor, static checks, and Control UI
+unit and E2E rows in the hosted base inventory. The census warns above 300 jobs;
+direct PR placement stays hosted even above that count. The 40/45 limits and
+conditional placement below describe main and historical PR policies. Neither
+count reserves capacity in the shared hosted pool.
 
 Automatic canonical hybrid first attempts count the complete selected hosted inventory before adding short jobs: control and cache jobs, every selected check or Node matrix row, docs and i18n, performance, and hosted native jobs. Preflight records `hybrid_hosted_base_rows`, `hybrid_hosted_total_rows`, and `hybrid_hosted_offload`; the workflow guard independently expands the actual job gates, matrices, and runner expressions to verify the count. Eligible preflight runs on Blacksmith and is excluded from hosted rows; the performance row uses its canonical `run_control_ui_performance` owner.
 

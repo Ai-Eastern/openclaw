@@ -2887,52 +2887,73 @@ describe("ci workflow guards", () => {
         eventName: "pull_request" as const,
         runnerProfile: "hybrid" as const,
         headRepository: "openclaw/openclaw",
+        hostedNodeRows: 0,
+      },
+      {
+        label: "broad PR above optional offload budget",
+        eventName: "pull_request" as const,
+        runnerProfile: "hybrid" as const,
+        headRepository: "openclaw/openclaw",
+        hostedNodeRows: 256,
       },
       {
         label: "trusted fork PR",
         eventName: "pull_request" as const,
         runnerProfile: "github" as const,
         headRepository: "contributor/openclaw",
+        hostedNodeRows: 0,
       },
       {
         label: "main",
         eventName: "push" as const,
         runnerProfile: "hybrid" as const,
         headRepository: "openclaw/openclaw",
+        hostedNodeRows: 0,
       },
-    ])("counts all selected rows for $label", ({ eventName, runnerProfile, headRepository }) => {
-      const manifest = manifestWithHostedNodeRows(0, {
-        eventName,
-        runnerProfile,
-        changedPaths: ["apps/ios/Sources/Foo.swift"],
-        scopeEnv: {
-          OPENCLAW_CI_HEAD_REPOSITORY: headRepository,
-          OPENCLAW_CI_RUN_MACOS_NODE: "true",
-          OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true",
-        },
-      });
-      expect(manifest.status, manifest.output).toBe(0);
-      expect(manifest.outputs.hybrid_hosted_offload).toBe("true");
-      const context = { eventName, runnerProfile, headRepository };
-      const outputs = { ...manifest.outputs, run_ios_screenshots: "true" };
-      const base = emittedHostedRows({ ...outputs, hybrid_hosted_offload: "false" }, context);
-      expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(base.length);
-      expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(
-        emittedHostedRows(outputs, context).length,
-      );
-      expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
-      expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
-      expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
-      expect(base.filter((name) => name === "ci-gate")).toHaveLength(
-        eventName === "pull_request" ? 1 : 0,
-      );
-      expect(base.filter((name) => name === "check-lint-hosted-core-shard")).toHaveLength(
-        eventName === "pull_request" ? 5 : 0,
-      );
-      expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
-        runnerProfile === "hybrid" ? 6 : 0,
-      );
-    });
+    ])(
+      "counts all selected rows for $label",
+      ({ eventName, runnerProfile, headRepository, hostedNodeRows }) => {
+        const manifest = manifestWithHostedNodeRows(hostedNodeRows, {
+          eventName,
+          runnerProfile,
+          ...(hostedNodeRows > 0 ? { nodeRunnerBackend: "github-pr" as const } : {}),
+          changedPaths: ["apps/ios/Sources/Foo.swift"],
+          scopeEnv: {
+            OPENCLAW_CI_HEAD_REPOSITORY: headRepository,
+            OPENCLAW_CI_RUN_MACOS_NODE: "true",
+            OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true",
+          },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(manifest.outputs.hybrid_hosted_offload).toBe(String(hostedNodeRows === 0));
+        const context = { eventName, runnerProfile, headRepository };
+        const outputs = { ...manifest.outputs, run_ios_screenshots: "true" };
+        const base = emittedHostedRows({ ...outputs, hybrid_hosted_offload: "false" }, context);
+        expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(base.length);
+        expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(
+          emittedHostedRows(outputs, context).length,
+        );
+        expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
+        expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
+        expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
+        expect(base.filter((name) => name === "checks-ui")).toHaveLength(
+          eventName === "pull_request" ? 3 : 0,
+        );
+        if (hostedNodeRows > 0) {
+          expect(base.length).toBeGreaterThan(300);
+          expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(base.length);
+        }
+        expect(base.filter((name) => name === "ci-gate")).toHaveLength(
+          eventName === "pull_request" ? 1 : 0,
+        );
+        expect(base.filter((name) => name === "check-lint-hosted-core-shard")).toHaveLength(
+          eventName === "pull_request" ? 5 : 0,
+        );
+        expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
+          runnerProfile === "hybrid" ? 6 : 0,
+        );
+      },
+    );
 
     it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
       { label: "retry", scopeEnv: { GITHUB_RUN_ATTEMPT: "2" } },
