@@ -328,7 +328,6 @@ it("clears the previous display name when the selected session is unnamed", asyn
     );
     await fixture.run.waitForOutput("Production incident", STARTUP_TIMEOUT_MS);
 
-    const targetOutputOffset = fixture.run.visibleOutput().length;
     await fixture.run.write("/session agent:main:mode-target\r", { delay: false });
     await fixture.waitForLogEntry(
       (entry) =>
@@ -336,11 +335,14 @@ it("clears the previous display name when the selected session is unnamed", asyn
         objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
       STARTUP_TIMEOUT_MS,
     );
-    await fixture.run.waitForOutput("session mode-target", STARTUP_TIMEOUT_MS);
-
-    expect(fixture.run.visibleOutput().slice(targetOutputOffset)).not.toContain(
-      "Production incident",
+    const rows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) =>
+        frame.some((row) => row.trim() === "session agent:main:mode-target") &&
+        frame.some((row) => row.includes("| session mode-target") && row.includes("fixture-model")),
+      STARTUP_TIMEOUT_MS,
     );
+    expect(rows.join("\n")).not.toContain("Production incident");
   } finally {
     await fixture.cleanup();
   }
