@@ -2,6 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -33,6 +34,7 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -106,6 +108,7 @@ beforeEach(async () => {
   });
 });
 afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -172,6 +175,7 @@ async function scenario(
     | "link-changed"
     | "transient-read"
     | "cleanup-read"
+    | "cleanup-deadline"
     | "verified-report-read"
     | "unverified-completion"
     | "rollback-refused",
@@ -267,6 +271,27 @@ async function scenario(
     swap = { ...fixture, result, transaction };
   } else {
     swap = await createRetainedPackageSwap(base);
+  }
+  const cleanup =
+    kind === "cleanup-deadline"
+      ? {
+          entered: createDeferredCore(),
+          release: createDeferredCore(),
+          clock: vi.spyOn(performance, "now").mockReturnValue(0),
+        }
+      : undefined;
+  if (cleanup) {
+    __setFsSafeTestHooksForTest({
+      async beforeRootFallbackMutation(operation, target) {
+        if (
+          operation === "remove" &&
+          target === path.join(swap.transaction.backupRoot, "package.json")
+        ) {
+          cleanup.entered.resolve();
+          await cleanup.release.promise;
+        }
+      },
+    });
   }
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
@@ -534,25 +559,33 @@ async function scenario(
       }
     });
   try {
-    if (deferred) {
-      await withUpdateCommandTerminalResult(
-        (registerRun) => {
-          registerRun(run);
-          return execute();
-        },
-        {
-          onResult: (result) => {
-            observedResults.push(result);
-            observationLeases.push(createManagedHandoffLeaseStore().read(swap.packageRoot).kind);
+    const pending = deferred
+      ? withUpdateCommandTerminalResult(
+          (registerRun) => {
+            registerRun(run);
+            return execute();
           },
-        },
-      );
-    } else {
-      await execute();
+          {
+            onResult: (result) => {
+              observedResults.push(result);
+              observationLeases.push(createManagedHandoffLeaseStore().read(swap.packageRoot).kind);
+            },
+          },
+        )
+      : execute();
+    if (cleanup) {
+      await cleanup.entered.promise;
+      cleanup.clock.mockReturnValue(300_001);
+      await Promise.resolve();
+      expect(jsonOutput).toEqual([]);
+      expect(createManagedHandoffLeaseStore().read(swap.packageRoot).kind).toBe("current");
+      cleanup.release.resolve();
     }
+    await pending;
   } catch (error) {
     failure = error;
   } finally {
+    cleanup?.release.resolve();
     reportSnapshotFailure?.mockRestore();
   }
   if (kind === "foreign-revoked" && failure instanceof UpdateCommandPendingRecoveryFailure) {
@@ -698,11 +731,26 @@ describe("composed cleanup and terminal outcome", () => {
     },
   );
 
-  it.each([true, false])(
-    "reports actual retained backup after verified activation (json=%s)",
-    async (json) => {
-      const value = await scenario("renamed", json);
-      expect(value.injected).toBe(true);
+  it.each([
+    ["renamed", true],
+    ["renamed", false],
+    ["cleanup-deadline", true],
+  ] as const)(
+    "reports actual retained backup after verified activation (%s, json=%s)",
+    async (kind, json) => {
+      const value = await scenario(kind, json, kind === "cleanup-deadline");
+      if (kind === "cleanup-deadline") {
+        expect(value.repeatedCompletion).toMatchObject({
+          durationMs: 300_001,
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        });
+        expect(value.report).toContain("cleanup budget expired");
+        expect(
+          await fs.readFile(path.join(value.expectedRetained, "package.json"), "utf8"),
+        ).toContain('"version":"1.0.0"');
+      } else {
+        expect(value.injected).toBe(true);
+      }
       expect(value.package.version).toBe("2.0.0");
       expect(value.launcher).toBe("candidate launcher\n");
       expect(value.exitCode).toBe(0);
