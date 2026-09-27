@@ -452,6 +452,11 @@ it("captures managed native packages that share a companion dependency", async (
         dependencies: { "a-library": "1.0.0" },
       }),
       "b-addon/lib/addon.node": "native addon bytes",
+      "c-addon/package.json": JSON.stringify({
+        name: "c-addon",
+        dependencies: { "a-library": "1.0.0" },
+      }),
+      "c-addon/lib/addon.node": "another native addon",
     };
     for (const [name, content] of Object.entries(files)) {
       const filename = path.join(fixture.root, "node_modules", name);
@@ -460,7 +465,11 @@ it("captures managed native packages that share a companion dependency", async (
     }
     const cache = createPluginCache();
     preparePluginNativeAdmissions(fixture.index, cache);
+    const library = path.join(fixture.root, "node_modules/a-library/lib/library.so");
+    const timestamp = new Date("2020-01-01T00:00:00Z");
+    fs.utimesSync(library, timestamp, timestamp);
     let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    let sibling: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
     try {
       artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
       artifact.assertSourceCurrent();
@@ -469,12 +478,16 @@ it("captures managed native packages that share a companion dependency", async (
       expect(fs.readFileSync(require.resolve("a-library/lib/library.so"), "utf8")).toBe(
         "native library bytes",
       );
-      fs.writeFileSync(
-        path.join(fixture.root, "node_modules/a-library/lib/helper.cjs"),
-        "module.exports = 'modified!';",
-      );
+      fs.writeFileSync(library, "edited library bytes");
+      fs.utimesSync(library, timestamp, timestamp);
+      expect(() => {
+        sibling = withPluginCache(cache, () =>
+          capturePluginGenerationArtifact(path.join(fixture.root, "node_modules/c-addon")),
+        );
+      }).toThrow("Native plugin companion changed during admission");
       expect(artifact.assertSourceCurrent).toThrow("Plugin source changed");
     } finally {
+      await sibling?.disposeAsync();
       await artifact?.disposeAsync();
       await retirePluginCache(cache);
     }

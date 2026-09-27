@@ -242,10 +242,24 @@ export function createPluginNativeAdmission(
     });
     // Overlapping managed namespaces share inodes; a new hardlink changes earlier captures too.
     for (const namespace of state.namespaces.values()) {
-      for (const member of Object.values(namespace.members)) {
+      for (const [relative, member] of Object.entries(namespace.members)) {
         const identity = changed.get(member.source);
-        if (!identity) {
+        if (
+          !identity ||
+          (!pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity) &&
+            !pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity))
+        ) {
           continue;
+        }
+        if (
+          namespace !== previous &&
+          member.contentHash &&
+          hashPluginSourceFile(
+            pluginNativeNamespaceMemberPath(namespace, relative),
+            pluginNativeNamespaceBoundary(namespace),
+          ).contentHash !== member.contentHash
+        ) {
+          throw new Error("Native plugin companion changed during admission");
         }
         if (pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity)) {
           member.sourceIdentity = identity;
