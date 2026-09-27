@@ -8,6 +8,7 @@ import { startScheduledTask } from "./schtasks.js";
 
 const native = vi.hoisted(() => ({
   enabled: false,
+  enabledAvailable: true,
   running: false,
   scriptPath: "",
   taskName: "OpenClaw Gateway",
@@ -49,7 +50,7 @@ vi.mock("node:child_process", async (original) => ({
     status: 0,
     stdout: JSON.stringify({
       taskPath: `\\${native.taskName}`,
-      enabled: native.enabled,
+      ...(native.enabledAvailable ? { enabled: native.enabled } : {}),
       state: native.running ? 4 : native.enabled ? 3 : 1,
       actions: [{ type: 0, path: native.scriptPath, arguments: "", workingDirectory: "" }],
     }),
@@ -86,6 +87,7 @@ vi.mock("./schtasks-runtime.js", async (original) => ({
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   native.enabled = false;
+  native.enabledAvailable = true;
   native.running = false;
   native.calls.length = 0;
   native.files.clear();
@@ -142,6 +144,24 @@ it("does not enable a captured service whose auto-start policy must be preserved
   expect(native.running).toBe(false);
   expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
 });
+
+it.each([true, false])(
+  "preserves native Run with missing policy metadata (enabled=%s)",
+  async (enabled) => {
+    const { env } = await fixture();
+    native.enabled = enabled;
+    native.enabledAvailable = false;
+    const start = startScheduledTask({ env, stdout: new PassThrough() });
+    if (enabled) {
+      await expect(start).resolves.toBeUndefined();
+      expect(native.running).toBe(true);
+    } else {
+      await expect(start).rejects.toThrow("The scheduled task is disabled.");
+    }
+    expect(native.calls.some((args) => args[0] === "/Run")).toBe(true);
+    expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
+  },
+);
 
 it.each([
   "foreign program",

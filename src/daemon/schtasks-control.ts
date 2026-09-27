@@ -31,7 +31,6 @@ import {
 import {
   assertSchtasksAvailable,
   isRegisteredScheduledTask,
-  isScheduledTaskEnabled,
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
@@ -46,7 +45,11 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import {
+  probeScheduledTaskExists,
+  probeScheduledTaskState,
+  ScheduledTaskInspectionError,
+} from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
 import { writeTaskXmlTempFile } from "./schtasks-xml.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -459,7 +462,15 @@ export async function startScheduledTask({
     );
     return;
   }
-  if (!preserveAutoStart && !(await isScheduledTaskEnabled({ env: effectiveEnv }))) {
+  const taskName = resolveTaskName(effectiveEnv);
+  const policy = preserveAutoStart ? null : probeScheduledTaskState(taskName);
+  if (policy?.status === "unknown") {
+    throw new ScheduledTaskInspectionError(policy);
+  }
+  if (policy?.status === "missing") {
+    throw new Error("Selected Scheduled Task registration is unavailable.");
+  }
+  if (policy?.status === "found" && policy.enabled === false) {
     const serviceKind = shouldManageGatewayListenerPort(effectiveEnv) ? "gateway" : "node";
     const readSelectedCommand = async () => {
       const paths: string[] = [];
@@ -530,7 +541,6 @@ export async function startScheduledTask({
     reportMutation("enable");
     await assertSelected();
   }
-  const taskName = resolveTaskName(effectiveEnv);
   await runScheduledTaskOrThrow({
     taskName,
     assertCurrent,
