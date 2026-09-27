@@ -1,10 +1,20 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { defaultSkillUploadStore } from "../skills/lifecycle/upload-store.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createGatewayMethodRegistry, type GatewayMethodRegistry } from "./methods/registry.js";
+import { skillsUploadHandlers } from "./server-methods/skills-upload.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 type ToolPolicySuite = {
@@ -21,6 +31,7 @@ export function registerToolsInvokeUploadTests({
   getConfig,
   setConfig,
   getPort,
+  setMethodRegistry,
   hookMocks,
   postToolsInvoke,
   gatewayAdminHeaders,
@@ -30,6 +41,7 @@ export function registerToolsInvokeUploadTests({
   expectOkInvokeResponse,
 }: ToolPolicySuite & {
   getPort: () => number;
+  setMethodRegistry: (registry: GatewayMethodRegistry) => void;
   hookMocks: {
     uploadToolExecute: Mock<AnyAgentTool["execute"]>;
     runBeforeToolCallHook: Mock<typeof runBeforeToolCallHook>;
@@ -51,6 +63,85 @@ export function registerToolsInvokeUploadTests({
   setMainAllowedTools: (params: { allow: string[] }) => void;
   expectOkInvokeResponse: (res: Response) => Promise<unknown>;
 }): void {
+  it.each([false, true])(
+    "carries HTTP input policy into nested archive storage (disabled=%s)",
+    async (disabled) => {
+      setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
+      getConfig().gateway = { uploads: { enabled: true } };
+      getConfig().skills = { install: { allowUploadedArchives: true } };
+      setMethodRegistry(
+        createGatewayMethodRegistry([
+          {
+            name: "skills.upload.begin",
+            handler: expectDefined(skillsUploadHandlers["skills.upload.begin"], "upload begin"),
+            scope: "operator.admin",
+            owner: { kind: "core", area: "skills" },
+            profileAccess: "independent",
+          },
+        ]),
+      );
+      let reachedStorage = false;
+      let invocationError: unknown;
+      const begin = defaultSkillUploadStore.begin.bind(defaultSkillUploadStore);
+      using beginning = vi
+        .spyOn(defaultSkillUploadStore, "begin")
+        .mockImplementation(async (...args) => {
+          await Promise.resolve();
+          reachedStorage = true;
+          getConfig().gateway = { uploads: { enabled: !disabled } };
+          return begin(...args);
+        });
+      const { db } = openOpenClawStateDatabase();
+      const rows = () => db.prepare("SELECT upload_id FROM skill_uploads ORDER BY upload_id").all();
+      const before = rows();
+      hookMocks.uploadToolExecute.mockImplementationOnce(async (_callId, args) => {
+        try {
+          const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "operator scope");
+          const context = expectDefined(
+            scope.resolveGatewayContext?.() ?? scope.context,
+            "Gateway context",
+          );
+          context.getRuntimeConfig = () => getConfig();
+          context.getCommittedRuntimeConfig = () => getConfig();
+          if (isRecord(args)) {
+            delete args.contentBase64;
+          }
+          await dispatchGatewayMethodInProcess("skills.upload.begin", {
+            kind: "skill-archive",
+            slug: "nested-policy",
+            sizeBytes: 5,
+          });
+          return { content: [], details: {} };
+        } catch (error) {
+          invocationError = error;
+          throw error;
+        }
+      });
+      const response = await postToolsInvoke({
+        port: getPort(),
+        headers: gatewayAdminHeaders(),
+        body: { tool: "file_write", args: { contentBase64: "cHJvb2Y=" } },
+      });
+      const body: unknown = await response.json();
+      expect(
+        reachedStorage,
+        invocationError instanceof Error ? invocationError.message : JSON.stringify(body),
+      ).toBe(true);
+      expect(beginning).toHaveBeenCalledOnce();
+      if (disabled) {
+        expect.soft(response.status).toBe(403);
+        expect.soft(body).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining("gateway.uploads.enabled") },
+        });
+        expect(rows()).toEqual(before);
+      } else {
+        expect(response.status).toBe(200);
+        expect(body).toMatchObject({ ok: true });
+        expect(rows()).toHaveLength(before.length + 1);
+      }
+    },
+  );
   it.each([
     { tool: "file_write", args: { contentBase64: "cHJvb2Y=" } },
     { tool: "file_write", args: { contentBase64: "" } },
@@ -145,6 +236,75 @@ export function registerToolsInvokeUploadTests({
     });
     expect(hookMocks.uploadToolExecute).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { hookAddsBytes: false, disabled: true },
+    { hookAddsBytes: true, disabled: true },
+    { hookAddsBytes: false, disabled: false },
+  ])(
+    "retains upload policy through nested dispatch (hook=$hookAddsBytes, disabled=$disabled)",
+    async ({ hookAddsBytes, disabled }) => {
+      setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
+      getConfig().gateway = { uploads: { enabled: true } };
+      const nodeDispatch = vi.fn<GatewayRequestHandler>(({ respond }) => {
+        respond(true, { payload: { ok: true } });
+      });
+      setMethodRegistry(
+        createGatewayMethodRegistry([
+          {
+            name: "node.invoke",
+            handler: nodeDispatch,
+            scope: "operator.admin",
+            owner: { kind: "core", area: "upload-policy-test" },
+            profileAccess: "independent",
+          },
+        ]),
+      );
+      if (hookAddsBytes) {
+        hookMocks.runBeforeToolCallHook.mockImplementationOnce(async (input) => {
+          if (!isRecord(input.params)) {
+            throw new Error("Expected file-write hook arguments");
+          }
+          return { blocked: false, params: { ...input.params, contentBase64: "cHJvb2Y=" } };
+        });
+      }
+      hookMocks.uploadToolExecute.mockImplementationOnce(async (_callId, args) => {
+        // Model file-tool preparation yielding before its nested Gateway node request.
+        await Promise.resolve();
+        if (isRecord(args)) {
+          delete args.contentBase64;
+        }
+        getConfig().gateway = { uploads: { enabled: !disabled } };
+        await dispatchGatewayMethodInProcess("node.invoke", {
+          nodeId: "upload-policy-node",
+          command: "file.write",
+          params: { path: "proof.txt", contentBase64: "cHJvb2Y=" },
+          idempotencyKey: "late-upload-policy",
+        });
+        return { content: [], details: {} };
+      });
+      const res = await postToolsInvoke({
+        port: getPort(),
+        headers: gatewayAdminHeaders(),
+        body: {
+          tool: "file_write",
+          args: hookAddsBytes ? {} : { contentBase64: "cHJvb2Y=" },
+        },
+      });
+      if (disabled) {
+        expect.soft(res.status).toBe(403);
+        expect.soft(await res.json()).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining("gateway.uploads.enabled") },
+        });
+        expect.soft(nodeDispatch).not.toHaveBeenCalled();
+      } else {
+        await expectOkInvokeResponse(res);
+        expect(nodeDispatch).toHaveBeenCalledOnce();
+      }
+      expect(hookMocks.uploadToolExecute).toHaveBeenCalledOnce();
+    },
+  );
 
   it("preserves host-attested synthetic RPC tool execution", async () => {
     setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });

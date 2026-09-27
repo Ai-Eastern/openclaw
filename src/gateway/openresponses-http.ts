@@ -92,7 +92,11 @@ import {
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
-import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import {
+  createAssistantOutputItem,
+  createFunctionCallOutputItem,
+  createResponseResource,
+} from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 
 // In-memory map from responseId -> sessionKey for previous_response_id continuity.
@@ -254,30 +258,6 @@ function createEmptyUsage(): Usage {
 
 function extractUsageFromResult(result: unknown): Usage {
   return toOpenAiResponsesUsage(resolveAgentRunUsage(result));
-}
-
-function createResponseResource(params: {
-  id: string;
-  createdAt: number;
-  model: string;
-  status: ResponseResource["status"];
-  output: OutputItem[];
-  usage?: Usage;
-  error?: { code: string; message: string };
-}): ResponseResource {
-  return {
-    id: params.id,
-    object: "response",
-    created_at: params.createdAt,
-    status: params.status,
-    model: params.model,
-    output: params.output,
-    usage: params.usage ?? createEmptyUsage(),
-    error: params.error,
-    ...(params.status === "incomplete"
-      ? { incomplete_details: { reason: "max_output_tokens" as const } }
-      : {}),
-  };
 }
 
 export async function handleOpenResponsesHttpRequest(
@@ -592,6 +572,7 @@ export async function handleOpenResponsesHttpRequest(
       resolveGatewayContext: opts.resolveGatewayContext,
       abortSignal: abortController.signal,
       hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
+      hasClientUploads: hasMedia,
     });
 
   if (!stream) {

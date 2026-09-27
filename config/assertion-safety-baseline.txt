@@ -2390,7 +2390,6 @@ src/gateway/node-command-policy.ts	2
 src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry.ts	2
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-scopes.ts	1
 src/gateway/plugin-activation-runtime-config.ts	2

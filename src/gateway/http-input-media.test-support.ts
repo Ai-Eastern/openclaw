@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as inputFiles from "../media/input-files.js";
@@ -101,6 +102,26 @@ export function registerOpenAiHttpUploadTests({
       } finally {
         extraction.mockRestore();
       }
+    });
+
+    it("rejects a hot disable during command input admission", async () => {
+      publishUploads(true);
+      agentCommandMock.mockImplementationOnce(async (options) => {
+        if (!isRecord(options) || typeof options.assertSourceCurrent !== "function") {
+          throw new Error("Expected the HTTP command input admission guard");
+        }
+        publishUploads(false);
+        await options.assertSourceCurrent();
+        return { payloads: [], meta: { durationMs: 0 } };
+      });
+      const res = await postChatCompletions(getPort(), {
+        model: "openclaw",
+        messages: [{ role: "user", content: [imagePart] }],
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { message: "File and image uploads are disabled by gateway.uploads.enabled" },
+      });
     });
 
     it("rejects historical image content instead of accepting an attachment bypass", async () => {
@@ -264,6 +285,26 @@ export function registerOpenResponsesHttpUploadTests({
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ error: { code: "UPLOADS_DISABLED" } });
       expect(agentCommandMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a hot disable during command input admission", async () => {
+      publishUploads(true);
+      agentCommandMock.mockImplementationOnce(async (options) => {
+        if (!isRecord(options) || typeof options.assertSourceCurrent !== "function") {
+          throw new Error("Expected the HTTP command input admission guard");
+        }
+        publishUploads(false);
+        await options.assertSourceCurrent();
+        return { payloads: [], meta: { durationMs: 0 } };
+      });
+      const res = await postResponses(getPort(), {
+        model: "openclaw",
+        input: [{ type: "message", role: "user", content: [filePart] }],
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { message: "File and image uploads are disabled by gateway.uploads.enabled" },
+      });
     });
 
     it("allows text-only requests and generated media when uploads are disabled", async () => {

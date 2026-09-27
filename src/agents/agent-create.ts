@@ -286,10 +286,11 @@ async function writeIdentityFile(params: {
     }
   }
   const content = mergeIdentityMarkdownContent(existing, params.identity);
-  // Root.write owns the admitted filesystem operation; finish our async reads
-  // before checking authority, without canceling an already-started write.
-  params.beforePersistentApply?.();
-  await workspaceRoot.write(DEFAULT_IDENTITY_FILENAME, content, { encoding: "utf8" });
+  // Root.write rechecks after its own async preparation and before each mutation.
+  await workspaceRoot.write(DEFAULT_IDENTITY_FILENAME, content, {
+    encoding: "utf8",
+    assertBeforeMutation: params.beforePersistentApply,
+  });
 }
 
 export async function createAgent(params: CreateAgentParams): Promise<CreateAgentResult> {

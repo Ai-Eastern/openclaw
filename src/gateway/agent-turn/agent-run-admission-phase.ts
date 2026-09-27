@@ -31,7 +31,6 @@ import {
 import { getFollowupTaskProjection } from "../../tasks/task-followup-projection.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { errorShapeFromError } from "../error-shape.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -44,7 +43,10 @@ import {
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
 import { resolveAgentRunAdmissionModel } from "./agent-run-admission-model.js";
-import { createAgentRunAdmissionRevalidator } from "./agent-run-admission-revalidation.js";
+import {
+  createAgentRunAdmissionRevalidator,
+  resolveAgentRunAdmissionError,
+} from "./agent-run-admission-revalidation.js";
 import type {
   PrepareAgentRunDispatchParams,
   PreparedAgentRunDispatch,
@@ -347,7 +349,7 @@ export async function prepareAgentRunDispatch(
     if (failedAdmission !== true) {
       return failedAdmission;
     }
-    return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
   }
 
   const resolvedThreadId =
@@ -387,7 +389,7 @@ export async function prepareAgentRunDispatch(
       return registrationAdmission;
     }
   } catch (err) {
-    return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
   }
   const { taskTrackingMode, adoptParentResume, followupSuccessor } = taskTracking;
   if (followupSuccessor) {
@@ -489,7 +491,7 @@ export async function prepareAgentRunDispatch(
       params.onUserTurnMediaPersisted();
     }
   } catch (err) {
-    return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
   }
   const inputAdmission = revalidateAdmission();
   if (inputAdmission !== true) {
@@ -560,7 +562,7 @@ export async function prepareAgentRunDispatch(
       dispatchTaskTrackingMode = registeredFollowupTask;
     } catch (error) {
       const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
-      return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, failure));
+      return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
     }
   }
   try {
@@ -574,7 +576,7 @@ export async function prepareAgentRunDispatch(
     capturedOperator.authority?.assertCurrent();
   } catch (error) {
     const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
-    return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, failure));
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
   }
   try {
     try {
@@ -594,7 +596,7 @@ export async function prepareAgentRunDispatch(
       }
     } catch (error) {
       const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
-      return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, failure));
+      return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
     }
     if (adoptParentResume) {
       try {
@@ -604,7 +606,7 @@ export async function prepareAgentRunDispatch(
         resumedTaskAdopted = true;
       } catch (err) {
         const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, err);
-        return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, failure));
+        return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
       }
     }
     if (registeredFollowupTask?.kind === "receipt") {

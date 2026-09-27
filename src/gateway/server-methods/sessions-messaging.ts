@@ -18,6 +18,7 @@ import {
   loadGatewaySessionEntryReadOnly,
   resolveDeletedAgentIdFromSessionKey,
 } from "../session-utils.js";
+import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
@@ -104,6 +105,16 @@ async function handleSessionSend(
 ) {
   const queueMode = method === "sessions.steer" ? "interrupt" : undefined;
   if (!assertValidParams(options.params, validateSessionsSendParams, method, options.respond)) {
+    return;
+  }
+  const uploadError = gatewayClientUploadPolicyError({
+    method: "sessions.send",
+    requestParams: options.params,
+    client: options.client,
+    context: options.context,
+  });
+  if (uploadError) {
+    options.respond(false, undefined, uploadError);
     return;
   }
   const p = options.params;

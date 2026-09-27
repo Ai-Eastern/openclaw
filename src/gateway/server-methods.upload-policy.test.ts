@@ -6,6 +6,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
 
 const attachment = { type: "image", mimeType: "image/png", content: "cGljdHVyZQ==" };
 const uploads: Array<[string, Record<string, unknown>]> = [
@@ -93,6 +94,24 @@ function expectDisabled(respond: ReturnType<typeof vi.fn>) {
 }
 
 describe("Gateway upload admission", () => {
+  it("retains client byte classification after hydration replaces its buffer", () => {
+    let enabled = true;
+    const requestParams: Record<string, unknown> = { buffer: "cHJvb2Y=" };
+    const getConfig = () => ({ gateway: { uploads: { enabled } } });
+    const assertCurrent = captureGatewayClientUploadCommitGuard({
+      method: "send",
+      requestParams,
+      client: null,
+      context: { getRuntimeConfig: getConfig, getCommittedRuntimeConfig: getConfig },
+    });
+    expect(assertCurrent).toBeTypeOf("function");
+    assertCurrent?.();
+    delete requestParams.buffer;
+    requestParams.media = "/stored/proof.txt";
+    enabled = false;
+    expect(() => assertCurrent?.()).toThrow("uploads are disabled");
+  });
+
   it.each(uploads)("rejects %s before its upload handler runs", async (method, params) => {
     const test = setup({ gateway: { uploads: { enabled: false } } });
     expectDisabled(await test.dispatch(method, params));

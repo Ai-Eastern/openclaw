@@ -21,7 +21,10 @@ import {
   baseOpenRequest,
   makeFakePty,
 } from "./terminal/session-manager.test-helpers.js";
-import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
+import {
+  createToolsInvokeHttpTestServer,
+  expectOkInvokeResponse,
+} from "./tools-invoke-http.test-support.js";
 import {
   registerToolsInvokeUploadTests,
   registerToolsInvokeErrorTests,
@@ -405,13 +408,6 @@ const invokeToolAuthed = async (params: {
     ...params,
   });
 
-const expectOkInvokeResponse = async (res: Response) => {
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.ok).toBe(true);
-  return body as { ok: boolean; result?: Record<string, unknown> };
-};
-
 const firstHookCallArg = () => {
   const call = hookMocks.runBeforeToolCallHook.mock.calls[0];
   if (!call) {
@@ -489,6 +485,7 @@ describe("POST /tools/invoke", () => {
       cfg = config;
     },
     getPort: () => sharedPort,
+    setMethodRegistry: server.setMethodRegistry,
     hookMocks,
     postToolsInvoke,
     gatewayAdminHeaders,

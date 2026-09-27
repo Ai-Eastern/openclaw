@@ -69,7 +69,12 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  resolveOpenAiCompatError,
+  validateOpenAiSamplingParams,
+  resolveResponseFormat,
+  resolveStopSequences,
+} from "./openai-compat-errors.js";
 import {
   readOpenAiHttpRunTerminal,
   runOpenAiCompatibleAgentCommand,
@@ -499,36 +504,6 @@ function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage
   return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
 
-function resolveResponseFormat(value: unknown): Record<string, unknown> | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("response_format must be an object");
-  }
-  const obj = value as Record<string, unknown>;
-  const type = obj.type;
-  if (type !== "text" && type !== "json_object" && type !== "json_schema") {
-    throw new Error("response_format.type must be text, json_object, or json_schema");
-  }
-  return obj;
-}
-
-function resolveStopSequences(value: OpenAiChatCompletionRequest["stop"]): string[] | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const list = typeof value === "string" ? [value] : value;
-  // OpenAI Chat Completions accepts at most 4 stop sequences.
-  if (list.length > 4) {
-    throw new Error("stop supports at most 4 sequences");
-  }
-  if (list.some((item) => item.length === 0)) {
-    throw new Error("stop entries must be non-empty strings");
-  }
-  return list.length > 0 ? list : undefined;
-}
-
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -767,6 +742,7 @@ export async function handleOpenAiHttpRequest(
       operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,
       hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
+      hasClientUploads: hasMedia,
       streamParams,
       resolveGatewayContext: opts.resolveGatewayContext,
     });

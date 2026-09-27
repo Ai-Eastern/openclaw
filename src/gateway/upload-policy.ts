@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -12,6 +13,26 @@ export const GATEWAY_UPLOADS_DISABLED_MESSAGE =
 /** Client ingress policy, not a restriction on generated media or agent filesystem tools. */
 export function areGatewayUploadsEnabled(config: OpenClawConfig | undefined): boolean {
   return config?.gateway?.uploads?.enabled !== false;
+}
+
+function disabledUploadError() {
+  return errorShape(ErrorCodes.FORBIDDEN, GATEWAY_UPLOADS_DISABLED_MESSAGE, {
+    details: { code: GATEWAY_UPLOADS_DISABLED_CODE },
+  });
+}
+
+/** Pure policy guard suitable for native write admission; it performs no database reads. */
+export function assertGatewayUploadsEnabled(config: OpenClawConfig | undefined): void {
+  if (!areGatewayUploadsEnabled(config)) {
+    throw new SessionMutationAuthorizationChangedError(disabledUploadError());
+  }
+}
+
+function isNodeUploadRequest(command: string, params: unknown): boolean {
+  if (command === "terminal.upload" || command === "browser.proxy.upload.v1") {
+    return true;
+  }
+  return command === "file.write" && isRecord(params) && typeof params.contentBase64 === "string";
 }
 
 function hasAttachments(params: Record<string, unknown>): boolean {
@@ -51,6 +72,10 @@ export function isGatewayUploadRequest(method: string, params: unknown): boolean
     case "sessions.send":
     case "sessions.companion.ask":
       return hasAttachments(params);
+    case "node.invoke":
+      return (
+        typeof params.command === "string" && isNodeUploadRequest(params.command, params.params)
+      );
     case "skills.install":
       return params.source === "upload";
     case "skills.library.save":
@@ -71,37 +96,52 @@ export function isGatewayUploadRequest(method: string, params: unknown): boolean
   }
 }
 
-/** Trusted in-process media delivery is not client ingress; wire params cannot grant this. */
-export function gatewayClientUploadPolicyError(params: {
+type GatewayClientUploadPolicyRequest = {
   method: string;
   requestParams: unknown;
   client: GatewayClient | null;
   context: Pick<GatewayRequestContext, "getCommittedRuntimeConfig" | "getRuntimeConfig">;
-}) {
-  if (
-    params.client?.internal?.syntheticClient ||
-    params.client?.internal?.agentRuntimeIdentity ||
-    !isGatewayUploadRequest(params.method, params.requestParams)
-  ) {
+};
+
+/** Trusted in-process media delivery is not client ingress; wire params cannot grant this. */
+export function gatewayClientUploadPolicyError(params: GatewayClientUploadPolicyRequest) {
+  if (!isGatewayUploadRequest(params.method, params.requestParams)) {
+    return null;
+  }
+  try {
+    readOperatorToolGatewayAuthority()?.assertInputCommitAllowed?.();
+  } catch (error) {
+    if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+      throw error;
+    }
+    return error.error;
+  }
+  return currentClientUploadPolicyError(params);
+}
+
+function currentClientUploadPolicyError(
+  params: Pick<GatewayClientUploadPolicyRequest, "client" | "context">,
+) {
+  if (params.client?.internal?.syntheticClient || params.client?.internal?.agentRuntimeIdentity) {
     return null;
   }
   const config = (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)();
-  return areGatewayUploadsEnabled(config)
-    ? null
-    : errorShape(ErrorCodes.FORBIDDEN, GATEWAY_UPLOADS_DISABLED_MESSAGE, {
-        details: { code: GATEWAY_UPLOADS_DISABLED_CODE },
-      });
+  return areGatewayUploadsEnabled(config) ? null : disabledUploadError();
 }
 
 /** Carry only client-upload policy into worker commits, never opaque SDK guards that may read SQL. */
 export function captureGatewayClientUploadCommitGuard(
   params: Parameters<typeof gatewayClientUploadPolicyError>[0],
 ): (() => void) | undefined {
-  if (!isGatewayUploadRequest(params.method, params.requestParams)) {
+  const hasUploads = isGatewayUploadRequest(params.method, params.requestParams);
+  const assertInheritedInput = readOperatorToolGatewayAuthority()?.assertInputCommitAllowed;
+  if (!hasUploads && !assertInheritedInput) {
     return undefined;
   }
+  // Hydration replaces client buffers with stored paths; that cannot erase the original admission.
   return () => {
-    const error = gatewayClientUploadPolicyError(params);
+    assertInheritedInput?.();
+    const error = hasUploads ? currentClientUploadPolicyError(params) : null;
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }

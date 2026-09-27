@@ -1,14 +1,20 @@
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import type { GatewayRequestContext } from "./types.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 /** Caller and physical target custody end together when admitted work settles. */
 export function releaseChatSendCallerAuthority(params: {
@@ -105,4 +111,77 @@ export function assertChatSendExclusiveAdmission(
         : "goal-session-busy",
     );
   }
+}
+
+/** Goal and initial-session policy are revalidated in the same input writer barrier. */
+export function createChatSendGoalCommitGuard(
+  params: Pick<
+    GatewayRequestHandlerOptions,
+    "client" | "context" | "sessionMutationAuthorization" | "sessionMutationCommitGuard"
+  > & {
+    admission: Pick<
+      AdmittedChatSend,
+      | "initialSessionEntry"
+      | "assertInitialSkillSelection"
+      | "activeRunAbort"
+      | "lifecycleGeneration"
+    >;
+    session: Pick<
+      PreparedChatSendSession,
+      | "agentId"
+      | "sessionLoadKey"
+      | "sessionLoadOptions"
+      | "sessionKey"
+      | "storePath"
+      | "sessionRoutingChanged"
+    >;
+  },
+): () => void {
+  const {
+    admission,
+    session,
+    client,
+    context,
+    sessionMutationAuthorization,
+    sessionMutationCommitGuard,
+  } = params;
+  return () => {
+    sessionMutationCommitGuard?.();
+    sessionMutationAuthorization?.assertCurrent();
+    const currentConfig = context.getRuntimeConfig();
+    const initialEntry = admission.initialSessionEntry;
+    if (initialEntry) {
+      admission.assertInitialSkillSelection?.();
+      // Missing targets have no sharing owner yet; revalidate their creator before SQL commit.
+      const currentTarget = loadSessionEntry(session.sessionLoadKey, session.sessionLoadOptions);
+      if (
+        currentTarget.storePath !== session.storePath ||
+        currentTarget.canonicalKey !== session.sessionKey
+      ) {
+        throw new Error("Session routing changed before Goal admission; refresh and retry.");
+      }
+      const creationError = authorizeGatewaySessionCreation({
+        cfg: currentConfig,
+        client,
+        agentId: session.agentId,
+      });
+      if (creationError) {
+        throw new SessionMutationAuthorizationChangedError(creationError);
+      }
+      const creation = resolveOperatorSessionCreation(client);
+      if (
+        creation.actor?.id !== initialEntry.createdActor?.id ||
+        resolveCreatorSandbox(currentConfig, creation) !== initialEntry.sandbox
+      ) {
+        throw new Error("Session creation policy changed before Goal admission; retry.");
+      }
+    }
+    if (
+      admission.activeRunAbort.controller.signal.aborted ||
+      admission.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+      session.sessionRoutingChanged(currentConfig)
+    ) {
+      throw new Error("Goal admission changed before commit; refresh and retry.");
+    }
+  };
 }

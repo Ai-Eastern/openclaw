@@ -34,6 +34,7 @@ import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -683,6 +684,12 @@ export async function admitChatSend(
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
+      assertClientUploadAllowed: captureGatewayClientUploadCommitGuard({
+        method: "chat.send",
+        requestParams: p,
+        client,
+        context,
+      }),
       assertWorkAdmissionCurrent: () => {
         const queued = context.chatQueuedTurns.get(clientRunId);
         // Collect retires source cancellation while retaining the original

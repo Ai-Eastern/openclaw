@@ -20,9 +20,9 @@ import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.j
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
 import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { isNodeUploadRequest } from "../tool-upload-policy.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
-  areGatewayUploadsEnabled,
+  captureGatewayClientUploadCommitGuard,
   GATEWAY_UPLOADS_DISABLED_CODE,
   GATEWAY_UPLOADS_DISABLED_MESSAGE,
 } from "../upload-policy.js";
@@ -61,11 +61,23 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
     const sessionKey = normalizeOptionalString(p.sessionKey);
-    const isUploadAllowed = () =>
-      client?.internal?.syntheticClient === true ||
-      client?.internal?.agentRuntimeIdentity !== undefined ||
-      !isNodeUploadRequest(command, p.params) ||
-      areGatewayUploadsEnabled(context.getRuntimeConfig());
+    const assertUploadAllowed = captureGatewayClientUploadCommitGuard({
+      method: "node.invoke",
+      requestParams: p,
+      client,
+      context,
+    });
+    const isUploadAllowed = () => {
+      try {
+        assertUploadAllowed?.();
+        return true;
+      } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          return false;
+        }
+        throw error;
+      }
+    };
     const rejectDisabledUpload = () => {
       if (isUploadAllowed()) {
         return false;

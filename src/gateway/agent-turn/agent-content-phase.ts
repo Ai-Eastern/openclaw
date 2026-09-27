@@ -35,6 +35,7 @@ import {
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   loadSessionEntry,
@@ -51,6 +52,7 @@ type ExplicitRecipientSession = Awaited<
 >;
 
 export async function prepareAgentContentPhase(params: {
+  assertCurrent?: () => void;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   context: AgentTurnContext;
@@ -222,6 +224,7 @@ export async function prepareAgentContentPhase(params: {
         log: params.context.logGateway,
         supportsInlineImages,
         acceptNonImage: false,
+        assertCurrent: params.assertCurrent,
       });
       message = parsed.message.trim();
       images = parsed.images;
@@ -233,10 +236,14 @@ export async function prepareAgentContentPhase(params: {
       params.respond(
         false,
         undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
+        err instanceof SessionMutationAuthorizationChangedError
+          ? err.error
+          : errorShape(
+              err instanceof MediaOffloadError
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
       );
       return undefined;
     }

@@ -4,6 +4,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
@@ -12,11 +14,7 @@ import {
   AUTOMATIONS_TOOL_NAME,
   isAutomationsToolName,
 } from "../agents/tools/automations-tool-name.js";
-import {
-  ToolAuthorizationError,
-  ToolInputError,
-  type AnyAgentTool,
-} from "../agents/tools/common.js";
+import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -39,6 +37,7 @@ import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 import {
@@ -49,7 +48,11 @@ import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 import { isToolUploadRequest } from "./tool-upload-policy.js";
-import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
+import {
+  areGatewayUploadsEnabled,
+  assertGatewayUploadsEnabled,
+  GATEWAY_UPLOADS_DISABLED_MESSAGE,
+} from "./upload-policy.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -150,6 +153,12 @@ function mergeActionIntoArgsIfSupported(params: {
 }
 
 function resolveToolInputErrorStatus(err: unknown): number | null {
+  if (err instanceof SessionMutationAuthorizationChangedError) {
+    return 403;
+  }
+  if (err instanceof GatewayClientRequestError && err.code === ErrorCodes.FORBIDDEN) {
+    return 403;
+  }
   if (err instanceof ToolInputError) {
     const status = err.status;
     return typeof status === "number" ? status : 400;
@@ -201,6 +210,13 @@ type InvokeGatewayToolParams = {
 async function invokeGatewayToolWithSignal(
   params: InvokeGatewayToolParams & { signal: AbortSignal },
 ): Promise<ToolsInvokeOutcome> {
+  let hasClientUploads = false;
+  const assertInputCommitAllowed = () => {
+    params.signal.throwIfAborted();
+    if (hasClientUploads) {
+      assertGatewayUploadsEnabled(getRuntimeConfig());
+    }
+  };
   const assertInvocationCurrent = () => {
     params.signal.throwIfAborted();
     params.assertInvocationCurrent?.();
@@ -254,11 +270,8 @@ async function invokeGatewayToolWithSignal(
     params.toolCallIdPrefix === "rpc" &&
     (sourceClient?.internal?.syntheticClient === true ||
       sourceClient?.internal?.agentRuntimeIdentity !== undefined);
-  if (
-    !internalRpc &&
-    !areGatewayUploadsEnabled(params.cfg) &&
-    isToolUploadRequest(toolName, args)
-  ) {
+  hasClientUploads = !internalRpc && isToolUploadRequest(toolName, args);
+  if (hasClientUploads && !areGatewayUploadsEnabled(params.cfg)) {
     return failure(403, "tool_call_blocked", GATEWAY_UPLOADS_DISABLED_MESSAGE);
   }
   const sessionTarget = resolveSessionTarget({ cfg: params.cfg, input: params.input });
@@ -357,6 +370,7 @@ async function invokeGatewayToolWithSignal(
       allowMediaInvokeCommands: true,
       surface: "http",
       assertInvocationCurrent,
+      assertInputCommitAllowed,
       disablePluginTools,
       gatewayRequestedTools,
     });
@@ -408,22 +422,19 @@ async function invokeGatewayToolWithSignal(
         requiresApproval: hookResult.deniedReason === "plugin-approval",
       });
     }
+    // Keep byte custody even when hooks or hydration replace buffers with stored paths.
+    hasClientUploads ||= !internalRpc && isToolUploadRequest(toolName, hookResult.params);
     const result = await withOperatorToolGatewayAuthority(
       {
         authenticatedUserProfile,
         operatorRoleActor: params.operatorRoleActor,
         scopes: client.connect.scopes ?? [],
         assertCurrent: assertInvocationCurrent,
+        assertInputCommitAllowed,
       },
       async () => {
         assertInvocationCurrent();
-        if (
-          !internalRpc &&
-          !areGatewayUploadsEnabled(getRuntimeConfig()) &&
-          (isToolUploadRequest(toolName, args) || isToolUploadRequest(toolName, hookResult.params))
-        ) {
-          throw new ToolAuthorizationError(GATEWAY_UPLOADS_DISABLED_MESSAGE);
-        }
+        assertInputCommitAllowed();
         return await tool.execute?.(toolCallId, hookResult.params, params.signal);
       },
     );
