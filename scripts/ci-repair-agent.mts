@@ -42,6 +42,7 @@ type Job = {
 };
 type Result = {
   action: "fix" | "diagnose";
+  patch: string;
   failingTests: string[];
   cause: string;
   classification: "deterministic-break" | "flake" | "infra" | "unknown";
@@ -102,8 +103,17 @@ function choice<T extends string>(value: unknown, choices: readonly T[]): T {
 }
 export function parseResult(value: unknown): Result {
   const data = record(value);
+  const action = choice(data.action, ["fix", "diagnose"]);
+  if (
+    typeof data.patch !== "string" ||
+    Buffer.byteLength(data.patch) > MAX_PATCH ||
+    (action === "diagnose" ? data.patch !== "" : !data.patch.trim())
+  ) {
+    throw new Error("A fix requires patch text; a diagnosis requires an empty patch");
+  }
   return {
-    action: choice(data.action, ["fix", "diagnose"]),
+    action,
+    patch: data.patch,
     failingTests: array(data.failingTests).map(testPath),
     cause: string(data.cause),
     classification: choice(data.classification, [
@@ -888,6 +898,7 @@ function reproduce() {
   if (!context.tests.length || context.tests.length > 8 || incompleteJobs) {
     save("result.json", {
       action: "diagnose",
+      patch: "",
       failingTests: context.tests.map((test) => test.file),
       cause: "No complete, bounded set of failing test files",
       classification: "unknown",
@@ -917,6 +928,44 @@ function reproduce() {
   note(
     `Reproduction: ${context.tests.map((test) => `${test.file}: ${test.reproduction}`).join("; ")}`,
   );
+}
+function recordGuard(verdict: Verdict): Verdict {
+  save("guard.json", verdict);
+  save("guard.log", JSON.stringify(verdict, null, 2));
+  output("passed", String(verdict.passed));
+  note(`Guard ${verdict.passed ? "passed" : `refused: ${verdict.reasons.join("; ")}`}`);
+  return verdict;
+}
+function applyResultPatch() {
+  let result: Result;
+  try {
+    result = parseResult(readJson("result.json"));
+  } catch {
+    recordGuard({
+      passed: false,
+      reasons: ["Invalid structured result or patch"],
+      files: [],
+      changedLines: 0,
+    });
+    return;
+  }
+  const verdict = guardPatch(result.patch, result);
+  if (!verdict.passed) {
+    recordGuard(verdict);
+    return;
+  }
+  save("proposed.patch", result.patch);
+  try {
+    git(["apply", "--check", join(OUT, "proposed.patch")]);
+    git(["apply", join(OUT, "proposed.patch")]);
+  } catch {
+    verdict.passed = false;
+    verdict.reasons.push("Patch does not apply cleanly to the candidate checkout");
+    recordGuard(verdict);
+    return;
+  }
+  note("Patch text guard passed; patch applied to candidate checkout");
+  workingGuard();
 }
 function workingGuard(): Verdict {
   const context = contextData();
@@ -951,11 +1000,7 @@ function workingGuard(): Verdict {
     verdict.reasons.push("Result names uncollected tests");
   }
   verdict.passed = !verdict.reasons.length;
-  save("guard.json", verdict);
-  save("guard.log", JSON.stringify(verdict, null, 2));
-  output("passed", String(verdict.passed));
-  note(`Guard ${verdict.passed ? "passed" : `refused: ${verdict.reasons.join("; ")}`}`);
-  return verdict;
+  return recordGuard(verdict);
 }
 function configureAuthor(cwd = process.cwd()) {
   git(["config", "user.name", "openclaw-ci-repair[bot]"], cwd);
@@ -1227,7 +1272,7 @@ export async function main(args: string[]) {
         reproduce();
         break;
       case "guard":
-        workingGuard();
+        applyResultPatch();
         break;
       case "prepare-repair":
         prepareRepair();

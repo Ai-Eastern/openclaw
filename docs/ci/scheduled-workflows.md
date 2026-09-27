@@ -100,6 +100,15 @@ is included when it can be recovered from logged commands. Native-platform and
 missing-runtime prerequisites can prevent reproduction on the Linux runner;
 those cases do not establish a product regression.
 
+Codex uses a read-only sandbox with `drop-sudo` and reads the controller's
+reproduction logs. Its prompt prohibits editing files, running tests, and any
+command that executes repository code. It returns a structured `patch` string
+containing a git-format unified diff with `a/<path>` and `b/<path>` paths, or an
+empty patch for `diagnose`. The controller guards that text before running
+`git apply --check` and `git apply` with hooks disabled, then guards the resulting
+working tree. Invalid results, rejected patches, and application failures record
+a refusal and cannot produce a PR.
+
 Deterministic guards permit at most four existing regular files and 80 added plus
 removed lines. They reject new, deleted, renamed, or mode-changed files; workflow,
 package, lockfile, snapshot, baseline, ratchet, inventory, generated, changelog,
@@ -147,7 +156,9 @@ Job summaries record skips, diagnoses, rejected guards, proof failures, or the P
 link. Collection and reproduction evidence is uploaded before Codex starts so a
 stalled action or lost runner does not erase the completed baseline. Context,
 structured result, patch, and guard/proof logs are retained as
-Actions artifacts for fourteen days. A timeout, missing evidence, unavailable API,
+Actions artifacts for fourteen days. A final always-run repair step prints the
+largest resident processes and available memory to help diagnose runner hangs.
+A timeout, missing evidence, unavailable API,
 or malformed patch never authorizes publication. A partial publication failure
 is left for maintainer reconciliation; the agent does not overwrite a branch or
 retry an uncertain GitHub write.

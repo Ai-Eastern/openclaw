@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCandidateEnv,
   canonicalFailure,
@@ -6,6 +8,7 @@ import {
   escapeMarkdown,
   guardPatch,
   isInfraOnly,
+  main,
   parseFailures,
   parseResult,
   patchSha256,
@@ -14,11 +17,122 @@ import {
 
 const result = parseResult({
   action: "fix",
+  patch: patch(),
   failingTests: ["src/example.test.ts"],
   cause: "restore fixture cleanup",
   classification: "flake",
   evidence: "The fixture retained shared state between tests.",
   confidence: "high",
+});
+vi.mock("node:child_process", () => ({ execFileSync: vi.fn(), spawnSync: vi.fn() }));
+vi.mock("node:fs", () => ({
+  appendFileSync: vi.fn(),
+  existsSync: vi.fn(),
+  lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false, size: 100 }),
+  mkdirSync: vi.fn(),
+  readFileSync: vi.fn(),
+  writeFileSync: vi.fn(),
+}));
+afterEach(() => {
+  vi.resetAllMocks();
+  vi.unstubAllEnvs();
+});
+
+describe("structured patch result", () => {
+  it("accepts a fix diff and an empty diagnosis", () => {
+    expect(parseResult(result).patch).toBe(patch());
+    expect(parseResult({ ...result, action: "diagnose", patch: "" }).patch).toBe("");
+  });
+  it.each([undefined, null, 123, {}, [], "", " ", "x".repeat(256 * 1024 + 1)])(
+    "rejects invalid fix patch shape (%#)",
+    (value) => expect(() => parseResult({ ...result, patch: value })).toThrow(),
+  );
+  it("rejects a diagnosis carrying a patch", () => {
+    expect(() => parseResult({ ...result, action: "diagnose" })).toThrow();
+  });
+});
+
+describe("controller patch application", () => {
+  function setup(value: unknown = result) {
+    vi.stubEnv("CI_GIT_OWNER", "/synthetic/git-owner.py");
+    vi.stubEnv("GITHUB_OUTPUT", "/synthetic/output");
+    vi.mocked(readFileSync).mockImplementation((path) =>
+      String(path).endsWith("result.json")
+        ? JSON.stringify(value)
+        : JSON.stringify({
+            run: { id: 123, attempt: 1, sha: "a".repeat(40) },
+            tests: [
+              { file: "src/example.test.ts", reproduction: "reproduced", previousFailures: [] },
+            ],
+          }),
+    );
+  }
+  function recordedVerdict() {
+    const saved = vi
+      .mocked(writeFileSync)
+      .mock.calls.find(([path]) => String(path).endsWith("guard.json"));
+    const data = saved?.[1];
+    if (typeof data !== "string") {
+      throw new Error("Missing guard verdict");
+    }
+    return JSON.parse(data);
+  }
+  it.each([
+    { ...result, patch: undefined },
+    { ...result, action: "diagnose", patch: "" },
+    { ...result, patch: patch("baseline.json") },
+    { ...result, patch: "not a diff" },
+  ])("records rejected output without invoking Git (%#)", async (value) => {
+    setup(value);
+    await main(["guard"]);
+    expect(recordedVerdict().passed).toBe(false);
+    expect(execFileSync).not.toHaveBeenCalled();
+    expect(appendFileSync).toHaveBeenCalledWith("/synthetic/output", "passed=false\n");
+  });
+  it.each(["check", "apply"])("records an unappliable patch when %s fails", async (failure) => {
+    setup();
+    vi.mocked(execFileSync).mockImplementation((_program, args) => {
+      if (failure === "check" || !args?.includes("--check")) {
+        throw new Error("synthetic Git failure");
+      }
+      return "";
+    });
+    await main(["guard"]);
+    expect(recordedVerdict()).toMatchObject({
+      passed: false,
+      reasons: ["Patch does not apply cleanly to the candidate checkout"],
+    });
+    expect(execFileSync).toHaveBeenCalledTimes(failure === "check" ? 1 : 2);
+    expect(appendFileSync).toHaveBeenCalledWith("/synthetic/output", "passed=false\n");
+  });
+  it.each([false, true])(
+    "checks and applies before enforcing the working-tree guard (forbidden=%s)",
+    async (forbidden) => {
+      setup();
+      const commands: string[][] = [];
+      vi.mocked(execFileSync).mockImplementation((_program, args) => {
+        if (!args) {
+          throw new Error("Missing Git arguments");
+        }
+        commands.push([...args]);
+        if (args.includes("rev-parse")) {
+          return "a".repeat(40);
+        }
+        if (args.includes("--full-index")) {
+          return patch(forbidden ? "baseline.json" : undefined);
+        }
+        return "";
+      });
+      await main(["guard"]);
+      expect(commands.slice(0, 2).map((args) => args.slice(args.indexOf("apply")))).toEqual([
+        ["apply", "--check", expect.stringMatching(/proposed\.patch$/)],
+        ["apply", expect.stringMatching(/proposed\.patch$/)],
+      ]);
+      expect(commands.every((args) => args.includes("core.hooksPath=/dev/null"))).toBe(true);
+      expect(recordedVerdict().passed).toBe(!forbidden);
+      expect(appendFileSync).toHaveBeenCalledWith("/synthetic/output", `passed=${!forbidden}\n`);
+    },
+  );
 });
 function patch(
   path = "src/example.test.ts",

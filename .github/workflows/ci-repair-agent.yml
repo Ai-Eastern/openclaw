@@ -156,11 +156,11 @@ jobs:
           output-file: ${{ github.workspace }}/candidate/.artifacts/ci-repair/result.json
           model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
           effort: high
-          sandbox: workspace-write
+          sandbox: read-only
           safety-strategy: drop-sudo
           output-schema: >-
-            {"type":"object","additionalProperties":false,"required":["action","failingTests","cause","classification","evidence","confidence"],"properties":{"action":{"type":"string","enum":["fix","diagnose"]},"failingTests":{"type":"array","items":{"type":"string"}},"cause":{"type":"string"},"classification":{"type":"string","enum":["deterministic-break","flake","infra","unknown"]},"evidence":{"type":"string"},"confidence":{"type":"string","enum":["high","medium","low"]}}}
-      - name: Guard the working-tree patch
+            {"type":"object","additionalProperties":false,"required":["action","patch","failingTests","cause","classification","evidence","confidence"],"properties":{"action":{"type":"string","enum":["fix","diagnose"]},"patch":{"type":"string"},"failingTests":{"type":"array","items":{"type":"string"}},"cause":{"type":"string"},"classification":{"type":"string","enum":["deterministic-break","flake","infra","unknown"]},"evidence":{"type":"string"},"confidence":{"type":"string","enum":["high","medium","low"]}}}
+      - name: Guard patch text, apply, and guard working tree
         id: guard
         if: steps.reproduce.outputs.has_tests == 'true'
         run: node ../scripts/ci-repair-agent.mjs guard
@@ -189,6 +189,12 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Report final process and memory state
+        if: always()
+        run: |
+          ps -eo pid,ppid,pgid,stat,etime,rss,args --sort=-rss | head -40
+          free -m
 
   publish:
     needs: [verify, repair]
