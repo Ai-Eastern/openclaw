@@ -182,7 +182,7 @@ export function createAgentTurnService(
         modelOverride,
         explicitRecipientSession,
         knownAgents,
-      });
+      }).catch(dedupeLifecycle.settleContentPreparationError);
       if (!content) {
         return;
       }

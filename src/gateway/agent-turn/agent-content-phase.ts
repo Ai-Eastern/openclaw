@@ -43,6 +43,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { AgentRequestReservationEndedError } from "./agent-dedupe.js";
 import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<
@@ -232,6 +233,9 @@ export async function prepareAgentContentPhase(params: {
       media = parsed.media;
       offloadedRefs = parsed.offloadedRefs;
     } catch (err) {
+      if (err instanceof AgentRequestReservationEndedError) {
+        throw err;
+      }
       logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
       params.respond(
         false,

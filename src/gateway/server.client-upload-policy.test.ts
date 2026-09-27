@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getMediaDir } from "../media/store.js";
 import { agentHandlers } from "./server-methods/agent.js";
+import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { handleDirectExternalChatSend } from "./server-methods/chat-send-external-entry.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import { sessionMessagingHandlers } from "./server-methods/sessions-messaging.js";
@@ -27,16 +28,17 @@ describe("client upload policy at the input commit owner", () => {
   const fixture = installAgentAuthorityProofFixture();
 
   it.each([
-    ["chat.send", "inline-image"],
-    ["chat.send", "offloaded-image"],
-    ["chat.send", "document"],
-    ["agent", "inline-image"],
-    ["agent", "offloaded-image"],
-    ["sessions.send", "inline-image"],
-    ["sessions.create", "document"],
+    ["chat.send", "inline-image", "policy"],
+    ["chat.send", "offloaded-image", "policy"],
+    ["chat.send", "document", "policy"],
+    ["agent", "inline-image", "policy"],
+    ["agent", "offloaded-image", "policy"],
+    ["sessions.send", "inline-image", "policy"],
+    ["sessions.create", "document", "policy"],
+    ["agent", "offloaded-image", "stop"],
   ] as const)(
-    "rejects %s %s disabled while the real media writer awaits mkdir",
-    async (method, kind) => {
+    "settles %s %s when %s interrupts the real media writer",
+    async (method, kind, interruption) => {
       const f = await fixture({ imageCapable: true });
       const originalCommittedConfig = f.context.getCommittedRuntimeConfig;
       const initialConfig = f.context.getRuntimeConfig();
@@ -85,25 +87,24 @@ describe("client upload policy at the input commit owner", () => {
           },
         ],
       };
-      const pending = Promise.resolve(
-        handlers[method]!({
-          req: { type: "req", id: f.runId, method, params: requestParams },
-          params: requestParams,
-          client: {
-            connId: "upload-policy-proof",
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              role: "operator",
-              scopes: ["operator.admin"],
-              client: { id: "cli", mode: "cli", platform: "test", version: "test" },
-            },
+      const handlerOptions = {
+        req: { type: "req", id: f.runId, method, params: requestParams },
+        params: requestParams,
+        client: {
+          connId: "upload-policy-proof",
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            role: "operator",
+            scopes: ["operator.admin"],
+            client: { id: "cli", mode: "cli", platform: "test", version: "test" },
           },
-          context: f.context,
-          respond,
-          isWebchatConnect: () => false,
-        }),
-      );
+        },
+        context: f.context,
+        respond,
+        isWebchatConnect: () => false,
+      } satisfies Parameters<GatewayRequestHandler>[0];
+      const pending = Promise.resolve(handlers[method]!(handlerOptions));
       try {
         await Promise.race([
           entered.promise,
@@ -111,15 +112,43 @@ describe("client upload policy at the input commit owner", () => {
             throw new Error("handler finished before entering the media writer");
           }),
         ]);
-        committedConfig = {
-          ...committedConfig,
-          gateway: { ...committedConfig.gateway, uploads: { enabled: false } },
-        };
+        let stoppedPayload: unknown;
+        if (interruption === "stop") {
+          const abortRespond = vi.fn<RespondFn>();
+          const abortParams = { sessionKey: f.sessionKey, agentId: "main", runId: f.runId };
+          await handleChatAbortRequest({
+            ...handlerOptions,
+            req: { type: "req", id: f.runId + "-stop", method: "chat.abort", params: abortParams },
+            params: abortParams,
+            respond: abortRespond,
+          });
+          expect(abortRespond.mock.calls.at(-1)?.[1]).toMatchObject({ aborted: true });
+          stoppedPayload = f.context.dedupe.get(`agent:${f.runId}`)?.payload;
+          expect(stoppedPayload).toMatchObject({
+            runId: f.runId,
+            sessionKey: f.sessionKey,
+            status: "timeout",
+            stopReason: "rpc",
+          });
+        } else {
+          committedConfig = {
+            ...committedConfig,
+            gateway: { ...committedConfig.gateway, uploads: { enabled: false } },
+          };
+        }
         resume.resolve();
         await pending;
         await f.drain();
         expect(intercepted).toBe(true);
-        if (method === "sessions.create") {
+        if (interruption === "stop") {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            true,
+            stoppedPayload,
+            undefined,
+            expect.objectContaining({ cached: true }),
+          );
+          expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toEqual(stoppedPayload);
+        } else if (method === "sessions.create") {
           // Creation remains committed; only its initial input is rejected.
           expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
             runStarted: false,

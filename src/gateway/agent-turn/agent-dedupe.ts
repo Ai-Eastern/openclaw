@@ -5,6 +5,12 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { AgentTurnIo } from "./types.js";
 
+export class AgentRequestReservationEndedError extends Error {
+  constructor() {
+    super("Agent request reservation is no longer active.");
+  }
+}
+
 export function resolveAgentDedupeKeys(params: {
   idempotencyKey: string;
   execApprovalFollowupApprovalId?: string;
