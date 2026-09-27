@@ -48,7 +48,7 @@ function formatAgentFallbackLine(
   return `Agent-local: ${snapshot.activeCount} active · ${snapshot.totalCount} total`;
 }
 
-function formatTaskTiming(task: TaskRecord): string | undefined {
+function formatTaskTiming(task: TaskRecord): string {
   if (task.status === "running") {
     const startedAt = task.startedAt ?? task.createdAt;
     return `elapsed ${formatDurationCompact(Date.now() - startedAt, { spaced: true }) ?? "0s"}`;
@@ -65,10 +65,7 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   const status = formatTaskStatus(task);
   const timing = formatTaskTiming(task);
   const detail = formatTaskStatusDetail(task);
-  let meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status.replaceAll("_", " ")}`;
-  if (timing) {
-    meta += ` · ${timing}`;
-  }
+  const meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status.replaceAll("_", " ")} · ${timing}`;
   const lines = [`${index + 1}. ${TASK_STATUS_ICONS[status]} ${title}`, `   ${meta}`];
   if (detail) {
     lines.push(`   ${detail}`);

@@ -956,7 +956,6 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
   queue.droppedCount = 1;
   queue.summaryElisions.push({
     contextKey: "test",
-    count: 1,
     sources: [elidedRun],
     summaryLines: ["elided summary"],
     sourceRefs: new WeakMap(),
