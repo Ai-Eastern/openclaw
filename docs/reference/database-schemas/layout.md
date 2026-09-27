@@ -32,6 +32,32 @@ and retention are unchanged. `openclaw update` runs Doctor before activation;
 after a direct binary replacement or using an older writer, run
 `openclaw doctor --fix` before starting the new Gateway.
 
+### OpenResponses continuations
+
+`openresponses_sessions` in the shared state database owns response-ID to session
+correlations for [`previous_response_id`](/gateway/openresponses-http-api#session-behavior).
+It contains the response ID (primary key), session key, auth subject, agent ID,
+nullable requested session key, creation time, and expiry time. An index on
+`(expires_at_ms, response_id)` supports expiry and oldest-first eviction.
+
+This is an additive first-use table at the existing state schema version. Its
+writer installs canonical DDL once per opened handle; reads and maintenance do
+not create the table. Older readers ignore it safely. There is no import or
+backfill for the former process-local mappings. Binary rollback leaves the table
+intact, but the older Gateway retains its original process-local behavior.
+
+Mappings contain no conversation content or bearer credentials and exclude
+Incognito sessions entirely. Bearer auth subjects use HMAC-SHA-256 with a key
+derived from the existing installation-local `config_revision_keys` owner using
+the `openresponses-session-scope` purpose label. The key stays inside the Gateway;
+only the keyed digest is stored in the mapping. Proxy and no-bearer subjects retain
+their verified identity and auth-mode representations. Retention is 30 days and at most 5,000 rows across
+the Gateway, matching the default session maintenance age and count. Writes
+enforce both bounds in the insert transaction; hourly Gateway maintenance removes
+expired rows even without new responses. Lookups reject expiry immediately.
+The table does not retain or restore the underlying transcript. Runtime queries
+and synchronous write transactions execute in the existing SQLite workers.
+
 ### Activity session recaps
 
 [Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.

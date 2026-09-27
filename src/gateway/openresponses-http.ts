@@ -6,7 +6,7 @@
  * @see https://www.open-responses.com/
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
@@ -16,7 +16,6 @@ import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
 import {
   renderFileAttachmentOutcome,
@@ -100,28 +99,17 @@ import {
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
+import {
+  hashResponseSessionBearer,
+  lookupResponseSession,
+  rememberResponseSession,
+} from "./openresponses-session-store.js";
+import type { ResponseSessionScope } from "./openresponses-session-store.types.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
-
-// In-memory map from responseId -> sessionKey for previous_response_id continuity.
-// Entries are evicted after 30 minutes to bound memory usage.
-const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
-const MAX_RESPONSE_SESSION_ENTRIES = 500;
-type ResponseSessionScope = {
-  authSubject: string;
-  agentId: string;
-  requestedSessionKey?: string;
-};
-
-type ResponseSessionEntry = ResponseSessionScope & {
-  sessionKey: string;
-  ts: number;
-};
-
-const responseSessionMap = new Map<string, ResponseSessionEntry>();
 
 function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
   const requestedSessionKey = scope.requestedSessionKey?.trim();
@@ -132,105 +120,36 @@ function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSes
   };
 }
 
-function resolveResponseSessionAuthSubject(params: {
+async function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
   requestAuth: AuthorizedGatewayHttpRequest;
-}): string {
+}): Promise<string> {
   // Proxy-verified identity owns continuation; forwarded bearers are unverified.
   if (params.requestAuth.authMethod === "trusted-proxy") {
     return `trusted-proxy:${params.requestAuth.user}`;
   }
   const bearer = getBearerToken(params.req);
   if (bearer) {
-    return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
+    return `bearer:${await hashResponseSessionBearer(bearer)}`;
   }
   return `gateway-auth:${params.auth.mode}`;
 }
 
-function createResponseSessionScope(params: {
+async function createResponseSessionScope(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
   requestAuth: AuthorizedGatewayHttpRequest;
   agentId: string;
-}): ResponseSessionScope {
+}): Promise<ResponseSessionScope> {
   return normalizeResponseSessionScope({
-    authSubject: resolveResponseSessionAuthSubject(params),
+    authSubject: await resolveResponseSessionAuthSubject(params),
     agentId: params.agentId,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
 }
 
-function pruneExpiredResponseSessions(now: number) {
-  for (const [oldestKey, oldestValue] of responseSessionMap) {
-    if (now - oldestValue.ts <= RESPONSE_SESSION_TTL_MS) {
-      return;
-    }
-    responseSessionMap.delete(oldestKey);
-  }
-}
-
-function storeResponseSession(
-  responseId: string,
-  sessionKey: string,
-  scope: ResponseSessionScope,
-  now = Date.now(),
-) {
-  // Reinsert existing keys so the map stays ordered by freshest timestamp.
-  responseSessionMap.delete(responseId);
-  responseSessionMap.set(responseId, { ...scope, sessionKey, ts: now });
-  pruneExpiredResponseSessions(now);
-  pruneMapToMaxSize(responseSessionMap, MAX_RESPONSE_SESSION_ENTRIES);
-}
-
-function lookupResponseSession(
-  responseId: string | undefined,
-  scope: ResponseSessionScope,
-  now = Date.now(),
-): string | undefined {
-  if (!responseId) {
-    return undefined;
-  }
-  const entry = responseSessionMap.get(responseId);
-  if (!entry) {
-    return undefined;
-  }
-  if (now - entry.ts > RESPONSE_SESSION_TTL_MS) {
-    responseSessionMap.delete(responseId);
-    return undefined;
-  }
-  if (
-    entry.authSubject !== scope.authSubject ||
-    entry.agentId !== scope.agentId ||
-    entry.requestedSessionKey !== scope.requestedSessionKey
-  ) {
-    return undefined;
-  }
-  return entry.sessionKey;
-}
-
 export const testing = {
-  resetResponseSessionState() {
-    responseSessionMap.clear();
-  },
-  storeResponseSessionAt(
-    responseId: string,
-    sessionKey: string,
-    now: number,
-    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
-  ) {
-    storeResponseSession(responseId, sessionKey, normalizeResponseSessionScope(scope), now);
-  },
-  lookupResponseSessionAt(
-    responseId: string | undefined,
-    now: number,
-    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
-  ) {
-    return lookupResponseSession(responseId, normalizeResponseSessionScope(scope), now);
-  },
-  getResponseSessionIds() {
-    return [...responseSessionMap.keys()];
-  },
   resolveResponsesLimits,
 };
 
@@ -517,7 +436,7 @@ export async function handleOpenResponsesHttpRequest(
     }
     throw err;
   }
-  const responseSessionScope = createResponseSessionScope({
+  const responseSessionScope = await createResponseSessionScope({
     req,
     auth: opts.auth,
     requestAuth: handled.requestAuth,
@@ -525,10 +444,17 @@ export async function handleOpenResponsesHttpRequest(
   });
   // Resolve session key: reuse previous_response_id only when it matches the
   // same auth-subject/agent/requested-session scope as the current request.
-  const previousSessionKey = lookupResponseSession(
-    payload.previous_response_id,
-    responseSessionScope,
-  );
+  const previousSessionKey = payload.previous_response_id
+    ? await lookupResponseSession({
+        ...responseSessionScope,
+        responseId: payload.previous_response_id,
+        nowMs: Date.now(),
+      })
+    : undefined;
+  if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
+    sendUnauthorized(res);
+    return true;
+  }
   if (payload.previous_response_id !== undefined && !previousSessionKey) {
     sendInvalidRequest(
       res,
@@ -581,8 +507,11 @@ export async function handleOpenResponsesHttpRequest(
       error,
       usage,
     });
-  const rememberResponseSession = () =>
-    storeResponseSession(responseId, sessionKey, responseSessionScope);
+  const rememberSession = () =>
+    rememberResponseSession(
+      { ...responseSessionScope, responseId, sessionKey, nowMs: Date.now() },
+      () => assertGatewayHttpRequestCurrent(handled.requestAuth),
+    );
   const outputItemId = `msg_${randomUUID()}`;
   const streamMaxTokens = payload.max_output_tokens;
   const streamTemperature = payload.temperature;
@@ -595,24 +524,45 @@ export async function handleOpenResponsesHttpRequest(
           ...(streamTopP !== undefined ? { topP: streamTopP } : {}),
         }
       : undefined;
-  const runAgentCommand = () =>
-    runOpenAiCompatibleAgentCommand({
-      message: prompt.message,
-      images,
-      clientTools: resolvedClientTools,
-      extraSystemPrompt,
-      modelOverride,
-      streamParams,
-      sessionKey,
-      runId: responseId,
-      messageChannel,
-      senderIsOwner,
-      requestAuth: handled.requestAuth,
-      operatorScopes: handled.operatorScopes,
-      resolveGatewayContext: opts.resolveGatewayContext,
-      abortSignal: abortController.signal,
-      hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
-    });
+  const runAgentCommand = async () => {
+    let result;
+    try {
+      result = await runOpenAiCompatibleAgentCommand({
+        message: prompt.message,
+        images,
+        clientTools: resolvedClientTools,
+        extraSystemPrompt,
+        modelOverride,
+        streamParams,
+        sessionKey,
+        runId: responseId,
+        messageChannel,
+        senderIsOwner,
+        requestAuth: handled.requestAuth,
+        operatorScopes: handled.operatorScopes,
+        resolveGatewayContext: opts.resolveGatewayContext,
+        abortSignal: abortController.signal,
+        hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
+      });
+    } catch (error) {
+      if (!abortController.signal.aborted && !isClientToolNameConflictError(error)) {
+        try {
+          await rememberSession();
+        } catch (persistenceError) {
+          logWarn(
+            `openresponses: continuity persistence failed after run error: ${String(persistenceError)}`,
+          );
+        }
+      }
+      throw error;
+    }
+    // Commit continuity before either JSON or SSE can publish a terminal response.
+    // Persistence failure reports HTTP 500 / response.failed, never an uncontinuable success.
+    if (!abortController.signal.aborted) {
+      await rememberSession();
+    }
+    return result;
+  };
 
   if (!stream) {
     try {
@@ -643,7 +593,6 @@ export async function handleOpenResponsesHttpRequest(
           },
           usage,
         );
-        rememberResponseSession();
         sendJson(res, 502, failed);
         return true;
       }
@@ -685,7 +634,6 @@ export async function handleOpenResponsesHttpRequest(
         usage,
       });
 
-      rememberResponseSession();
       sendJson(res, 200, response);
     } catch (err) {
       if (abortController.signal.aborted) {
@@ -706,11 +654,9 @@ export async function handleOpenResponsesHttpRequest(
           code: mapped.error.type,
           message: mapped.error.message,
         });
-        rememberResponseSession();
         sendJson(res, mapped.status, mappedResponse);
         return true;
       }
-      rememberResponseSession();
       sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
     }
     return true;
@@ -853,7 +799,6 @@ export async function handleOpenResponsesHttpRequest(
           : {}),
       });
 
-      rememberResponseSession();
       writeSseEvent(res, {
         type: `response.${status}`,
         response: finalResponse,
@@ -888,7 +833,6 @@ export async function handleOpenResponsesHttpRequest(
     if (!usage) {
       return;
     }
-    rememberResponseSession();
     finalizeFailedResponse(
       createFailedResponse(
         {
@@ -1026,7 +970,6 @@ export async function handleOpenResponsesHttpRequest(
       const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
       if (runFailed) {
         terminalLifecyclePhase = "error";
-        rememberResponseSession();
         finalizeFailedResponse(
           createFailedResponse(
             { code: "api_error", message: "internal error" },
@@ -1056,7 +999,6 @@ export async function handleOpenResponsesHttpRequest(
           },
           finalUsage,
         );
-        rememberResponseSession();
         finalizeFailedResponse(failed);
         return;
       }
@@ -1092,11 +1034,9 @@ export async function handleOpenResponsesHttpRequest(
           },
           finalUsage,
         );
-        rememberResponseSession();
         finalizeFailedResponse(mappedResponse);
         return;
       }
-      rememberResponseSession();
       finalizeFailedResponse(
         createFailedResponse({ code: "api_error", message: "internal error" }, finalUsage),
       );

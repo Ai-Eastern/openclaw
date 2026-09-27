@@ -2733,3 +2733,15 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
   ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;
+
+CREATE TABLE IF NOT EXISTS openresponses_sessions (
+  response_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  auth_subject TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  requested_session_key TEXT,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_openresponses_sessions_expiry
+  ON openresponses_sessions(expires_at_ms, response_id);

@@ -26,6 +26,7 @@ export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "openresponses_sessions",
   "user_profile_identities",
   "local_workspace_projections",
   "update_runs",
@@ -56,6 +57,7 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_openresponses_sessions_expiry",
   "idx_user_profile_identities_profile_id",
   "idx_user_profile_identities_authorization",
   "idx_update_runs_created",

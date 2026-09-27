@@ -33,6 +33,11 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   retainedCount: 0,
 }));
 const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
+const pruneResponseSessionsMock = vi.fn(async () => {});
+
+vi.mock("./openresponses-session-store.js", () => ({
+  pruneResponseSessions: pruneResponseSessionsMock,
+}));
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
@@ -109,6 +114,7 @@ describe("startGatewayMaintenanceTimers", () => {
     pruneOutboundMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
     pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
+    pruneResponseSessionsMock.mockReset().mockResolvedValue(undefined);
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
       deletedRecordCount: 0,
       deletedFileCount: 0,
@@ -296,6 +302,27 @@ describe("startGatewayMaintenanceTimers", () => {
       expect.stringContaining("retained: cleanup-failed"),
     );
     await stopMaintenanceTimers(timers);
+  });
+
+  it("prunes OpenResponses mappings hourly and drains the write when stopping", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const prune = createDeferred();
+    pruneResponseSessionsMock.mockReturnValueOnce(prune.promise);
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pruneResponseSessionsMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(pruneResponseSessionsMock).toHaveBeenCalledExactlyOnceWith(now + 60 * 60_000);
+    let stopped = false;
+    const stop = stopMaintenanceTimers(timers).then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    prune.resolve();
+    await stop;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(pruneResponseSessionsMock).toHaveBeenCalledOnce();
   });
 
   it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {

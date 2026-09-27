@@ -164,6 +164,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "operatorApprovals.history") {
     return { ...command, input: { ...command.input } };
   }
+  if (command.type === "openResponses.lookup") {
+    return { ...command, input: { ...command.input } };
+  }
   if (command.type === "tasks.mutationSnapshot") {
     const scope = command.input;
     return {
@@ -434,6 +437,16 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
+  }
+  if (command.type === "openResponses.lookup") {
+    return (
+      bytes +
+      Buffer.byteLength(command.input.responseId) +
+      Buffer.byteLength(command.input.authSubject) +
+      Buffer.byteLength(command.input.agentId) +
+      Buffer.byteLength(command.input.requestedSessionKey ?? "") +
+      8
+    );
   }
   if (
     command.type === "userProfiles.reconcile" ||

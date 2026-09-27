@@ -104,17 +104,35 @@ function createGatewayConfigRevisionProjector(key: Uint8Array): GatewayConfigRev
   };
 }
 
-/** Loads the durable installation key once for the Gateway request lifecycle. */
-export function loadGatewayConfigRevisionProjector(
-  options: OpenClawStateDatabaseOptions = {},
-): GatewayConfigRevisionProjector {
+function loadGatewayConfigRevisionKey(options: OpenClawStateDatabaseOptions = {}): Uint8Array {
   const candidateKey = randomBytes(CONFIG_REVISION_KEY_BYTES);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       ensureConfigRevisionKeySchema(db);
-      return createGatewayConfigRevisionProjector(loadOrCreateConfigRevisionKey(db, candidateKey));
+      return loadOrCreateConfigRevisionKey(db, candidateKey);
     },
     options,
     { operationLabel: "gateway.config-revision-key.load" },
   );
+}
+
+/** Loads the durable installation key once for the Gateway request lifecycle. */
+export function loadGatewayConfigRevisionProjector(
+  options: OpenClawStateDatabaseOptions = {},
+): GatewayConfigRevisionProjector {
+  return createGatewayConfigRevisionProjector(loadGatewayConfigRevisionKey(options));
+}
+
+export function hashGatewayResponseSessionBearer(
+  bearer: string,
+  options: OpenClawStateDatabaseOptions,
+): string {
+  const scopeKey = createHmac("sha256", loadGatewayConfigRevisionKey(options))
+    .update("openresponses-session-scope", "utf8")
+    .digest();
+  try {
+    return `hmac-sha256:v1:${createHmac("sha256", scopeKey).update(bearer, "utf8").digest("hex")}`;
+  } finally {
+    scopeKey.fill(0);
+  }
 }

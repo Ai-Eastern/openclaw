@@ -1038,6 +1038,16 @@ export interface OfficialExternalPluginCatalogSnapshots {
   updated_at_ms: number;
 }
 
+export interface OpenresponsesSessions {
+  agent_id: string;
+  auth_subject: string;
+  created_at_ms: number;
+  expires_at_ms: number;
+  requested_session_key: string | null;
+  response_id: string;
+  session_key: string;
+}
+
 export interface OperatorApprovalExecutionIdentities {
   approval_id: string;
   source_context_id: string;
@@ -1858,6 +1868,7 @@ export interface DB {
   node_worker_prepared_workspaces: NodeWorkerPreparedWorkspaces;
   node_worker_turns: NodeWorkerTurns;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
+  openresponses_sessions: OpenresponsesSessions;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approval_standing_grant_generations: OperatorApprovalStandingGrantGenerations;
   operator_approval_standing_grants: OperatorApprovalStandingGrants;

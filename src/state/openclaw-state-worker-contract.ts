@@ -32,6 +32,7 @@ import type {
   RepositoryGitHubPublicationStatusRow,
 } from "../gateway/github-repository-publication.kernel.js";
 import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.types.js";
+import type { ResponseSessionWorkerOperations } from "../gateway/openresponses-session-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type {
   SessionGroupCatalogMutation,
@@ -125,6 +126,7 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
   DevicePairingWorkerOperations &
   ExecAuthorizationWorkerOperations &
   OperatorApprovalWorkerOperations &
+  ResponseSessionWorkerOperations &
   AuditWriterOperations &
   NativeHookRelayStoreWorkerOperations &
   TelemetryWorkerOperations &

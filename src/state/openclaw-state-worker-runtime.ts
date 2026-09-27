@@ -47,6 +47,10 @@ import {
   isManagedImageRecordCommand,
 } from "../gateway/managed-image-record-store.kernel.js";
 import {
+  executeResponseSessionCommand,
+  isResponseSessionCommand,
+} from "../gateway/openresponses-session-store.worker.js";
+import {
   executeOperatorApprovalCommand,
   isOperatorApprovalCommand,
 } from "../gateway/operator-approval-store.worker.js";
@@ -346,24 +350,6 @@ export function executeSharedStateCommand(
       readStableSqliteFileGeneration(context.databasePath),
     );
   }
-  if (isOnboardingRecommendationWriteCommand(command)) {
-    return executeOnboardingRecommendationCommand(command, {
-      database: open(),
-      ...stateOptions(),
-    });
-  }
-  if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
-    return executeUserPreferenceCommand(command, {
-      database: open(),
-      ...stateOptions(),
-    });
-  }
-  if (isUserProfileCommand(command)) {
-    return executeUserProfileCommand(command, {
-      database: open(),
-      ...stateOptions(),
-    });
-  }
   if (isPluginBlobWorkerCommand(command)) {
     return executePluginBlobCommand(command, context.databasePath, open);
   }
@@ -464,6 +450,18 @@ export function executeSharedStateCommand(
   };
   if (command.type === "plugins.deferredMigrations.record") {
     return recordDeferredPluginMigrationsInWorker(command.input, writeOptions);
+  }
+  if (isOnboardingRecommendationWriteCommand(command)) {
+    return executeOnboardingRecommendationCommand(command, writeOptions);
+  }
+  if (isResponseSessionCommand(command)) {
+    return executeResponseSessionCommand(command, writeOptions);
+  }
+  if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
+    return executeUserPreferenceCommand(command, writeOptions);
+  }
+  if (isUserProfileCommand(command)) {
+    return executeUserProfileCommand(command, writeOptions);
   }
   if (
     command.type === "nativeHookRelay.write" ||

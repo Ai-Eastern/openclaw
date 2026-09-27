@@ -39,7 +39,11 @@ If the request includes an OpenResponses `user` string, the Gateway derives a st
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
 
-An unknown, expired, or out-of-scope `previous_response_id` returns HTTP `400` with `invalid_request_error`, including when `stream: true`. Continuation mappings are held in memory for up to 30 minutes, capped at 500 entries, and lost on Gateway restart. To recover, resend the full input history and omit `previous_response_id`; the Gateway never silently starts a new conversation for an unresolved continuation.
+Continuation mappings survive Gateway restarts in the shared state database for up to 30 days, capped at the newest 5,000 responses across the Gateway. This matches the default session maintenance age and count; it does not extend the lifetime of the underlying session or transcript. Mappings contain only response/session identifiers, the auth subject (an installation-keyed bearer HMAC or verified proxy identity), agent and requested-session scope, and timestamps. No response content is copied. Expired rows are removed on subsequent writes and by hourly Gateway maintenance; lookup rejects them immediately. If continuity persistence fails after an otherwise successful run, the endpoint returns HTTP `500` or a streaming `response.failed`, rather than reporting a success whose response ID cannot be continued.
+
+An unknown, expired, evicted, or out-of-scope `previous_response_id` returns the same HTTP `400` with `invalid_request_error`, including when `stream: true`. To recover, resend the full input history and omit `previous_response_id`; the Gateway never silently starts a new conversation for an unresolved continuation. Responses issued before this storage change cannot be recovered after the old Gateway exits.
+
+Incognito responses never create continuation mappings. Continue them explicitly with the same `x-openclaw-session-key` while the Incognito session is alive; using their response ID returns the same `400` as an unknown ID.
 
 ### Explicit incognito session continuation
 

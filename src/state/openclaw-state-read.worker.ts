@@ -76,7 +76,6 @@ import {
 } from "./agent-deletion-journal.read.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
-import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -436,12 +435,6 @@ serveOwnedWorkerTasks(
                   return {
                     type: command.type,
                     history: listTerminalOperatorApprovalsInDatabase(command.input, db),
-                  };
-                }
-                if (command.type === "onboardingRecommendations.read") {
-                  return {
-                    type: command.type,
-                    record: readOnboardingRecommendationsInDatabase(db, command.configKey),
                   };
                 }
                 if (

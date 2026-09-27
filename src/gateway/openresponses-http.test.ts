@@ -46,6 +46,7 @@ import {
   parseSseData,
 } from "./http-stream.test-support.js";
 import type { ResponseResource } from "./open-responses.schema.js";
+import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -76,19 +77,6 @@ installGatewayTestHooks({ scope: "suite" });
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 let openResponsesTesting: {
-  resetResponseSessionState(): void;
-  storeResponseSessionAt(
-    responseId: string,
-    sessionKey: string,
-    now: number,
-    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
-  ): void;
-  lookupResponseSessionAt(
-    responseId: string | undefined,
-    now: number,
-    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
-  ): string | undefined;
-  getResponseSessionIds(): string[];
   resolveResponsesLimits(config: { maxUrlParts?: number } | undefined): { maxUrlParts: number };
 };
 
@@ -112,7 +100,6 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  openResponsesTesting.resetResponseSessionState();
   fetchWithSsrFGuardMock.mockClear();
 });
 
@@ -2059,7 +2046,23 @@ describe("OpenResponses HTTP API (e2e)", () => {
             },
           );
           expect(allowed.status).toBe(200);
-          await ensureResponseConsumed(allowed);
+          const privateResponse = (await allowed.json()) as { id: string };
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
+
+          const privateContinuation = await postResponses(
+            port,
+            {
+              model: "openclaw",
+              input: "continue privately",
+              previous_response_id: privateResponse.id,
+            },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openresponses-http",
+            },
+          );
+          await expectInvalidRequest(privateContinuation, /previous_response_id/);
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
           agentCommandMock.mockClear();
@@ -3015,81 +3018,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it.each([false, true])(
-    "continues across user values but rejects unknown response IDs (stream=%s)",
-    async (stream) => {
-      const request = { model: "openclaw", input: "hi" };
-      mockAgentOnce([{ text: "First turn." }]);
-      const first = await postResponses(enabledPort, { ...request, user: "alice" });
-      expect(first.status).toBe(200);
-      const { id } = (await first.json()) as { id: string };
-      const sessionKey = firstAgentOpts().sessionKey;
-      expect(sessionKey).toContain("openresponses-user:alice");
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Second turn." }] } as never);
-      const continued = await postResponses(enabledPort, {
-        ...request,
-        stream,
-        user: "bob",
-        previous_response_id: id,
-      });
-      expect(continued.status).toBe(200);
-      await ensureResponseConsumed(continued);
-      expect(firstAgentOpts(1).sessionKey).toBe(sessionKey);
-
-      agentCommandMock.mockClear();
-      for (const previousId of ["missing", ""]) {
-        const payload = { ...request, stream, previous_response_id: previousId };
-        const response = await postResponses(enabledPort, payload);
-        await expectInvalidRequest(response, /previous_response_id.*full input context/);
-        expect(response.headers.get("content-type")).toContain("application/json");
-        expect(agentCommandMock).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("stores response session mappings when the response is emitted", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-
-    let release: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
-    agentCommandMock.mockImplementationOnce(
-      () =>
-        new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
-          release = resolve;
-        }) as never,
-    );
-
-    const responsePromise = postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      input: "delayed hello",
-    });
-
-    await vi.waitFor(() => {
-      expect(agentCommandMock.mock.calls).toHaveLength(1);
-    });
-    expect(openResponsesTesting.getResponseSessionIds()).toStrictEqual([]);
-
-    release?.({ payloads: [{ text: "hello" }] });
-
-    const res = await responsePromise;
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { id?: string };
-    expect(json.id).toMatch(/^resp_/);
-    expect(openResponsesTesting.getResponseSessionIds()).toEqual([json.id]);
-    await ensureResponseConsumed(res);
-  });
-
-  it("caps response session cache by evicting the oldest entries", () => {
-    for (let i = 0; i < 505; i += 1) {
-      openResponsesTesting.storeResponseSessionAt(`resp_${i}`, `session_${i}`, i);
-    }
-
-    expect(openResponsesTesting.getResponseSessionIds()).toHaveLength(500);
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_0", 505)).toBeUndefined();
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_4", 505)).toBeUndefined();
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_5", 505)).toBe("session_5");
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_504", 505)).toBe("session_504");
+  registerOpenResponsesContinuationTests({
+    getPort: () => enabledPort,
+    postResponses,
+    mockAgentOnce,
+    firstAgentOpts,
+    expectInvalidRequest,
+    ensureResponseConsumed,
   });
 
   it("blocks unsafe URL-based file/image inputs", async () => {

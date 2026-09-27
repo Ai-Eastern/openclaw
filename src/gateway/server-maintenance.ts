@@ -51,6 +51,7 @@ import {
   createHostThawRecovery,
   type HostThawChannelRestartOutcome,
 } from "./host-thaw-recovery.js";
+import { pruneResponseSessions } from "./openresponses-session-store.js";
 import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -328,6 +329,12 @@ export function startGatewayMaintenanceTimers(params: {
   );
 
   const skillUsageCleanup = registerSkillUsageTracking();
+
+  schedulePeriodic("openresponses-sessions", 60 * 60_000, () =>
+    pruneResponseSessions(scheduler.now()).catch((error: unknown) => {
+      params.logHealth.error(`OpenResponses session cleanup failed: ${formatError(error)}`);
+    }),
+  );
 
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;

@@ -20,6 +20,8 @@ describe("OpenClaw state runtime schema projection", () => {
         includeVersionLazyAdditiveTables,
       );
       expect(schema).not.toContain("CREATE TABLE IF NOT EXISTS outbound_message_progress");
+      expect(schema).not.toContain("CREATE TABLE IF NOT EXISTS openresponses_sessions");
+      expect(schema).not.toContain("idx_openresponses_sessions_expiry");
       expect(schema).not.toContain(
         "CREATE TABLE IF NOT EXISTS outbound_message_execution_bindings",
       );
