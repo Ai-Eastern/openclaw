@@ -32,7 +32,7 @@ import type {
 
 const skillsLogger = createSubsystemLogger("skills");
 
-export type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
+type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
   syncSourceDir?: string;
   syncDirName?: string;
 };
@@ -194,7 +194,7 @@ export function loadSkillRootRecords(params: {
   return loadedSkills;
 }
 
-export function loadGeneratedPluginSkillRecords(params: {
+function loadGeneratedPluginSkillRecords(params: {
   pluginSkillsDir: string;
   pluginSkillRoots: readonly PluginSkillRoot[];
   source: string;
