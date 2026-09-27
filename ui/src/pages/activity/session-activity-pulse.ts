@@ -6,10 +6,17 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 
 registerActivityEnglish();
 
-export function renderSessionActivityPulse(pulse: SessionActivityPulse, now: number) {
+export function renderSessionActivityPulse(
+  pulse: SessionActivityPulse,
+  now: number,
+  options: { peopleIncomplete?: boolean },
+) {
   const hour = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
   const label = (index: number) => hour.format(pulse.since + index * 3_600_000);
-  const current = Math.max(0, Math.min(23, Math.floor((now - pulse.since) / 3_600_000)));
+  const current = Math.max(
+    0,
+    Math.min(pulse.hours.length - 1, Math.floor((now - pulse.since) / 3_600_000)),
+  );
   const shown = pulse.hours.slice(0, current + 1);
   const peak = Math.max(...shown);
   const stats = [
@@ -32,8 +39,9 @@ export function renderSessionActivityPulse(pulse: SessionActivityPulse, now: num
           .map(
             ([key, value], index) => html`
               ${index ? " · " : nothing}<span
+                title=${key === "people" && options.peopleIncomplete ? t("activityFeed.partialHistory") : nothing}
                 >${key === "running" && pulse.running > 0 ? html`<i class="activity-pulse__running" aria-hidden="true"></i>` : nothing}<b
-                  >${value}</b
+                  >${key === "people" && options.peopleIncomplete ? `${value}+` : value}</b
                 >
                 ${t(`activity.pulse.${key}`)}</span
               >
@@ -56,7 +64,8 @@ export function renderSessionActivityPulse(pulse: SessionActivityPulse, now: num
       )}
     </div>
     <div class="activity-pulse__axis" aria-hidden="true">
-      ${[0, 6, 12, 18, 24].map((index) => html`<span>${label(index)}</span>`)}
+      ${[0, 6, 12, 18].map((index) => html`<span>${label(index)}</span>`)}
+      <span>${hour.format(pulse.until)}</span>
     </div>
   </section>`;
 }

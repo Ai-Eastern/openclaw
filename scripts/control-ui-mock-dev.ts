@@ -1713,6 +1713,17 @@ async function createChatPickerScenario(
     fixture === "workboard-states",
   );
   const activityTime = Date.now();
+  const activityDate = new Date(activityTime);
+  const activitySince = new Date(
+    activityDate.getFullYear(),
+    activityDate.getMonth(),
+    activityDate.getDate(),
+  ).getTime();
+  const activityUntil = new Date(
+    activityDate.getFullYear(),
+    activityDate.getMonth(),
+    activityDate.getDate() + 1,
+  ).getTime();
   const activitySessions = buildActivitySessionRows(activityTime);
   const dashboardGallerySessions =
     fixture === "dashboards"
@@ -3297,9 +3308,16 @@ async function createChatPickerScenario(
             response: {
               ...pagedSessionsListResponse(activitySessions, 0, MOCK_SESSION_OWNERS),
               activityPulse: {
-                since: new Date(new Date(activityTime).setHours(0, 0, 0, 0)).getTime(),
-                hours: Array.from({ length: 24 }, (_, hour) =>
-                  hour === 10 ? 12 : hour === new Date(activityTime).getHours() ? 4 : 0,
+                since: activitySince,
+                until: activityUntil,
+                hours: Array.from(
+                  { length: Math.ceil((activityUntil - activitySince) / 3_600_000) },
+                  (_, hour) =>
+                    hour === 10
+                      ? 12
+                      : hour === Math.floor((activityTime - activitySince) / 3_600_000)
+                        ? 4
+                        : 0,
                 ),
                 sessions: 38,
                 started: 12,

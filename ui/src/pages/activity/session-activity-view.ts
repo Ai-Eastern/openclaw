@@ -596,7 +596,9 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ${props.loading && !props.result ? renderActivityLoading() : nothing}
         ${
           props.result?.activityPulse
-            ? renderSessionActivityPulse(props.result.activityPulse, Date.now())
+            ? renderSessionActivityPulse(props.result.activityPulse, Date.now(), {
+                peopleIncomplete: props.result.peopleIncomplete,
+              })
             : nothing
         }
         ${

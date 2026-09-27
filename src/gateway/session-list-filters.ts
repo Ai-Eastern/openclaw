@@ -204,6 +204,8 @@ export function* filterSessionCandidateEntries(
   return candidateEntries;
 }
 
+const ACTIVITY_PULSE_MAX_WINDOW_MS = 25 * 3_600_000;
+
 export function* filterSessionEntries(
   params: SessionListFilterParams,
 ): SynchronousWork<SessionListFilteredEntries> {
@@ -226,10 +228,26 @@ export function* filterSessionEntries(
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
   const since = opts.activityPulseSince;
-  const activityPulse: SessionActivityPulse | undefined =
-    since !== undefined && Number.isFinite(since) && since >= 0
-      ? { since, hours: Array.from({ length: 24 }, () => 0), sessions: 0, started: 0, running: 0 }
-      : undefined;
+  let activityPulse: SessionActivityPulse | undefined;
+  if (since !== undefined && Number.isFinite(since) && since >= 0) {
+    // The window sizes the bucket array, so a caller-supplied end is only honored within the
+    // longest civil day (25 hours on a DST fall-back day); anything else falls back to 24 hours.
+    const until =
+      opts.activityPulseUntil !== undefined &&
+      Number.isFinite(opts.activityPulseUntil) &&
+      opts.activityPulseUntil > since &&
+      opts.activityPulseUntil - since <= ACTIVITY_PULSE_MAX_WINDOW_MS
+        ? opts.activityPulseUntil
+        : since + 24 * 3_600_000;
+    activityPulse = {
+      since,
+      until,
+      hours: Array.from({ length: Math.max(1, Math.ceil((until - since) / 3_600_000)) }, () => 0),
+      sessions: 0,
+      started: 0,
+      running: 0,
+    };
+  }
   const pulsePeople = activityPulse && opts.includePeople ? new Set<string>() : undefined;
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
@@ -388,7 +406,10 @@ export function* filterSessionEntries(
       continue;
     }
     const activityTs = activityPulse ? sessionActivityTimestamp(entry) : 0;
-    const inPulse = activityPulse !== undefined && activityTs >= activityPulse.since;
+    const inPulse =
+      activityPulse !== undefined &&
+      activityTs >= activityPulse.since &&
+      activityTs < activityPulse.until;
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
@@ -426,7 +447,10 @@ export function* filterSessionEntries(
       );
     }
     if (inPulse) {
-      const hour = Math.min(23, Math.floor((activityTs - activityPulse.since) / 3_600_000));
+      const hour = Math.min(
+        activityPulse.hours.length - 1,
+        Math.floor((activityTs - activityPulse.since) / 3_600_000),
+      );
       activityPulse.hours[hour] = (activityPulse.hours[hour] ?? 0) + 1;
       activityPulse.sessions += 1;
       activityPulse.started += Number((entry.createdAt ?? -1) >= activityPulse.since);

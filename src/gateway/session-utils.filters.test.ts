@@ -42,6 +42,7 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
       group: "",
       pinned: false,
       activityPulseSince: 0,
+      activityPulseUntil: 86_400_000,
       profileRelation: { profileId: "profile-ada", relationship: "involving" },
     }),
   ).toBe(true);
@@ -52,6 +53,8 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
     { pinned: "false" },
     { activityPulseSince: -1 },
     { activityPulseSince: "0" },
+    { activityPulseUntil: -1 },
+    { activityPulseUntil: "0" },
     { profileRelation: { profileId: "", relationship: "involving" } },
   ]) {
     expect(Value.Check(SessionsListParamsSchema, invalid), JSON.stringify(invalid)).toBe(false);
@@ -104,12 +107,67 @@ it("aggregates activity after person filtering and before pagination using the a
   expect(result.totalCount).toBe(4);
   expect(result.activityPulse).toEqual({
     since,
-    hours: [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    sessions: 3,
-    started: 2,
+    until: since + 24 * 3_600_000,
+    hours: [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    sessions: 2,
+    started: 1,
     running: 0,
     people: 2,
   });
+});
+
+it.each([23, 25])("bounds the activity pulse to a %s-hour civil day", (hours) => {
+  const since = Date.UTC(2026, 8, 27);
+  const until = since + hours * 3_600_000;
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: {
+      "agent:main:last-hour": entry({ lastActivityAt: until - 1, createdAt: since }),
+      "agent:main:tomorrow": entry({ lastActivityAt: until, createdAt: until }),
+    },
+  });
+  onTestFinished(projection.dispose);
+  const result = runSynchronousWork(
+    filterSessionEntries({
+      ...prepareSessionRowSelection(projection, {
+        activityPulseSince: since,
+        activityPulseUntil: until,
+      }),
+      projectActiveRun: () => ({ active: true }),
+    }),
+  );
+  expect(result.activityPulse).toEqual({
+    since,
+    until,
+    hours: [...Array.from({ length: hours - 1 }, () => 0), 1],
+    sessions: 1,
+    started: 1,
+    running: 2,
+  });
+});
+
+it.each([
+  { label: "missing", until: undefined },
+  { label: "not after since", until: Date.UTC(2026, 8, 27) },
+  { label: "longer than a civil day", until: Date.UTC(2026, 8, 27) + 26 * 3_600_000 },
+  { label: "absurd", until: Number.MAX_SAFE_INTEGER },
+])("falls back to a 24-hour window when the requested end is $label", ({ until }) => {
+  const since = Date.UTC(2026, 8, 27);
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: { "agent:main:late": entry({ lastActivityAt: since + 24 * 3_600_000 - 1 }) },
+  });
+  onTestFinished(projection.dispose);
+  const result = runSynchronousWork(
+    filterSessionEntries(
+      prepareSessionRowSelection(projection, {
+        activityPulseSince: since,
+        ...(until === undefined ? {} : { activityPulseUntil: until }),
+      }),
+    ),
+  );
+  expect(result.activityPulse).toMatchObject({ until: since + 24 * 3_600_000, sessions: 1 });
+  expect(result.activityPulse?.hours).toHaveLength(24);
 });
 
 it("counts every live session as running now and only today's sessions in the buckets", () => {

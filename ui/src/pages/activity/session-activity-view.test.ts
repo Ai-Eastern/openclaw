@@ -77,6 +77,7 @@ describe("session activity semantics", () => {
     hours[14] = 3;
     input.result!.activityPulse = {
       since,
+      until: new Date(2026, 8, 28).getTime(),
       hours,
       sessions: 38,
       started: 12,
@@ -105,6 +106,38 @@ describe("session activity semantics", () => {
     expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain("38");
     expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain(peakHour);
     expect(bars[10]?.getAttribute("title")).toBe(`${peakHour} · 12 sessions`);
+
+    input.result!.peopleIncomplete = true;
+    render(renderSessionActivityView(input), container);
+    const peopleStat = pulse.querySelectorAll(".activity-pulse__stats > span")[2]!;
+    expect(peopleStat.querySelector("b")?.textContent?.trim()).toBe("6+");
+    expect(peopleStat.getAttribute("title")).toBe(
+      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
+    );
+  });
+
+  it("renders every elapsed hour and the next midnight on a 25-hour day", () => {
+    const since = new Date(2026, 10, 1).getTime();
+    const until = new Date(2026, 10, 2).getTime();
+    vi.spyOn(Date, "now").mockReturnValue(since + 24.5 * 3_600_000);
+    const input = props();
+    input.result!.activityPulse = {
+      since,
+      until,
+      hours: Array.from({ length: 25 }, () => 1),
+      sessions: 25,
+      started: 0,
+      running: 0,
+    };
+    render(renderSessionActivityView(input), container);
+
+    const pulse = container.querySelector(".activity-pulse")!;
+    const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
+    expect(bars).toHaveLength(25);
+    expect(bars[24]?.getAttribute("data-hour")).toBe("current");
+    expect(pulse.querySelector(".activity-pulse__axis")?.lastElementChild?.textContent).toBe(
+      new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(until),
+    );
   });
 
   it("keeps a zero-activity pulse and omits an unavailable people count", () => {
@@ -112,6 +145,7 @@ describe("session activity semantics", () => {
     const input = props();
     input.result!.activityPulse = {
       since,
+      until: new Date(2026, 8, 28).getTime(),
       hours: Array.from({ length: 24 }, () => 0),
       sessions: 0,
       started: 0,
