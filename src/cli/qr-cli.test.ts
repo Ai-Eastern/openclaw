@@ -69,6 +69,7 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
   return {
     gateway: {
       ...(params?.withTailscale ? { tailscale: { mode: "serve" } } : {}),
+      publicOrigin: "https://gateway.example.test",
       remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
       auth: { mode: "token", token: "local-tok" },
     },

@@ -33,7 +33,7 @@ openclaw devices approve <requestId>
 
 ## Options
 
-- `--remote`: prefer `gateway.remote.url`; falls back to `gateway.tailscale.mode=serve|funnel` if that URL is unset. Ignores `device-pair` plugin `publicUrl`.
+- `--remote`: use `gateway.remote.url` ahead of this Gateway's `gateway.publicOrigin`, keeping the endpoint aligned with remote credentials. Ignores `device-pair` plugin `publicUrl`; explicit `--url` or `--public-url` still takes precedence.
 - `--url <url>`: override the gateway URL used in the payload
 - `--public-url <url>`: override the public URL used in the payload
 - `--token <token>`: override the gateway token the bootstrap flow authenticates against
@@ -77,6 +77,13 @@ the Gateway. Custom Serve ports and retired named-Service routes require the
 same manual cleanup; Doctor prints the relevant guidance.
 
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
+
+URL selection uses an explicit pairing override first, then an explicitly
+preferred remote URL, then `gateway.publicOrigin`, Tailscale Serve/Funnel, a
+non-preferred remote URL, and bind-derived addresses. Without `--remote`, the
+configured `plugins.entries.device-pair.config.publicUrl` supplies the pairing
+override. `gateway.publicOrigin` identifies this Gateway's own ingress; it
+precedes automatic discovery but never replaces an explicitly selected remote URL.
 
 ## Auth resolution (no `--remote`)
 

@@ -15,7 +15,7 @@ describe("pairing public origin", () => {
   });
 
   it.each(["serve", "funnel"] as const)(
-    "prefers explicit pairing ingress over remote URLs and Tailscale %s",
+    "prefers public ingress over automatic remote URLs and Tailscale %s",
     async (mode) => {
       const config = {
         gateway: {
@@ -26,7 +26,7 @@ describe("pairing public origin", () => {
         },
       } satisfies Parameters<typeof resolvePairingGatewayUrl>[0];
       const runCommandWithTimeout = vi.fn();
-      const resolveOptions = { ...options, preferRemoteUrl: true, runCommandWithTimeout };
+      const resolveOptions = { ...options, runCommandWithTimeout };
       await expect(resolvePairingGatewayUrl(config, resolveOptions)).resolves.toEqual({
         url: "wss://gateway.example.test",
         source: "gateway.publicOrigin",
@@ -34,6 +34,7 @@ describe("pairing public origin", () => {
       await expect(
         resolvePairingGatewayUrl(config, {
           ...resolveOptions,
+          preferRemoteUrl: true,
           publicUrl: "https://pairing.example.test",
         }),
       ).resolves.toEqual({
@@ -41,6 +42,34 @@ describe("pairing public origin", () => {
         source: "plugins.entries.device-pair.config.publicUrl",
       });
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      preferRemoteUrl: undefined,
+      url: "wss://gateway.example.test",
+      source: "gateway.publicOrigin",
+    },
+    {
+      preferRemoteUrl: true,
+      url: "wss://remote.example.test",
+      source: "gateway.remote.url",
+    },
+  ])(
+    "selects $source when preferRemoteUrl=$preferRemoteUrl",
+    async ({ preferRemoteUrl, url, source }) => {
+      await expect(
+        resolvePairingGatewayUrl(
+          {
+            gateway: {
+              publicOrigin: "https://gateway.example.test",
+              remote: { url: "wss://remote.example.test" },
+            },
+          },
+          { ...options, preferRemoteUrl },
+        ),
+      ).resolves.toEqual({ url, source });
     },
   );
 

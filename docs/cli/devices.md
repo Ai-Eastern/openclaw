@@ -92,12 +92,13 @@ refuses to mint a link. For a loopback Gateway behind public HTTPS ingress, set
 source address in `gateway.trustedProxies`.
 
 Join codes, `/pair`, and cloud node enrollment share endpoint selection:
-`plugins.entries.device-pair.config.publicUrl` overrides `gateway.publicOrigin`,
-then discovery falls back to Tailscale Serve/Funnel, `gateway.remote.url`, and
-bind-derived addresses. Callers that explicitly prefer the remote URL move it
-ahead of Tailscale discovery; callers targeting the local Gateway omit it.
-The two explicit public settings take precedence in either case. HTTP(S) URLs
-become matching `ws:`/`wss:` pairing endpoints.
+`plugins.entries.device-pair.config.publicUrl` comes first, followed by an explicitly
+preferred `gateway.remote.url`, then `gateway.publicOrigin`. Remaining discovery
+tries Tailscale Serve/Funnel, the non-preferred remote URL, and bind-derived
+addresses. `publicOrigin` identifies this Gateway's own ingress, so it takes
+precedence over automatic discovery but does not override explicit remote
+selection. Callers targeting the local Gateway omit the remote URL. HTTP(S)
+URLs become matching `ws:`/`wss:` pairing endpoints.
 
 For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).

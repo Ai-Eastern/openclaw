@@ -321,6 +321,18 @@ export async function resolvePairingGatewayUrl(
     return { error: "Configured publicUrl is invalid." };
   }
 
+  const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
+  const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
+  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
+  const remoteResult = hasRemoteUrl
+    ? remoteUrl
+      ? { url: remoteUrl, source: "gateway.remote.url" }
+      : { error: "Configured gateway.remote.url is invalid." }
+    : undefined;
+  if (opts.preferRemoteUrl && remoteResult) {
+    return remoteResult;
+  }
+
   const publicOrigin = cfg.gateway?.publicOrigin?.trim();
   if (publicOrigin) {
     const url = normalizeUrl(publicOrigin, scheme);
@@ -328,15 +340,8 @@ export async function resolvePairingGatewayUrl(
       ? { url, source: "gateway.publicOrigin" }
       : { error: "Configured gateway.publicOrigin is invalid." };
   }
-
-  const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
-  const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
-  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
-  if (hasRemoteUrl && !remoteUrl) {
-    return { error: "Configured gateway.remote.url is invalid." };
-  }
-  if (opts.preferRemoteUrl && remoteUrl) {
-    return { url: remoteUrl, source: "gateway.remote.url" };
+  if (remoteResult?.error) {
+    return remoteResult;
   }
 
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -352,8 +357,8 @@ export async function resolvePairingGatewayUrl(
     return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
-  if (remoteUrl) {
-    return { url: remoteUrl, source: "gateway.remote.url" };
+  if (remoteResult) {
+    return remoteResult;
   }
 
   const advertisedLanHost =
