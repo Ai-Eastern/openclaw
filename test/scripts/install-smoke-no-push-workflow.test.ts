@@ -29,6 +29,7 @@ type WorkflowJob = {
   needs?: string | string[];
   outputs?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
+  "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
     matrix?: {
@@ -227,6 +228,7 @@ describe("install smoke no-push root image transport", () => {
     expect(trustedJobs.toSorted()).toEqual(
       [
         "bun_global_install_smoke",
+        "bun_only_runtime_smoke",
         "install-smoke-fast",
         "installer_smoke_candidate_payload",
         "installer_smoke_nonroot",
@@ -769,6 +771,73 @@ describe("install smoke no-push root image transport", () => {
     expect(JSON.stringify(bunConsumer)).not.toContain(
       "./.release-harness/.github/actions/setup-node-env",
     );
+
+    const bunOnlyConsumer = job(workflow, "bun_only_runtime_smoke");
+    expect(bunOnlyConsumer.needs).toEqual(["preflight", "installer_smoke_candidate_payload"]);
+    expect(bunOnlyConsumer.if).toBe(
+      "needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true' && !inputs.allow_frozen_target_scenario_omissions",
+    );
+    expect(bunOnlyConsumer["runs-on"]).toBe(bunConsumer["runs-on"]);
+    expect(bunOnlyConsumer["runs-on"]).toContain("inputs.runner_group");
+    expect(bunOnlyConsumer["runs-on"]).toContain("ubuntu-24.04");
+    expect(bunOnlyConsumer["timeout-minutes"]).toBe(20);
+    const bunOnlyNode = step(bunOnlyConsumer, "Setup Node for payload verification");
+    expect(bunOnlyNode).toMatchObject({
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
+    });
+    expect(step(bunOnlyConsumer, "Validate candidate payload artifact binding")).toBe(bunBinding);
+    const bunOnlyDownload = step(bunOnlyConsumer, "Download candidate payload artifact");
+    expect(bunOnlyDownload).toBe(step(bunConsumer, "Download candidate payload artifact"));
+    expect(bunOnlyDownload.with).toMatchObject({
+      path: "${{ runner.temp }}/install-smoke-candidate-payload",
+      "github-token": "${{ github.token }}",
+    });
+    expect(step(bunOnlyConsumer, "Verify candidate payload contents")).toBe(bunVerify);
+    const bunOnlySetup = step(bunOnlyConsumer, "Setup pinned Bun runtime");
+    expect(bunOnlySetup.uses).toBe("./.release-harness/.github/actions/setup-test-bun");
+    const bunOnlyRun = step(bunOnlyConsumer, "Run Bun-only runtime smoke");
+    expect(bunOnlyRun).toMatchObject({
+      "working-directory": ".release-harness",
+      env: {
+        OPENCLAW_BUN_ONLY_SMOKE_PACKAGE_TGZ:
+          "${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",
+        OPENCLAW_BUN_ONLY_SMOKE_ARTIFACT_DIR: "${{ runner.temp }}/bun-only-runtime-smoke",
+        OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE: "1",
+      },
+      run: "bash scripts/e2e/bun-only-runtime-smoke.sh",
+    });
+    const bunOnlyUpload = step(bunOnlyConsumer, "Upload Bun-only runtime smoke artifacts");
+    expect(bunOnlyUpload).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "bun-only-runtime-smoke-${{ github.run_attempt }}",
+        path: "${{ runner.temp }}/bun-only-runtime-smoke",
+        "retention-days": 14,
+        "if-no-files-found": "ignore",
+      },
+    });
+    expect(bunOnlyConsumer.steps).toEqual([
+      step(bunOnlyConsumer, "Checkout trusted release harness"),
+      bunOnlyNode,
+      step(bunOnlyConsumer, "Restore exact trusted workflow revision"),
+      bunBinding,
+      bunOnlyDownload,
+      bunVerify,
+      bunOnlySetup,
+      bunOnlyRun,
+      bunOnlyUpload,
+    ]);
+    for (const forbidden of [
+      "setup-node-env",
+      "setup-release-harness",
+      "blacksmith",
+      "npm install -g bun",
+      "pnpm install",
+    ]) {
+      expect(JSON.stringify(bunOnlyConsumer)).not.toContain(forbidden);
+    }
   });
 
   it("packages candidate code only in an isolated image and verifies the sealed payload", () => {
