@@ -2470,10 +2470,11 @@ describe("CI changed Node test plan", () => {
     expectAllExtensionConfigs(shards);
   });
 
-  it("keeps fallback config processes serial while filling independent job budgets", () => {
-    const shards = createChangedExtensionFallbackShards([
-      "scripts/lib/ci-changed-node-test-plan.mts",
-    ]);
+  it("keeps canonical PR fallback config processes serial while filling independent job budgets", () => {
+    const changedPaths = ["scripts/lib/ci-changed-node-test-plan.mts"];
+    const shards = createChangedExtensionFallbackShards(changedPaths, {
+      includePrExemptRuntimeTests: false,
+    });
     const groups = fallbackGroups(shards);
     const bundles = shards.filter((shard) => shard.groups);
     expectAllExtensionConfigs(shards);
@@ -2509,8 +2510,11 @@ describe("CI changed Node test plan", () => {
         compactMode: "pull-request",
         runnerBackend,
         includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
         compactNodeJobCap: 130 - shards.filter((job) => !job.requiresDist).length,
-        changedPaths: ["scripts/lib/ci-changed-node-test-plan.mts"],
+        changedPaths,
       });
       expect(compact.length).toBeLessThanOrEqual(90);
       expect(

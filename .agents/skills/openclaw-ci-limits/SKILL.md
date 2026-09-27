@@ -446,12 +446,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   pins and complete timing-history floors; no blanket increase in sharding.
 - Blacksmith and hybrid compact bins with multiple ordinary groups request the
   existing 32-vCPU class and two child slots with a 360s aggregate budget.
-  Gateway-exclusive serial bins and numbered tooling bins use a 300s test
+  Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
   budget. Ordinary self-hosted bins share promoted capacity across logical
   classes; the existing group exchange fills stranded slots without raising caps.
   Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
   matrix predictions use that same queue. Admission retains aggregate work caps
   and separately charges the measured 60s runtime preparation.
+  Hosted hourly tooling retains its 720s total budget (660s work plus 60s setup)
+  with complete hosted file prices and no native wall observations.
   Compatible two-slot bins use the time budget without the ten-group cutoff;
   serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
   exclusive bins retain 150s by default, and groups above their serial cap stay alone.

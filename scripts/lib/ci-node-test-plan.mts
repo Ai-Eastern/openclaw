@@ -5168,7 +5168,7 @@ function createCompactNodeTestShardBundles(
           (jobs, runner) =>
             rebalanceMeasuredSerialJobs(jobs, {
               runner,
-              useNativeObservations: !hostedHourly,
+              profile: hostedHourly ? "hosted-hourly" : "native",
               estimateGroup: (group) => ({
                 seconds: estimateParallelToolingSeconds(
                   group,

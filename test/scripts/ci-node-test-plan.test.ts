@@ -858,25 +858,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("packs hosted hourly tooling only with complete supplied prices and ignores native tails", () => {
-    const tooling = measuredToolingFixture().slice(0, 2);
+    const tooling = measuredToolingFixture()
+      .slice(0, 2)
+      .map((job) => Object.assign({}, job, { predictedSeconds: 220 }));
     const cli = structuredClone(measuredCompactFixture.cliTailJob);
     const options = {
       ...measuredPackingOptions,
-      useNativeObservations: false,
-      estimateGroup: () => ({ seconds: 100, complete: false }),
+      profile: "hosted-hourly" as const,
+      estimateGroup: () => ({ seconds: 220, complete: false }),
     };
     const unmeasured = rebalanceMeasuredSerialJobs([...tooling, cli], options);
     expect(unmeasured).toHaveLength(3);
     expect(unmeasured).toContainEqual(cli);
     const packed = rebalanceMeasuredSerialJobs([...tooling, cli], {
       ...options,
-      estimateGroup: () => ({ seconds: 100, complete: true }),
+      estimateGroup: () => ({ seconds: 220, complete: true }),
     });
     expect(packed).toHaveLength(2);
     expect(packed).toContainEqual(cli);
     expect(sortedMeasuredGroups(packed)).toEqual(sortedMeasuredGroups([...tooling, cli]));
     expect(packed.every((job) => job.planConcurrency === 1)).toBe(true);
     expect(packed.every((job) => job.timeoutMinutes === 20)).toBe(true);
+    expect(packed.find((job) => job !== cli)?.predictedSeconds).toBe(440);
+    const native = rebalanceMeasuredSerialJobs(tooling, {
+      ...options,
+      profile: "native",
+      estimateGroup: () => ({ seconds: 220, complete: true }),
+    });
+    expect(native).toHaveLength(2);
+    expect(native.every((job) => job.predictedSeconds === 220)).toBe(true);
   });
 
   it("splits the observed CLI pair with its measured wall floors and complete child contracts", () => {

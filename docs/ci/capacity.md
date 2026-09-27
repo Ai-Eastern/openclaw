@@ -481,9 +481,12 @@ Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
-The 90/70/130 compact/push/PR caps remain unchanged. Tooling bins retain separate
+The 90/70/130 compact/push/PR caps remain unchanged. Native tooling bins retain separate
 two-worker child processes and a 300-second test budget; their measured packing
-also reserves 60 seconds for job setup.
+also reserves 60 seconds for job setup. Hosted hourly tooling retains its existing
+720-second total budget (660 seconds of tests plus setup) to keep the integration
+tier within the hourly row cap. It uses complete hosted file prices without native
+wall observations.
 
 The large workspace inventory proof runs in its own `agentic-gateway-core-inventory`
 invocation, with exclusive plan admission in full CI plans. Its
