@@ -172,6 +172,7 @@ export function classifyJob(
     failed.some(
       (step) =>
         /\b(test|tests|vitest)\b/iu.test(step.name) &&
+        !/\btest[- ]types\b/iu.test(step.name) &&
         !/^(setup|install|prepare|download|upload|cache)\b/iu.test(step.name),
     )
   ) {
@@ -664,7 +665,13 @@ async function jobEvidence(run: Run) {
       if (existsSync(cache)) {
         log = readFileSync(cache, "utf8");
       } else {
-        log = githubRead(["api", `repos/${REPO}/actions/jobs/${job.id}/logs`]);
+        // Native gh rejects ANSI-colored job logs by default. Capture them as data;
+        // parsing and excerpts strip terminal controls before use.
+        log = githubRead([
+          "api",
+          "--allow-escape-sequences",
+          `repos/${REPO}/actions/jobs/${job.id}/logs`,
+        ]);
         mkdirSync(join(OUT, "raw"), { recursive: true });
         writeFileSync(cache, log);
       }

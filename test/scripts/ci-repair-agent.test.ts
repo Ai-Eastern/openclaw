@@ -84,6 +84,12 @@ describe("failure collection", () => {
       ),
     ).toEqual(["extensions/chat/send.spec.ts", "src/example.test.ts", "ui/src/editor.test.ts"]);
   });
+  it.each(["Run hosted core test-types stripe", "Test types"])(
+    "does not treat %s as runtime test execution",
+    (step) => {
+      expect(classifyJob(job("check-test-types", [step]))).toBe("unknown");
+    },
+  );
   it("skips infrastructure-only failures, retaining test and unknown failures", () => {
     const setup = job("node", ["Install dependencies"]);
     const aggregate = job("openclaw/ci-gate", ["Verify selected CI lanes"]);
