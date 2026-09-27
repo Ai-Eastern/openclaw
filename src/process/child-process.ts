@@ -6,13 +6,9 @@ import type { ChildProcess } from "node:child_process";
 const EXIT_STDIO_GRACE_MS = 100;
 const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 
-/** Broker result delivery can follow native exit and EOF on the transferred pipes. */
-export function hasChildProcessExitedAndDrained(child: ChildProcess): boolean {
-  return (
-    (child.exitCode !== null || child.signalCode !== null) &&
-    (child.stdout === null || child.stdout.readableEnded) &&
-    (child.stderr === null || child.stderr.readableEnded)
-  );
+/** Native and broker exit notifications can precede output EOF. */
+export function hasChildProcessExited(child: ChildProcess): boolean {
+  return child.exitCode != null || child.signalCode != null;
 }
 
 /**
@@ -69,7 +65,7 @@ export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => v
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
   // A command deadline can transfer output here after the root has already exited.
-  if (child.exitCode != null || child.signalCode != null) {
+  if (hasChildProcessExited(child)) {
     onExit();
   } else {
     child.once("exit", onExit);

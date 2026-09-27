@@ -1,10 +1,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  hasChildProcessExitedAndDrained,
-  releaseChildProcessOutputAfterExit,
-} from "./child-process.js";
+import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import { createSanitizedCommandError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
@@ -74,6 +71,7 @@ export async function runExec(
       cancelSignal: resolvedOptions?.signal,
       cwd: resolvedOptions?.cwd,
       encoding: "buffer",
+      executionTimeoutMs: timeout,
       env: resolvedOptions?.env,
       forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
       ...(resolvedOptions?.input !== undefined ? { input: resolvedOptions.input } : {}),
@@ -101,7 +99,7 @@ export async function runExec(
       releaseCancellation();
       // Caller abort is already bridged; the command deadline owns its stop request.
       if (reason === "timeout") {
-        if (hasChildProcessExitedAndDrained(subprocess.nodeChildProcess)) {
+        if (hasChildProcessExited(subprocess.nodeChildProcess)) {
           return;
         }
         deadlineExpired = true;
@@ -216,7 +214,7 @@ export async function runExec(
         stderr?: unknown;
         timedOut?: boolean;
       };
-      if (deadlineExpired && !errorWithOutput.timedOut) {
+      if (deadlineExpired || errorWithOutput.timedOut) {
         const message = createSanitizedCommandError({ timedOut: true }).message;
         if (err instanceof Error) {
           err.stack = err.stack?.replace(err.message, message);

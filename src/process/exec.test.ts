@@ -688,7 +688,7 @@ describe("runCommandBuffered", () => {
     { exitCode: 7, escaped: false, timeoutMs: 50 },
     { exitCode: 0, escaped: true, timeoutMs: 250 },
   ])(
-    "drains descendants on failure or the post-success timeout (exit $exitCode, escaped=$escaped)",
+    "bounds descendant output and preserves root exit $exitCode (escaped=$escaped)",
     { timeout: 5_000 },
     async ({ exitCode, escaped, timeoutMs }) =>
       withTempDir("openclaw-exec-descendant-", async (dir) => {
@@ -742,9 +742,8 @@ describe("runCommandBuffered", () => {
           expect(settled).toBe(false);
 
           if (escaped) {
-            // This pipe holder has its own group: root-group termination cannot
-            // close its pipes. Quiet successful output still belongs to the deadline.
-            await vi.advanceTimersByTimeAsync(101);
+            // This escaped pipe holder outlives the root, but cannot extend its bounded drain.
+            await vi.advanceTimersByTimeAsync(99);
             await new Promise<void>((resolve) => {
               setImmediate(resolve);
             });
@@ -757,14 +756,9 @@ describe("runCommandBuffered", () => {
             // Bound the real close observation separately from the frozen policy
             // clock so missing post-termination release still reaches test cleanup.
             const closed = once(parent, "close", { signal: AbortSignal.timeout(1_000) });
-            await vi.advanceTimersByTimeAsync(timeoutMs - 101);
-            await vi.advanceTimersToNextTimerAsync();
-            await vi.advanceTimersByTimeAsync(100);
-            // Output release runs in the next timers phase so buffered pipe I/O
-            // gets a poll turn on both Node and Bun.
-            await vi.advanceTimersByTimeAsync(1);
+            await vi.advanceTimersByTimeAsync(2);
             await closed;
-            expect(await command).toMatchObject({ code: null, termination: "timeout" });
+            expect(await command).toMatchObject({ code: 0, termination: "exit" });
             expect(isPidAlive(descendantPid)).toBe(true);
             expect(existsSync(termPath)).toBe(false);
             return;
@@ -787,11 +781,7 @@ describe("runCommandBuffered", () => {
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           // Force delivery now has a separate bounded exit-observation phase.
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
-          expect(await command).toMatchObject(
-            exitCode === 0
-              ? { code: null, termination: "timeout" }
-              : { code: exitCode, termination: "exit" },
-          );
+          expect(await command).toMatchObject({ code: exitCode, termination: "exit" });
           vi.useRealTimers();
           expect(await waitForPidToExit(descendantPid)).toBe(true);
         } finally {

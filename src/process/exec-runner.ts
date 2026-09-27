@@ -9,10 +9,7 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  hasChildProcessExitedAndDrained,
-  releaseChildProcessOutputAfterExit,
-} from "./child-process.js";
+import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
 import {
   appendCapturedOutput,
   appendPreservedOutputLines,
@@ -233,6 +230,7 @@ async function runCommandWithOutputEncoding(
     cwd,
     detached: Boolean(killProcessTree && process.platform !== "win32"),
     encoding: "buffer",
+    executionTimeoutMs: resolvedTimeoutMs,
     baseEnv,
     env,
     forceKillAfterDelay: resolvedKillGraceMs,
@@ -283,17 +281,17 @@ async function runCommandWithOutputEncoding(
     );
     commandSettled = true;
     await startupReady?.catch(() => {});
+    if (ownsOutputDeadline && childExitState?.code === 0) {
+      // Bounded pipe drain can finish before the deadline; join the remaining owned tree.
+      terminationController.terminate();
+    }
     return await terminationController.settle();
   })();
   retainCommandProcessCleanup(processCleanup);
   void processCleanup.catch(() => {});
   nodeChild.once("exit", (code, signalValue) => {
     childExitState = { code, signal: signalValue };
-    // Successful tree output belongs to its command deadline, not the diagnostic
-    // idle cutoff. Failed, terminated, and unowned output still gets a bounded drain.
-    if (!ownsOutputDeadline || code !== 0 || termination) {
-      releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
-    }
+    releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
     // An inner timeout can become an ordinary failed exit while its descendants survive.
     // Retain the existing tree owner through its drain without changing that exit result.
     if (killProcessTree && !termination && (code !== 0 || options.requireProcessTreeExtinction)) {
@@ -302,14 +300,22 @@ async function runCommandWithOutputEncoding(
   });
 
   const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
-    // Failed roots already own a drain; later deadlines must preserve their exit result.
-    // Successful POSIX roots retain deadline ownership of inherited descendants.
-    // Output caps remain meaningful for bytes drained after either exit.
+    if (
+      !termination &&
+      !commandSettled &&
+      (reason === "timeout" || reason === "no-output-timeout") &&
+      (childExitState || hasChildProcessExited(nodeChild))
+    ) {
+      // The root result is final; the primary deadline still stops its owned descendants.
+      if (ownsOutputDeadline) {
+        terminationController.terminate();
+      }
+      return;
+    }
+    // Output caps and explicit cancellation remain meaningful after root exit.
     if (
       termination ||
       commandSettled ||
-      ((reason === "timeout" || reason === "no-output-timeout") &&
-        hasChildProcessExitedAndDrained(nodeChild)) ||
       (childExitState &&
         reason !== "output-limit" &&
         (!ownsExitedProcessTree || childExitState.code !== 0))
@@ -550,6 +556,9 @@ async function runCommandWithOutputEncoding(
     clearTimers();
     releaseOutput?.();
   });
+  if (result.timedOut) {
+    termination ??= "timeout";
+  }
   let cleanup = await processCleanup;
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   if (cleanup === "normal" && resolvedSignal) {

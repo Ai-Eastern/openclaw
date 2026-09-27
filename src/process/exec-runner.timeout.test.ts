@@ -163,25 +163,42 @@ describe("command deadline event ordering", () => {
     expect(command.kill).toHaveBeenCalledOnce();
   });
 
-  it.each(["tree", "exec"] as const)(
-    "preserves %s success when broker result delivery follows exit and output drainage",
+  it.each(["command", "tree", "exec"] as const)(
+    "preserves %s success when exit precedes the deadline decision and EOF follows it",
     async (runner) => {
       const command = createCommand();
       const result =
-        runner === "tree"
-          ? runCommandWithTimeout([process.execPath], { timeoutMs: 20, killProcessTree: true })
-          : runExec(process.execPath, [], { timeoutMs: 20, logOutput: false });
+        runner === "exec"
+          ? runExec(process.execPath, [], { timeoutMs: 20, logOutput: false })
+          : runCommandWithTimeout([process.execPath], {
+              timeoutMs: 20,
+              killProcessTree: runner === "tree",
+            });
       command.emitExit(0);
+      await vi.advanceTimersByTimeAsync(21);
       command.child.stdout?.end("complete");
       command.child.stderr?.end();
-      await vi.advanceTimersByTimeAsync(21);
       command.settle();
 
       await expect(result).resolves.toMatchObject({
         stdout: "complete",
-        ...(runner === "tree" ? { code: 0, termination: "exit" } : {}),
+        ...(runner !== "exec" ? { code: 0, termination: "exit" } : {}),
       });
       expect(command.kill).not.toHaveBeenCalled();
     },
   );
+
+  it("bounds inherited output after a successful tree root exits", async () => {
+    const command = createCommand();
+    const result = runCommandWithTimeout([process.execPath], {
+      timeoutMs: 1_000,
+      killProcessTree: true,
+    });
+    command.emitExit(0);
+    await vi.advanceTimersByTimeAsync(101);
+    const drained = command.child.stdout.destroyed && command.child.stderr.destroyed;
+    command.settle();
+    await expect(result).resolves.toMatchObject({ code: 0, termination: "exit" });
+    expect(drained).toBe(true);
+  });
 });
