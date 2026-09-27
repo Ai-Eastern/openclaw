@@ -102,17 +102,7 @@ export class CodexNativeSubagentTaskMirror {
     } while (pending !== this.pendingWrite);
   }
 
-  queueTaskEvent(emit: () => void | Promise<void>): Promise<void> {
-    return this.enqueue(async () => {
-      await emit();
-    });
-  }
-
-  enqueuePersistence(write: () => Promise<void>): Promise<void> {
-    return this.enqueue(write);
-  }
-
-  private enqueue(write: () => Promise<void>): Promise<void> {
+  enqueuePersistence(write: () => void | Promise<void>): Promise<void> {
     this.pendingWrites += 1;
     const pending = this.pendingWrite.then(write, write).finally(() => {
       this.pendingWrites -= 1;
@@ -226,7 +216,7 @@ export class CodexNativeSubagentTaskMirror {
     }
     this.runIdsByThreadId.set(threadId, runId);
     const selection: TaskRunSelection = { runId, assignment: this.assignments.get(runId) };
-    const creation = this.enqueue(async () => {
+    const creation = this.enqueuePersistence(async () => {
       const read = await runtime.prepareRead();
       const previous = read().find((task) => task.runId === attempt.previousRunId);
       const created = await this.createRunningTask({
@@ -256,7 +246,7 @@ export class CodexNativeSubagentTaskMirror {
   recordNativeTurn(runId: string, turnId: string): Promise<void> {
     const runtime = this.getRuntime();
     const selection: TaskRunSelection = { runId, assignment: this.assignments.get(runId) };
-    return this.enqueue(async () => {
+    return this.enqueuePersistence(async () => {
       const ownership = this.ownership(selection);
       const read = await runtime.prepareRead();
       const task = read().find((record) => record.runId === runId);
@@ -306,7 +296,7 @@ export class CodexNativeSubagentTaskMirror {
         selections.set(threadId, { runId, assignment: this.assignments.get(runId) });
       }
     }
-    return this.enqueue(() => this.mirrorNotification(notification, selections));
+    return this.enqueuePersistence(() => this.mirrorNotification(notification, selections));
   }
 
   private async mirrorNotification(

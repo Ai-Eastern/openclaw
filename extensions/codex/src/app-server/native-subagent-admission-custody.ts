@@ -464,7 +464,7 @@ export class CodexNativeSubagentAdmissionCustody {
       }
       emitAgentEvent({ ...event, runId: child.runId, agentId: child.agentId });
     };
-    const pending = parent?.mirror ? parent.mirror.queueTaskEvent(emit) : emit();
+    const pending = parent?.mirror ? parent.mirror.enqueuePersistence(emit) : emit();
     void pending.catch((error: unknown) => {
       embeddedAgentLog.warn("Failed to emit Codex native task activity", {
         parentThreadId: child.parentThreadId,
