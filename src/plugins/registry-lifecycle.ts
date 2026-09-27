@@ -17,7 +17,7 @@ import {
   resolvePluginInstanceOwner,
   type PluginInstanceOwner,
 } from "./plugin-instance-scope.js";
-import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 
 type PluginRegistryLifecycleState = {
@@ -41,12 +41,6 @@ type PluginRegistryLifecycleStore = {
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
   registryLifetimes?: WeakMap<PluginRegistry, PluginRegistryLifetime>;
   gatewayOwners?: WeakMap<PluginRegistry, PluginRegistryGatewayOwner | null>;
-};
-
-/** The Gateway registry owner that admitted work in a registry generation. */
-export type PluginRegistryGatewayOwner = {
-  /** The owner's published registry while it stays open; closing owners return undefined. */
-  readonly current: () => PluginRegistry | undefined;
 };
 
 const lifecycle = resolveGlobalSingleton<PluginRegistryLifecycleStore>(

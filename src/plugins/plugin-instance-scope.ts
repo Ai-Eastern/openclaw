@@ -9,8 +9,7 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
 } from "./plugin-instance.types.js";
-import type { PluginRegistryGatewayOwner } from "./registry-lifecycle.js";
-import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
