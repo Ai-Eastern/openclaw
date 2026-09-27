@@ -202,27 +202,49 @@ function createPluginAppPolicyContext(
       mcpServerNames: ["google-calendar-mcp"],
     },
   ];
+  const entries = apps.map((app) => ({
+    appId: app.appId,
+    policy: {
+      configKey: app.pluginName,
+      marketplaceName: "openai-curated" as const,
+      pluginName: app.pluginName,
+      allowDestructiveActions: params.allowDestructiveActions ?? false,
+      ...(params.destructiveApprovalMode
+        ? { destructiveApprovalMode: params.destructiveApprovalMode }
+        : {}),
+      mcpServerNames: app.mcpServerNames,
+    },
+  }));
   return {
     fingerprint: "plugin-policy-1",
-    apps: Object.fromEntries(
-      apps.map((app) => [
-        app.appId,
-        {
-          configKey: app.pluginName,
-          marketplaceName: "openai-curated" as const,
-          pluginName: app.pluginName,
-          allowDestructiveActions: params.allowDestructiveActions ?? false,
-          ...(params.destructiveApprovalMode
-            ? { destructiveApprovalMode: params.destructiveApprovalMode }
-            : {}),
-          mcpServerNames: app.mcpServerNames,
-        },
-      ]),
-    ),
+    apps: Object.fromEntries(entries.map(({ appId, policy }) => [appId, policy])),
     pluginAppIds: Object.fromEntries(
       apps.map((app) => [app.pluginName, appsForPlugin(apps, app.pluginName)]),
     ),
+    nativePlugins: Object.fromEntries(
+      entries.map(({ policy }) => [`${policy.pluginName}@openai-curated`, policy]),
+    ),
+    mcpServers: Object.fromEntries(
+      entries.flatMap(({ policy }) =>
+        policy.mcpServerNames.map((serverName) => [
+          serverName,
+          `${policy.pluginName}@openai-curated`,
+        ]),
+      ),
+    ),
   };
+}
+
+function activeCalendarMcpAttribution(serverName: string) {
+  return serverName === "google-calendar-mcp"
+    ? {
+        id: "calendar-item-1",
+        server: serverName,
+        tool: "create_event.raw",
+        arguments: { calendar: "work" },
+        pluginId: "google-calendar@openai-curated",
+      }
+    : undefined;
 }
 
 function createConnectorAppPolicyContext(
@@ -295,6 +317,7 @@ describe("Codex app-server elicitation bridge", () => {
       requestParams: buildPluginApprovalElicitation(),
       paramsForRun: params,
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+      getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
     });
 
     expect(result).toEqual({ action: "decline", content: null, _meta: null });
@@ -879,6 +902,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: false }),
+      getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
       autoApproveMcpTools: true,
     });
 
@@ -896,6 +920,7 @@ describe("Codex app-server elicitation bridge", () => {
       const result = await handleCodexAppServerElicitationRequest({
         requestParams: buildPluginApprovalElicitation(),
         pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+        getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
         signal: controller.signal,
       });
 
@@ -1015,6 +1040,266 @@ describe("Codex app-server elicitation bridge", () => {
       title: "Allow Google Calendar to create an event?",
       toolName: "codex_mcp_tool_approval",
       twoPhase: true,
+    });
+  });
+
+  it("binds plugin reviewer policy to the selected Codex app and active raw tool", async () => {
+    mockApprovalDecision("plugin:approval-calendar-tool", "allow-once");
+    const correlate = vi.fn((serverName: string, connectorId?: string) =>
+      serverName === "codex_apps" && connectorId === "connector_google_calendar"
+        ? {
+            id: "mcp-item-1",
+            server: serverName,
+            tool: "create_event.raw",
+            arguments: { calendar: "work" },
+          }
+        : undefined,
+    );
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          connector_id: "connector_google_calendar",
+          connector_name: "Google Calendar",
+          tool_title: "display title, not a tool ID",
+          tool_params_display: [{ name: "calendar", value: "work" }],
+        },
+      }),
+      pluginAppPolicyContext: createConnectorAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "auto",
+      }),
+      getActiveMcpToolCall: correlate,
+    });
+
+    expect(correlate).toHaveBeenCalledWith("codex_apps", "connector_google_calendar");
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      policySubject: {
+        pluginKey: "google-calendar",
+        appId: "connector_google_calendar",
+        tool: "create_event.raw",
+      },
+    });
+  });
+
+  it("omits unproven tool identity so configured tool overrides fail closed", async () => {
+    mockApprovalDecision("plugin:approval-calendar-unproven-tool", "allow-once");
+    await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          connector_id: "connector_google_calendar",
+          connector_name: "Google Calendar",
+          tool_params_display: [{ name: "calendar", value: "work" }],
+        },
+      }),
+      pluginAppPolicyContext: createConnectorAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "auto",
+      }),
+      getActiveMcpToolCall: () => ({
+        id: "different-item",
+        server: "codex_apps",
+        tool: "create_event.raw",
+        arguments: { calendar: "personal" },
+      }),
+    });
+
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      policySubject: {
+        pluginKey: "google-calendar",
+        appId: "connector_google_calendar",
+      },
+    });
+    expect(
+      (gatewayToolArg(0, 2) as { policySubject?: { tool?: string } }).policySubject?.tool,
+    ).toBeUndefined();
+  });
+
+  it("does not use a claimed app as the reviewer policy subject for another MCP server", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        serverName: "other-mcp",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          app_id: "google-calendar-app",
+        },
+      }),
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "auto",
+        apps: [
+          {
+            appId: "google-calendar-app",
+            pluginName: "google-calendar",
+            mcpServerNames: ["google-calendar-mcp"],
+          },
+          {
+            appId: "other-app",
+            pluginName: "other-plugin",
+            mcpServerNames: ["other-mcp"],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines a selected plugin server without a matching active Codex plugin item", async () => {
+    const context = createPluginAppPolicyContext({
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+    });
+    const getActiveMcpToolCallAttribution = vi.fn(() => undefined);
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      pluginAppPolicyContext: context,
+      getActiveMcpToolCallAttribution,
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(getActiveMcpToolCallAttribution).toHaveBeenCalledWith("google-calendar-mcp");
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("uses an MCP-only plugin's trusted owner and active raw tool for reviewer policy", async () => {
+    mockApprovalDecision("plugin:approval-mcp-only", "allow-once");
+    const getActiveMcpToolCallAttribution = vi.fn(() => ({
+      id: "mcp-item-1",
+      server: "docs",
+      tool: "render.raw",
+      arguments: { format: "plain" },
+      pluginId: "docs@company-tools",
+    }));
+
+    const owner = {
+      configKey: "docs",
+      marketplaceName: "company-tools" as const,
+      pluginName: "docs",
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto" as const,
+      mcpServerNames: ["docs"],
+    };
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        serverName: "docs",
+        _meta: { codex_approval_kind: "mcp_tool_call" },
+      }),
+      pluginAppPolicyContext: {
+        fingerprint: "mcp-only-policy",
+        apps: {},
+        pluginAppIds: {},
+        nativePlugins: { "docs@company-tools": owner },
+        mcpServers: { docs: "docs@company-tools" },
+      },
+      getActiveMcpToolCallAttribution,
+    });
+
+    expect(result).toEqual({ action: "accept", content: { approve: true }, _meta: null });
+    expect(getActiveMcpToolCallAttribution).toHaveBeenCalledWith("docs");
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      policySubject: { pluginKey: "docs", tool: "render.raw" },
+    });
+  });
+
+  it("uses the native plugin ID when plugin details omit the MCP server", async () => {
+    mockApprovalDecision("plugin:approval-missing-detail", "allow-once");
+    const context = createPluginAppPolicyContext({
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+    });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      pluginAppPolicyContext: { ...context, mcpServers: {} },
+      getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
+      autoApproveMcpTools: true,
+    });
+
+    expect(result).toEqual({ action: "accept", content: { approve: true }, _meta: null });
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      policySubject: { pluginKey: "google-calendar", tool: "create_event.raw" },
+    });
+  });
+
+  it("declines an attributed plugin call without a native owner binding", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        _meta: { codex_approval_kind: "mcp_tool_call" },
+      }),
+      pluginAppPolicyContext: { fingerprint: "legacy", apps: {}, pluginAppIds: {} },
+      getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
+      autoApproveMcpTools: true,
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps a user MCP server that shadows a plugin server on generic policy", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        _meta: { codex_approval_kind: "mcp_tool_call" },
+      }),
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+      getActiveMcpToolCallAttribution: (serverName) => ({
+        id: "shadow-item",
+        server: serverName,
+        tool: "create_event.raw",
+        arguments: {},
+        pluginId: null,
+      }),
+      autoApproveMcpTools: true,
+    });
+
+    expect(result).toEqual({ action: "accept", content: { approve: true }, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines ambiguous selected MCP server ownership before requesting approval", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        serverName: "shared-mcp",
+        _meta: { codex_approval_kind: "mcp_tool_call" },
+      }),
+      pluginAppPolicyContext: {
+        ...createPluginAppPolicyContext({ allowDestructiveActions: true }),
+        mcpServers: { "shared-mcp": null },
+      },
+      getActiveMcpToolCallAttribution: () => ({
+        id: "shared-item",
+        server: "shared-mcp",
+        tool: "create_event.raw",
+        arguments: {},
+        pluginId: "google-calendar@openai-curated",
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("uses the admitted MCP server owner for a plugin reviewer policy subject", async () => {
+    mockApprovalDecision("plugin:approval-owned-server", "allow-once");
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "auto",
+      }),
+      getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
+    });
+
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      policySubject: { pluginKey: "google-calendar", tool: "create_event.raw" },
     });
   });
 
@@ -1284,6 +1569,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation({ turnId: null }),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+      getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
     });
 
     expect(result).toEqual({ action: "decline", content: null, _meta: null });
@@ -1306,21 +1592,10 @@ describe("Codex app-server elicitation bridge", () => {
         serverName: "shared-mcp",
         _meta: { codex_approval_kind: "mcp_tool_call" },
       }),
-      pluginAppPolicyContext: createPluginAppPolicyContext({
-        allowDestructiveActions: true,
-        apps: [
-          {
-            appId: "calendar-app-1",
-            pluginName: "google-calendar",
-            mcpServerNames: ["shared-mcp"],
-          },
-          {
-            appId: "calendar-app-2",
-            pluginName: "google-calendar",
-            mcpServerNames: ["shared-mcp"],
-          },
-        ],
-      }),
+      pluginAppPolicyContext: {
+        ...createPluginAppPolicyContext({ allowDestructiveActions: true }),
+        mcpServers: { "shared-mcp": null },
+      },
     });
 
     expect(result).toEqual({ action: "decline", content: null, _meta: null });
@@ -1367,6 +1642,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+      getActiveMcpToolCallAttribution: activeCalendarMcpAttribution,
     });
 
     expect(result).toEqual({ action: "decline", content: null, _meta: null });
@@ -1379,6 +1655,13 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildCurrentCodexApprovalElicitation(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+      getActiveMcpToolCallAttribution: (serverName) => ({
+        id: "configured-mcp-item",
+        server: serverName,
+        tool: "example.raw",
+        arguments: {},
+        pluginId: null,
+      }),
     });
 
     expect(result).toEqual({

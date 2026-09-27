@@ -518,6 +518,8 @@ describe("Codex app-server binding store", () => {
         },
       },
       pluginAppIds: {},
+      mcpServers: {},
+      nativePlugins: {},
     };
 
     await store.mutate(identity, {
@@ -557,6 +559,17 @@ describe("Codex app-server binding store", () => {
         },
       },
       pluginAppIds: { "security-review@company-tools": ["github"] },
+      mcpServers: { github: "native/security-review" },
+      nativePlugins: {
+        "native/security-review": {
+          configKey: "security-review@company-tools",
+          marketplaceName: "company-tools",
+          pluginName: "security-review",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "ask" as const,
+          mcpServerNames: ["github"],
+        },
+      },
     };
 
     await store.mutate(identity, {

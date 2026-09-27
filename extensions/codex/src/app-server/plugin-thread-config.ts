@@ -63,6 +63,10 @@ export type PluginAppPolicyContext = {
   fingerprint: string;
   apps: Record<string, CodexAppPolicyContextEntry>;
   pluginAppIds: Record<string, string[]>;
+  /** Exact Codex plugin IDs select policies even when plugin/read has no detail. */
+  nativePlugins?: Record<string, PluginAppPolicyContextEntry | null>;
+  /** Native server names bind to plugin IDs; null blocks ambiguous or narrowed names. */
+  mcpServers?: Record<string, string | null>;
 };
 
 type CodexPluginThreadConfigDiagnostic =
@@ -274,6 +278,8 @@ export async function buildCodexPluginThreadConfig(
   const { apps } = buildDisabledAppsConfigPatch();
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
+  const nativePluginOwners = new Map<string, PluginAppPolicyContextEntry | null>();
+  const mcpServerOwners = new Map<string, string | null>();
   const pluginOwnedAppIds = collectCodexReservedPluginAppIds({
     policy: inventory.policy,
     inventory,
@@ -321,6 +327,28 @@ export async function buildCodexPluginThreadConfig(
     if (activation?.ok === false || (record.activationRequired && !activation?.ok)) {
       continue;
     }
+    const mcpServerNames = [...new Set(record.detail?.mcpServers ?? [])]
+      .filter((serverName) => Boolean(serverName.trim()))
+      .toSorted();
+    const nativePluginId = record.summary.id;
+    if (nativePluginId.trim()) {
+      const owner: PluginAppPolicyContextEntry = {
+        configKey: record.policy.configKey,
+        marketplaceName: record.policy.marketplaceName,
+        pluginName: record.policy.pluginName,
+        allowDestructiveActions: record.policy.allowDestructiveActions,
+        allowOpenWorld: true,
+        destructiveApprovalMode: record.policy.destructiveApprovalMode,
+        mcpServerNames,
+      };
+      nativePluginOwners.set(nativePluginId, nativePluginOwners.has(nativePluginId) ? null : owner);
+    }
+    for (const serverName of mcpServerNames) {
+      mcpServerOwners.set(
+        serverName,
+        mcpServerOwners.has(serverName) || !nativePluginId.trim() ? null : nativePluginId,
+      );
+    }
     if (record.appOwnership !== "proven") {
       continue;
     }
@@ -353,7 +381,7 @@ export async function buildCodexPluginThreadConfig(
         allowDestructiveActions: record.policy.allowDestructiveActions,
         allowOpenWorld: true,
         destructiveApprovalMode: record.policy.destructiveApprovalMode,
-        mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
+        mcpServerNames,
       };
     }
   }
@@ -395,7 +423,16 @@ export async function buildCodexPluginThreadConfig(
     Object.keys(policyApps).length === 0
       ? buildDisabledAppsConfigPatch()
       : disableUnlistedCodexApps({ apps }, (await getAdmissionConfig()).config);
-  const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
+  const policyContext = buildPluginAppPolicyContext(
+    policyApps,
+    pluginAppIds,
+    Object.fromEntries(
+      [...mcpServerOwners].toSorted(([left], [right]) => left.localeCompare(right)),
+    ),
+    Object.fromEntries(
+      [...nativePluginOwners].toSorted(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
   return {
     enabled: true,
     configPatch,
@@ -605,6 +642,8 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
           ids.filter((id) => Object.hasOwn(apps, id)),
         ]),
       ),
+      params.policyContext.mcpServers,
+      params.policyContext.nativePlugins,
     ),
     configPatch,
     diagnostics,
@@ -614,11 +653,27 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
 export function buildPluginAppPolicyContext(
   apps: Record<string, CodexAppPolicyContextEntry>,
   pluginAppIds: Record<string, string[]>,
+  mcpServers: Record<string, string | null> = {},
+  nativePlugins: Record<string, PluginAppPolicyContextEntry | null> = {},
 ): PluginAppPolicyContext {
+  const sortedMcpServers = Object.fromEntries(
+    Object.entries(mcpServers).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+  const sortedNativePlugins = Object.fromEntries(
+    Object.entries(nativePlugins).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
   return {
-    fingerprint: fingerprintJson({ version: 2, apps, pluginAppIds }),
+    fingerprint: fingerprintJson({
+      version: 3,
+      apps,
+      pluginAppIds,
+      mcpServers: sortedMcpServers,
+      nativePlugins: sortedNativePlugins,
+    }),
     apps,
     pluginAppIds,
+    mcpServers: sortedMcpServers,
+    nativePlugins: sortedNativePlugins,
   };
 }
 

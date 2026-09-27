@@ -54,7 +54,7 @@ type CodexApprovalElicitationResult =
 
 type PluginElicitationResolution =
   | { kind: "not_plugin" }
-  | { kind: "matched"; entry: CodexAppPolicyContextEntry }
+  | { kind: "matched"; entry: CodexAppPolicyContextEntry; verifiedToolName?: string }
   | { kind: "decline"; reason: string };
 
 const MCP_TOOL_APPROVAL_KIND = "mcp_tool_call";
@@ -94,7 +94,13 @@ export async function routeCodexAppServerElicitationRequest(params: {
   computerUseMcpServerName?: string;
   autoApproveMcpTools?: boolean;
   projectedMcpServers?: NonNullable<CodexBundleMcpThreadConfig["configPatch"]>["mcp_servers"];
-  getActiveMcpToolCall?: (serverName: string) => CodexActiveMcpToolCall | undefined;
+  getActiveMcpToolCall?: (
+    serverName: string,
+    connectorId?: string,
+  ) => CodexActiveMcpToolCall | undefined;
+  getActiveMcpToolCallAttribution?: (
+    serverName: string,
+  ) => (CodexActiveMcpToolCall & { pluginId: string | null }) | undefined;
   signal?: AbortSignal;
 }): Promise<CodexApprovalElicitationResult> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -118,10 +124,21 @@ export async function routeCodexAppServerElicitationRequest(params: {
   if (params.signal?.aborted) {
     return handled(createCodexElicitationResponse("cancel"));
   }
-  const pluginResolution = resolvePluginElicitation({
-    requestParams,
-    pluginAppPolicyContext: params.pluginAppPolicyContext,
-  });
+  const serverName = readNonBlankString(requestParams.serverName);
+  const pluginResolution =
+    serverName && serverName === params.computerUseMcpServerName
+      ? ({ kind: "not_plugin" } as const)
+      : serverName === CODEX_APPS_SERVER_NAME
+        ? resolvePluginElicitation({
+            requestParams,
+            pluginAppPolicyContext: params.pluginAppPolicyContext,
+          })
+        : resolvePluginMcpElicitation({
+            requestParams,
+            serverName,
+            pluginAppPolicyContext: params.pluginAppPolicyContext,
+            getActiveMcpToolCallAttribution: params.getActiveMcpToolCallAttribution,
+          });
   if (pluginResolution.kind !== "not_plugin") {
     if (params.paramsForRun.trigger === "cron" && params.paramsForRun.scheduledRuntimeAuthority) {
       logPluginElicitationDecline("scheduled_authority_non_interactive", requestParams);
@@ -135,17 +152,31 @@ export async function routeCodexAppServerElicitationRequest(params: {
       logPluginElicitationDecline("missing_active_turn", requestParams);
       return handled(createCodexElicitationResponse("decline"));
     }
+    if (
+      serverName === CODEX_APPS_SERVER_NAME &&
+      isPluginAppPolicyContextEntry(pluginResolution.entry) &&
+      !isCodexConnectorApprovalElicitation(requestParams, meta ?? {})
+    ) {
+      logPluginElicitationDecline("unverified_connector_owner", requestParams);
+      return handled(createCodexElicitationResponse("decline"));
+    }
     return handled(
       await buildPluginPolicyElicitationResponse({
         entry: pluginResolution.entry,
+        appId: resolveSelectedConnectorAppId({
+          requestParams,
+          entry: pluginResolution.entry,
+          context: params.pluginAppPolicyContext,
+        }),
         requestParams,
         paramsForRun: params.paramsForRun,
+        getActiveMcpToolCall: params.getActiveMcpToolCall,
+        verifiedToolName: pluginResolution.verifiedToolName,
         signal: params.signal,
       }),
     );
   }
 
-  const serverName = readNonBlankString(requestParams.serverName);
   const computerUsePrompt =
     serverName && serverName === params.computerUseMcpServerName
       ? readApprovalElicitation(requestParams, { kind: "computer-use" })
@@ -220,6 +251,19 @@ export async function routeCodexAppServerElicitationRequest(params: {
   return handled(buildElicitationResponse(approvalPrompt, outcome));
 }
 
+function resolveSelectedConnectorAppId(params: {
+  requestParams: JsonObject;
+  entry: CodexAppPolicyContextEntry;
+  context?: PluginAppPolicyContext;
+}): string | undefined {
+  const meta = isJsonObject(params.requestParams._meta) ? params.requestParams._meta : {};
+  if (!isCodexConnectorApprovalElicitation(params.requestParams, meta)) {
+    return undefined;
+  }
+  const appId = readFirstString(meta, PLUGIN_CONNECTOR_ID_META_KEYS);
+  return appId && params.context?.apps[appId] === params.entry ? appId : undefined;
+}
+
 function matchesMcpApprovalDisplay(item: CodexActiveMcpToolCall, meta: JsonObject): boolean {
   if (!Object.hasOwn(meta, MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY)) {
     return true;
@@ -285,14 +329,6 @@ function resolvePluginElicitation(params: {
     return uniquePluginMatch(matches, appId ? "app_id" : "connector_id");
   }
 
-  const serverName = readNonBlankString(requestParams.serverName);
-  if (serverName && context) {
-    const matches = entries.filter((entry) => entry.mcpServerNames.includes(serverName));
-    if (matches.length > 0) {
-      return uniquePluginMatch(matches, "server_name");
-    }
-  }
-
   const metadataResolution = resolvePluginStableMetadataMatch({
     meta,
     requestParams,
@@ -308,6 +344,65 @@ function resolvePluginElicitation(params: {
   }
 
   return { kind: "not_plugin" };
+}
+
+function resolvePluginMcpElicitation(params: {
+  requestParams: JsonObject;
+  serverName?: string;
+  pluginAppPolicyContext?: PluginAppPolicyContext;
+  getActiveMcpToolCallAttribution?: (
+    serverName: string,
+  ) => (CodexActiveMcpToolCall & { pluginId: string | null }) | undefined;
+}): PluginElicitationResolution {
+  const { requestParams, serverName, pluginAppPolicyContext: context } = params;
+  const serverOwners = context?.mcpServers;
+  const hasServerOwner = Boolean(
+    serverName && serverOwners && Object.hasOwn(serverOwners, serverName),
+  );
+  const item = serverName ? params.getActiveMcpToolCallAttribution?.(serverName) : undefined;
+  if (item?.pluginId && !context?.nativePlugins) {
+    return { kind: "decline", reason: "missing_policy_context" };
+  }
+  if (!context?.nativePlugins || item?.pluginId === null) {
+    // An MCP server may claim a plugin app in its own metadata. Without trusted
+    // server ownership, such a claim cannot select that app's reviewer policy.
+    const claimed = resolvePluginElicitation({ requestParams, pluginAppPolicyContext: context });
+    return claimed.kind === "not_plugin"
+      ? claimed
+      : { kind: "decline", reason: "unverified_plugin_server_owner" };
+  }
+  if (!item) {
+    // Codex emits item/started before its approval request. Without a unique
+    // active item, an unmapped plugin could inherit generic autoapproval.
+    return { kind: "decline", reason: "unverified_mcp_tool_owner" };
+  }
+  const owner = Object.hasOwn(context.nativePlugins, item.pluginId)
+    ? context.nativePlugins[item.pluginId]
+    : undefined;
+  if (!owner || (hasServerOwner && serverName && serverOwners?.[serverName] !== item.pluginId)) {
+    return { kind: "decline", reason: "unverified_plugin_server_owner" };
+  }
+  const meta = isJsonObject(requestParams._meta) ? requestParams._meta : {};
+  const claimedAppId =
+    readFirstString(meta, PLUGIN_APP_ID_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_APP_ID_META_KEYS);
+  if (claimedAppId) {
+    const matches = Object.entries(context.apps)
+      .filter(([id]) => codexAppIdentityKey(id) === codexAppIdentityKey(claimedAppId))
+      .map(([, entry]) => entry);
+    if (
+      matches.length !== 1 ||
+      !matches[0] ||
+      !isPluginAppPolicyContextEntry(matches[0]) ||
+      matches[0].configKey !== owner.configKey
+    ) {
+      return { kind: "decline", reason: "app_id_server_owner_mismatch" };
+    }
+  }
+  if (!matchesMcpApprovalDisplay(item, meta)) {
+    return { kind: "decline", reason: "unverified_plugin_tool_call" };
+  }
+  return { kind: "matched", entry: owner, verifiedToolName: item.tool };
 }
 
 function isCodexConnectorApprovalElicitation(requestParams: JsonObject, meta: JsonObject): boolean {
@@ -400,8 +495,14 @@ function normalizePluginIdentityText(value: string): string {
 
 async function buildPluginPolicyElicitationResponse(params: {
   entry: CodexAppPolicyContextEntry;
+  appId?: string;
   requestParams: JsonObject;
   paramsForRun: EmbeddedRunAttemptParams;
+  getActiveMcpToolCall?: (
+    serverName: string,
+    connectorId?: string,
+  ) => CodexActiveMcpToolCall | undefined;
+  verifiedToolName?: string;
   signal?: AbortSignal;
 }): Promise<CodexElicitationResponse> {
   const mode =
@@ -431,15 +532,41 @@ async function buildPluginPolicyElicitationResponse(params: {
   if (mode === "allow") {
     return response;
   }
+  const tool = params.verifiedToolName ?? resolveActiveCodexAppToolName(params);
   const outcome = await requestPluginApprovalOutcome({
     hostCapabilities: params.paramsForRun.hostCapabilities,
     title: approvalPrompt.title,
     description: approvalPrompt.description,
     allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
     toolName: "codex_mcp_tool_approval",
+    ...(isPluginAppPolicyContextEntry(params.entry)
+      ? {
+          policySubject: {
+            pluginKey: params.entry.configKey,
+            ...(params.appId ? { appId: params.appId } : {}),
+            ...(tool ? { tool } : {}),
+          },
+        }
+      : {}),
     signal: params.signal,
   });
   return buildElicitationResponse(approvalPrompt, outcome);
+}
+
+function resolveActiveCodexAppToolName(params: {
+  appId?: string;
+  requestParams: JsonObject;
+  getActiveMcpToolCall?: (
+    serverName: string,
+    connectorId?: string,
+  ) => CodexActiveMcpToolCall | undefined;
+}): string | undefined {
+  if (!params.appId) {
+    return undefined;
+  }
+  const meta = isJsonObject(params.requestParams._meta) ? params.requestParams._meta : {};
+  const item = params.getActiveMcpToolCall?.(CODEX_APPS_SERVER_NAME, params.appId);
+  return item && matchesMcpApprovalDisplay(item, meta) ? item.tool : undefined;
 }
 
 function allowedPluginPolicyApprovalDecisions(

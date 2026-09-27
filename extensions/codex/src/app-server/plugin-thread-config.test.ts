@@ -434,6 +434,100 @@ describe("Codex plugin thread config", () => {
     expect(config.diagnostics).toEqual([]);
   });
 
+  it("binds MCP-only plugins to verified server names and blocks shared names", async () => {
+    const appCache = await cacheApps([]);
+    const summaries = [
+      pluginSummary("native/alpha", { name: "alpha", installed: true, enabled: true }),
+      pluginSummary("native/beta", { name: "beta", installed: true, enabled: true }),
+    ];
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            alphaPolicy: { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName: "alpha" },
+            betaPolicy: { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName: "beta" },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, params) => {
+        if (method === "plugin/installed") {
+          return pluginInstalled(summaries);
+        }
+        if (method === "plugin/read") {
+          const name = (params as v2.PluginReadParams).pluginName;
+          return pluginDetail(
+            name,
+            [],
+            name === "alpha" ? ["alpha", "shared"] : ["beta", "shared"],
+          );
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.policyContext.apps).toEqual({});
+    expect(config.policyContext.mcpServers).toEqual({
+      alpha: "native/alpha",
+      beta: "native/beta",
+      shared: null,
+    });
+    expect(config.policyContext.nativePlugins).toMatchObject({
+      "native/alpha": { configKey: "alphaPolicy" },
+      "native/beta": { configKey: "betaPolicy" },
+    });
+    expect(config.policyContext.pluginAppIds).toEqual({});
+  });
+
+  it("keeps native owners when detail is unavailable and blocks duplicate IDs", async () => {
+    const summaries = [
+      pluginSummary("native/shared", { name: "alpha", installed: true, enabled: true }),
+      pluginSummary("native/shared", { name: "beta", installed: true, enabled: true }),
+      pluginSummary("native/gamma", { name: "gamma", installed: true, enabled: true }),
+    ];
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: Object.fromEntries(
+            ["alpha", "beta", "gamma"].map((name) => [
+              name,
+              { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName: name },
+            ]),
+          ),
+        },
+      },
+      appCache: await cacheApps([]),
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, params) => {
+        if (method === "plugin/installed") {
+          return pluginInstalled(summaries);
+        }
+        if (method === "plugin/read") {
+          const name = (params as v2.PluginReadParams).pluginName;
+          if (name === "gamma") {
+            throw new Error("plugin detail unavailable");
+          }
+          return pluginDetail(name, [], []);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.policyContext.nativePlugins).toMatchObject({
+      "native/shared": null,
+      "native/gamma": { configKey: "gamma", mcpServerNames: [] },
+    });
+    expect(config.policyContext.mcpServers).toEqual({});
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "plugin_detail_unavailable" }),
+    );
+  });
+
   it("does not silently install an uninstalled repository plugin during a model turn", async () => {
     const appCache = await cacheApps([]);
     const requests: string[] = [];

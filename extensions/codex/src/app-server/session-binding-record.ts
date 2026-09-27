@@ -123,13 +123,49 @@ const pluginAppPolicyEntrySchema = z
     mcpServerNames: z.array(z.string()),
   })
   .strict();
+const nativePluginPolicyEntrySchema = pluginAppPolicyEntrySchema
+  .extend({
+    configKey: z.string().min(1),
+    pluginName: z.string().min(1),
+    destructiveApprovalMode: z.enum(["allow", "deny", "auto", "ask"]).optional(),
+  })
+  .strict();
 const pluginAppPolicyContextSchema = z
   .object({
     fingerprint: z.string(),
     apps: z.record(z.string(), z.union([accountAppPolicyEntrySchema, pluginAppPolicyEntrySchema])),
     pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
+    nativePlugins: z
+      .record(z.string().min(1), z.union([nativePluginPolicyEntrySchema, z.null()]))
+      .optional(),
+    mcpServers: z.record(z.string().min(1), z.union([z.string().min(1), z.null()])).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((policyContext, context) => {
+    // Legacy app policy remains usable; native MCP ownership needs both maps.
+    if (!policyContext.nativePlugins && !policyContext.mcpServers) {
+      return;
+    }
+    if (!policyContext.nativePlugins || !policyContext.mcpServers) {
+      context.addIssue({ code: "custom", message: "native plugin ownership is missing" });
+      return;
+    }
+    for (const [serverName, pluginId] of Object.entries(policyContext.mcpServers)) {
+      if (!pluginId) {
+        continue;
+      }
+      const owner = policyContext.nativePlugins[pluginId];
+      if (
+        !Object.hasOwn(policyContext.nativePlugins, pluginId) ||
+        (owner && !owner.mcpServerNames.includes(serverName))
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `MCP server ${serverName} has no matching plugin owner`,
+        });
+      }
+    }
+  });
 const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
@@ -647,10 +683,59 @@ export function readPluginAppPolicyContext(
       parsedPluginAppIds[configKey] = appIds;
     }
   }
+  const nativePlugins = asOptionalRecord(record.nativePlugins);
+  const mcpServers = asOptionalRecord(record.mcpServers);
+  const hasNativePlugins = Object.hasOwn(record, "nativePlugins");
+  const hasMcpServers = Object.hasOwn(record, "mcpServers");
+  if (hasNativePlugins !== hasMcpServers || (hasNativePlugins && (!nativePlugins || !mcpServers))) {
+    return undefined;
+  }
+  const parsedNativePlugins: Array<
+    [string, NonNullable<PluginAppPolicyContext["nativePlugins"]>[string]]
+  > = [];
+  for (const [pluginId, rawOwner] of Object.entries(nativePlugins ?? {})) {
+    if (!pluginId.trim()) {
+      return undefined;
+    }
+    if (rawOwner === null) {
+      parsedNativePlugins.push([pluginId, null]);
+      continue;
+    }
+    const owner = nativePluginPolicyEntrySchema.safeParse(rawOwner);
+    if (!owner.success) {
+      return undefined;
+    }
+    parsedNativePlugins.push([pluginId, owner.data]);
+  }
+  const owners = Object.fromEntries(parsedNativePlugins);
+  const parsedMcpServers: Array<
+    [string, NonNullable<PluginAppPolicyContext["mcpServers"]>[string]]
+  > = [];
+  for (const [serverName, rawPluginId] of Object.entries(mcpServers ?? {})) {
+    if (!serverName.trim()) {
+      return undefined;
+    }
+    if (rawPluginId === null) {
+      parsedMcpServers.push([serverName, null]);
+      continue;
+    }
+    if (
+      typeof rawPluginId !== "string" ||
+      !rawPluginId.trim() ||
+      !Object.hasOwn(owners, rawPluginId) ||
+      (owners[rawPluginId] && !owners[rawPluginId].mcpServerNames.includes(serverName))
+    ) {
+      return undefined;
+    }
+    parsedMcpServers.push([serverName, rawPluginId]);
+  }
   return {
     fingerprint: record.fingerprint,
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
+    ...(hasNativePlugins
+      ? { mcpServers: Object.fromEntries(parsedMcpServers), nativePlugins: owners }
+      : {}),
   };
 }
 

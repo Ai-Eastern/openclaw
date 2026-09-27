@@ -1,5 +1,13 @@
 import "./side-question.test-support.js";
 import { describe, expect, it } from "vitest";
+import {
+  bindingStoreKey,
+  createCodexAppServerBindingStore,
+  createStoredCodexAppServerBinding,
+  readCodexAppServerThreadBinding,
+  sessionBindingIdentity,
+} from "./session-binding.js";
+import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 
 const {
   createFakeClient,
@@ -9,6 +17,8 @@ const {
   sideParams,
   useSideQuestionTestSetup,
 } = await import("./side-question.test-support.js");
+const { runCodexAppServerSideQuestion: runSideQuestionWithBindingStore } =
+  await import("./side-question.js");
 
 describe("Codex side-question app consent", () => {
   useSideQuestionTestSetup();
@@ -23,22 +33,24 @@ describe("Codex side-question app consent", () => {
       return baseRequest(method, params);
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockReturnValue({
-      ...readCodexAppServerBindingMock(),
-      pluginAppPolicyContext: {
-        fingerprint: "native-app-consent",
-        apps: {
-          calendar: {
-            source: "account",
-            appName: "Calendar",
-            allowDestructiveActions: true,
-            destructiveApprovalMode: "auto",
-            mcpServerNames: [],
+    readCodexAppServerBindingMock.mockReturnValue(
+      readCodexAppServerThreadBinding({
+        ...readCodexAppServerBindingMock(),
+        pluginAppPolicyContext: {
+          fingerprint: "native-app-consent",
+          apps: {
+            calendar: {
+              source: "account",
+              appName: "Calendar",
+              allowDestructiveActions: true,
+              destructiveApprovalMode: "auto",
+              mcpServerNames: [],
+            },
           },
+          pluginAppIds: {},
         },
-        pluginAppIds: {},
-      },
-    });
+      }),
+    );
 
     await expect(
       runCodexAppServerSideQuestion(sideParams(), {
@@ -58,5 +70,42 @@ describe("Codex side-question app consent", () => {
         },
       },
     });
+  });
+
+  it("rejects an upgraded MCP-only binding before a side fork can bypass current plugin approval", async () => {
+    const params = sideParams();
+    const identity = sessionBindingIdentity({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.cfg,
+    });
+    const oldBinding = createStoredCodexAppServerBinding({
+      ...readCodexAppServerBindingMock(),
+      pluginAppPolicyContext: { fingerprint: "old-mcp-only", apps: {}, pluginAppIds: {} },
+    });
+    expect(oldBinding).toBeDefined();
+    const state = createCodexTestBindingStateStore();
+    state.register(bindingStoreKey(identity), oldBinding!);
+    const bindingStore = createCodexAppServerBindingStore(state);
+    expect(bindingStore.read(identity)?.pluginAppPolicyContext).toEqual({
+      fingerprint: "old-mcp-only",
+      apps: {},
+      pluginAppIds: {},
+    });
+
+    await expect(
+      runSideQuestionWithBindingStore(params, {
+        bindingStore,
+        pluginConfig: {
+          appServer: { mode: "yolo" },
+          codexPlugins: {
+            enabled: true,
+            plugins: { docs: { marketplaceName: "company-tools", pluginName: "docs" } },
+          },
+        },
+      }),
+    ).rejects.toThrow("Send a normal message to refresh plugin ownership");
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
   });
 });

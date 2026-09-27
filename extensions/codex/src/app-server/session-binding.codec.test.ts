@@ -73,6 +73,8 @@ describe("Codex app-server binding codec", () => {
           }),
         },
         pluginAppIds: { "security-review": ["github"] },
+        mcpServers: {},
+        nativePlugins: {},
       },
     });
 
@@ -226,6 +228,8 @@ describe("Codex app-server binding codec", () => {
           }),
         },
         pluginAppIds: {},
+        mcpServers: {},
+        nativePlugins: {},
       },
     });
 
@@ -237,15 +241,60 @@ describe("Codex app-server binding codec", () => {
     );
   });
 
+  it("preserves legacy app policy when neither native MCP ownership map exists", () => {
+    const policyContext = {
+      fingerprint: "policy-1",
+      apps: { app: pluginEntry({ destructiveApprovalMode: "allow" }) },
+      pluginAppIds: {},
+    };
+    const stored = importBinding({
+      schemaVersion: 1,
+      pluginAppPolicyContext: policyContext,
+    });
+
+    expect(stored?.binding.pluginAppPolicyContext).toEqual(policyContext);
+  });
+
   it("drops imported policy contexts with a forbidden appId field", () => {
     const invalid = importBinding({
       pluginAppPolicyContext: {
         fingerprint: "policy-2",
         apps: { app: pluginEntry({ destructiveApprovalMode: "ask", appId: "not-allowed" }) },
         pluginAppIds: {},
+        mcpServers: {},
+        nativePlugins: {},
       },
     });
 
+    expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
+  });
+
+  it("preserves version 2 ask approval mode and rejects invalid native ownership", () => {
+    const policyContext = {
+      fingerprint: "policy-2",
+      apps: { app: pluginEntry({ destructiveApprovalMode: "ask" }) },
+      pluginAppIds: {},
+      nativePlugins: {
+        "native/plugin": pluginEntry({ mcpServerNames: ["github"] }),
+      },
+      mcpServers: { github: "native/plugin", shared: null },
+    };
+    const stored = importBinding({ pluginAppPolicyContext: policyContext });
+    const { mcpServers: _missingMcpOwners, ...oldPolicyContext } = policyContext;
+    const oldBinding = readCodexAppServerThreadBinding({
+      threadId: "thread-old-policy",
+      cwd: "/repo",
+      pluginAppPolicyContext: oldPolicyContext,
+    });
+    const invalid = importBinding({
+      pluginAppPolicyContext: {
+        ...policyContext,
+        mcpServers: { github: "native/unknown" },
+      },
+    });
+
+    expect(stored?.binding.pluginAppPolicyContext).toMatchObject(policyContext);
+    expect(oldBinding?.pluginAppPolicyContext).toBeUndefined();
     expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
   });
 
@@ -262,6 +311,8 @@ describe("Codex app-server binding codec", () => {
           }),
         },
         pluginAppIds: { workspaceData: ["workspace-data"] },
+        mcpServers: {},
+        nativePlugins: {},
       },
     });
 
