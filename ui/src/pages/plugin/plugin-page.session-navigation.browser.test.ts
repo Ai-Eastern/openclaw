@@ -156,7 +156,7 @@ async function installClickDocument(frame: HTMLIFrameElement, signal: AbortSigna
     };
     const onAbort = () => {
       cleanup();
-      reject(signal.reason);
+      reject(new Error("Iframe readiness aborted", { cause: signal.reason }));
     };
     window.addEventListener("message", onReady);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -170,7 +170,7 @@ async function installClickDocument(frame: HTMLIFrameElement, signal: AbortSigna
   </script>`;
     } catch (error) {
       cleanup();
-      reject(error);
+      reject(new Error("Could not install iframe click document", { cause: error }));
     }
   });
   frame.contentWindow!.postMessage("test-click", "*");
