@@ -635,8 +635,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         ? (acquireEntry(row, readSessionRowEntry(row)) ?? row)
         : row;
     },
-    findBySessionId: (query: Parameters<typeof findSessionRowById>[0]) =>
-      findSessionRowById(query, { disposed, lookup, matching }),
+    findBySessionId(query: Parameters<typeof findSessionRowById>[0]) {
+      return findSessionRowById(query, { disposed, lookup, matching });
+    },
     describe,
     ...createSessionRowAncestorReads({
       state: () => ({ cfg, context: metadata.current }),
