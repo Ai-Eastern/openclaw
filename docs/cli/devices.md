@@ -87,7 +87,19 @@ endpoints can use HTTP, provided the joining machine can reach that loopback
 endpoint, for example through a local tunnel.
 
 With only the default loopback bind and no advertised endpoint, URL discovery
-refuses to mint a link. Configure a reachable secure endpoint first; see
+refuses to mint a link. For a loopback Gateway behind public HTTPS ingress, set
+`gateway.publicOrigin` to the proxy's bare HTTPS origin and include the proxy's
+source address in `gateway.trustedProxies`.
+
+Join codes, `/pair`, and cloud node enrollment share endpoint selection:
+`plugins.entries.device-pair.config.publicUrl` overrides `gateway.publicOrigin`,
+then discovery falls back to Tailscale Serve/Funnel, `gateway.remote.url`, and
+bind-derived addresses. Callers that explicitly prefer the remote URL move it
+ahead of Tailscale discovery; callers targeting the local Gateway omit it.
+The two explicit public settings take precedence in either case. HTTP(S) URLs
+become matching `ws:`/`wss:` pairing endpoints.
+
+For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 Plaintext LAN pairing can use a setup code directly instead of an HTTP join URL.
 See [Connect a machine](/cli/connect).

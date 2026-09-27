@@ -15,3 +15,11 @@ export {
   type DeviceBootstrapProfileInput,
   type DeviceBootstrapPurpose,
 } from "../shared/device-bootstrap-profile.js";
+
+/** Resolve the advertised pairing endpoint without issuing credentials or loading setup at startup. */
+export async function resolvePairingGatewayUrl(
+  ...args: Parameters<typeof import("../pairing/setup-code.js").resolvePairingGatewayUrl>
+) {
+  const pairing = await import("../pairing/setup-code.js");
+  return await pairing.resolvePairingGatewayUrl(...args);
+}

@@ -49,6 +49,9 @@ type PairingSetupPayload = {
 
 const PAIRING_SETUP_MAX_URLS = 8;
 
+export const PAIRING_GATEWAY_LOOPBACK_ERROR =
+  "Gateway is only bound to loopback. Set gateway.publicOrigin to your public HTTPS origin, configure plugins.entries.device-pair.config.publicUrl, enable tailscale serve, or set gateway.bind=lan.";
+
 type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;
@@ -318,6 +321,14 @@ export async function resolvePairingGatewayUrl(
     return { error: "Configured publicUrl is invalid." };
   }
 
+  const publicOrigin = cfg.gateway?.publicOrigin?.trim();
+  if (publicOrigin) {
+    const url = normalizeUrl(publicOrigin, scheme);
+    return url
+      ? { url, source: "gateway.publicOrigin" }
+      : { error: "Configured gateway.publicOrigin is invalid." };
+  }
+
   const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
   const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
   const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
@@ -368,10 +379,7 @@ export async function resolvePairingGatewayUrl(
     return bindResult;
   }
 
-  return {
-    error:
-      "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
-  };
+  return { error: PAIRING_GATEWAY_LOOPBACK_ERROR };
 }
 
 export function encodePairingSetupCode(payload: PairingSetupPayload): string {
