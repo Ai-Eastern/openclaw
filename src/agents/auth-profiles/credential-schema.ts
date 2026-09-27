@@ -6,6 +6,8 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 export const oauthCredentialMetadataSchema = z.strictObject({
   idToken: z.string().optional(),
   clientId: z.string().optional(),
+  /** Callback address bound to this OAuth registration, retained for reconnect. */
+  redirectUri: z.string().optional(),
   /** Scope vocabulary approved for this OAuth registration's authorization requests. */
   authorizationScope: z.string().optional(),
   /** Actual scopes returned by the token endpoint, independent of the requested permissions. */

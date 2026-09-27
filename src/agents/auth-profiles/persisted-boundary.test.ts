@@ -125,6 +125,7 @@ describe("persisted auth profile boundary", () => {
           authFlow: "device-code",
           authorizationScope: "openid email profile",
           grantedScope: "openid profile",
+          redirectUri: "http://127.0.0.1:8080/auth/callback",
         },
         "broken:array": [],
       },
@@ -193,6 +194,7 @@ describe("persisted auth profile boundary", () => {
           authFlow: "device-code",
           authorizationScope: "openid email profile",
           grantedScope: "openid profile",
+          redirectUri: "http://127.0.0.1:8080/auth/callback",
         },
       },
       order: {

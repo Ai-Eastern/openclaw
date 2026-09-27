@@ -451,10 +451,11 @@ Approve token sharing during sign-in to enable model calls. If you grant identit
 permissions only, OpenClaw saves the account but asks you to enable sharing or
 choose another credential before inference.
 
-The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
-on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
-starting sign-in. For an SSH host, keep this command running on your browser's
-computer:
+New registrations return to `http://127.0.0.1:8080/auth/callback`. Older
+registrations keep their original `localhost` callback; OpenClaw retains the
+callback address with each registration. If your browser runs on another
+computer, forward its port 8080 to OpenClaw's IPv4 loopback before starting
+sign-in. For an SSH host, keep this command running on your browser's computer:
 
 ```bash
 ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
@@ -463,8 +464,25 @@ ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
 Open the sign-in link on that computer.
 
 To reconnect an existing account, sign in with the same ChatGPT user and
-workspace. To switch either, choose **Connect a different ChatGPT account or
+workspace. OpenClaw uses its saved email, when available, to preselect the account
+in the browser. To switch either, choose **Connect a different ChatGPT account or
 workspace** in the sign-in prompt.
+
+If you previously declined token sharing and saved an identity-only account,
+reconnect it to request consent again for the registration's original scopes.
+Ordinary reconnects keep the existing consent flow.
+
+### Host identity
+
+Agents and ChatGPT accounts using the same OpenClaw state directory share one
+SIWC host ID. OpenClaw derives it from the Gateway's saved Ed25519 public key as
+an RFC 9278 JWK thumbprint URI. It stays the same across restarts and sign-outs;
+fresh state or a replacement device key creates a different host identity.
+
+Importing an account profile keeps the destination's host identity. Copying the
+entire state directory, including the device key, duplicates that identity. Give
+a new VM its own OpenClaw state directory and device identity when it should be
+a separate host.
 
 ### Current limitations
 
