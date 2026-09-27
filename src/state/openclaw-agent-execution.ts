@@ -23,6 +23,8 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
+  AgentDatabaseExecutionPreparation,
+  AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
 } from "./openclaw-agent-execution-contract.js";
 import {
@@ -47,8 +49,12 @@ export type OpenClawAgentDatabaseExecution = {
   /** The accepted native receipt; reading this never adopts the current pathname. */
   readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   assertCurrent(): void;
+  captureGenerationClaim(): AgentDatabaseGenerationClaim;
   /** Initialize first-use storage through the same admitted native owner. */
-  prepare(source: AgentDatabaseRequestExecutionSource): Promise<void>;
+  prepare(
+    source: AgentDatabaseRequestExecutionSource,
+    preparation?: AgentDatabaseExecutionPreparation,
+  ): Promise<void>;
   /** Admit a write against existing storage; a missing store remains missing. */
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
@@ -273,6 +279,7 @@ function createAgentDatabaseExecution(
     retireNativeOnFailure = false,
     createIfMissing = false,
     creatingTarget?: DatabasePathIdentity,
+    preparation?: AgentDatabaseExecutionPreparation,
   ): Promise<T | undefined> {
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
@@ -334,7 +341,13 @@ function createAgentDatabaseExecution(
     }
     const current = generation;
     try {
-      const result = await current.run(source, operation, assertCallerCurrent, createIfMissing);
+      const result = await current.run(
+        source,
+        operation,
+        assertCallerCurrent,
+        createIfMissing,
+        preparation,
+      );
       if (generation === current && current.failed()) {
         try {
           await owner.close();
@@ -460,7 +473,26 @@ function createAgentDatabaseExecution(
           return fileIdentity;
         },
         assertCurrent: assertBorrowed,
-        async prepare(source) {
+        captureGenerationClaim() {
+          assertBorrowed();
+          const captured = generation;
+          if (!captured) {
+            throw new Error("Agent database execution has no admitted generation");
+          }
+          const claim = captured.captureClaim();
+          return {
+            identity: claim.identity,
+            incarnation: claim.incarnation,
+            assertCurrent() {
+              assertBorrowed();
+              if (generation !== captured) {
+                throw new Error("Agent database execution generation was replaced");
+              }
+              claim.assertCurrent();
+            },
+          };
+        },
+        async prepare(source, preparation) {
           assertBorrowed();
           assertCreationReference(true);
           const result = run(
@@ -474,6 +506,7 @@ function createAgentDatabaseExecution(
             false,
             true,
             creatingTarget,
+            preparation,
           );
           pending.add(result);
           void result.finally(() => pending.delete(result)).catch(() => undefined);

@@ -356,13 +356,17 @@ describe("reply turn recovery admission", () => {
       };
       const storePath = createSessionStore({ [sessionKey]: entry });
       const context = createRecoveryGatewayContext();
+      const retryEntered = createDeferred();
       const retry = vi
         .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
-        .mockResolvedValue({
-          started: 0,
-          settled: 0,
-          failed: failed ? 1 : 0,
-          skipped: failed ? 0 : 1,
+        .mockImplementation(async () => {
+          retryEntered.resolve();
+          return {
+            started: 0,
+            settled: 0,
+            failed: failed ? 1 : 0,
+            skipped: failed ? 0 : 1,
+          };
         });
       const abort = new AbortController();
       let outcome: Awaited<ReturnType<typeof admitTestReplyTurn>> | undefined;
@@ -384,7 +388,13 @@ describe("reply turn recovery admission", () => {
         },
       );
       try {
-        await vi.waitFor(() => expect(retry).toHaveBeenCalledOnce());
+        await Promise.race([
+          retryEntered.promise,
+          admission.then(() => {
+            throw new Error("Admission settled before recovery dispatch");
+          }),
+        ]);
+        expect(retry).toHaveBeenCalledOnce();
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });

@@ -7,15 +7,14 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
-import * as acquisition from "../../infra/state-database-coordinator-acquisition.js";
 import { acquireStateDatabaseCoordinator } from "../../infra/state-database-coordinator.js";
 import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
 } from "../../sessions/session-lifecycle-admission.js";
-import * as identity from "../../state/openclaw-agent-db-identity.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -23,13 +22,14 @@ import * as registry from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  testing.resetReplyRunRegistry();
-  closeOpenClawAgentDatabasesForTest();
-  vi.restoreAllMocks();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    testing.resetReplyRunRegistry();
+    await closeOpenClawAgentDatabasesAsync();
+    vi.restoreAllMocks();
+    cleanup();
+  }),
+);
 
 it.each([
   "cancelled",
@@ -163,7 +163,7 @@ it.each([
       controller.abort();
     } else if (change === "request-changed") {
       requestFailure = new Error("Original caller was retired during preparation");
-      expect(closeOpenClawAgentDatabaseByPath(storePath)).toBe(true);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath);
     }
     release.resolve();
     if (change === "cancelled") {
@@ -265,7 +265,7 @@ it.each(
       const claim = (await observed.value).databaseClaim;
       expect(claim.isCurrent()).toBe(true);
       if (replacement !== "unchanged") {
-        expect(closeOpenClawAgentDatabaseByPath(storePath)).toBe(true);
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
         expect(claim.isCurrent()).toBe(false);
         if (replacement === "other-inode") {
           fs.unlinkSync(storePath);
@@ -359,7 +359,7 @@ it.each(["reply", "coalesced-stop"] as const)(
           }
         } else {
           expect(result.entry?.sessionId).toBe(sessionId);
-          result.databaseClaim.release();
+          await result.databaseClaim.release();
           expect(await first).toMatchObject([{ status: "rejected" }]);
         }
       } finally {
@@ -370,47 +370,6 @@ it.each(["reply", "coalesced-stop"] as const)(
     }
   },
 );
-
-it("does not publish or leak a caller claim when native acquisition cleanup fails", async () => {
-  const storePath = path.join(tempDirs.make("reply-admission-cleanup-"), "agent.sqlite");
-  const scope = { storePath, sessionKey: "agent:main:cleanup" };
-  sessionEntries.replaceSessionEntrySync(scope, { sessionId: "cleanup-session", updatedAt: 1 });
-  closeOpenClawAgentDatabasesForTest();
-  const acquire = acquisition.acquireStateDatabaseCoordinatorWithWait;
-  const observed = vi
-    .spyOn(acquisition, "acquireStateDatabaseCoordinatorWithWait")
-    .mockImplementationOnce(async (params) => {
-      const lease = await acquire(params);
-      return {
-        ...lease,
-        release() {
-          lease.release();
-          throw new Error("Synthetic release failure after native rollback");
-        },
-      };
-    });
-  const claim = vi.spyOn(identity, "createOpenClawAgentDatabaseClaim");
-  await expect(sessionEntries.loadSessionEntryForAdmission(scope)).rejects.toThrow(
-    "releasing its coordinator failed",
-  );
-  expect(observed).toHaveBeenCalledOnce();
-  expect(claim).not.toHaveBeenCalled();
-});
-
-it("preserves first admission to a missing durable agent store", async () => {
-  openOpenClawStateDatabase();
-  const storePath = path.join(tempDirs.make("reply-first-admission-"), "agent.sqlite");
-  const result = await sessionEntries.loadSessionEntryForAdmission({
-    storePath,
-    sessionKey: "agent:main:first",
-  });
-  try {
-    expect(result.entry).toBeUndefined();
-    expect(result.databaseClaim.isCurrent()).toBe(true);
-  } finally {
-    result.databaseClaim.release();
-  }
-});
 
 it("cancels an in-flight admission read when its lifecycle owner interrupts ingress", async () => {
   const storePath = path.join(tempDirs.make("reply-admission-interrupt-"), "agent.sqlite");

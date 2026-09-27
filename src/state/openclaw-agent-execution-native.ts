@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -39,6 +40,8 @@ import type {
   AgentDatabaseExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionOpen,
+  AgentDatabaseExecutionPreparation,
+  AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
@@ -80,11 +83,13 @@ async function settleAgentRegistration<T>(
 export type AgentDatabaseExecutionScope = Pick<Store, "execute">;
 export type AgentDatabaseNativeGeneration = {
   failed(): boolean;
+  captureClaim(): AgentDatabaseGenerationClaim;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
+    preparation?: AgentDatabaseExecutionPreparation,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };
@@ -355,6 +360,7 @@ export function createAgentDatabaseNativeGeneration(
     source: AgentDatabaseRequestExecutionSource,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
+    preparation?: AgentDatabaseExecutionPreparation,
   ): Promise<Store | undefined> => {
     assertCurrent();
     source.assertCurrent();
@@ -368,8 +374,15 @@ export function createAgentDatabaseNativeGeneration(
             onRegistryChange: source.onRegistryChange,
           })
         : undefined;
-      const openStore = () =>
-        openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
+      const openStore = async () => {
+        const assertOpening = () => {
+          assertCurrent();
+          source.assertCurrent();
+          assertCallerCurrent?.();
+          preparation?.signal?.throwIfAborted();
+        };
+        const createAdmission = admission(source, registration, assertCallerCurrent);
+        return await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
           {
             moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
             databasePath: pathname,
@@ -379,14 +392,23 @@ export function createAgentDatabaseNativeGeneration(
           {
             stateContext: context,
             stateDatabasePath: context.admission.databasePath,
-            assertCurrent,
-            createAdmission: admission(source, registration, assertCallerCurrent),
+            assertCurrent: assertOpening,
+            signal: preparation?.signal,
+            createAdmission,
+            requireStateLifecycle: preparation
+              ? {
+                  get waitMs() {
+                    return Math.max(0, Math.ceil(preparation.deadlineMs - performance.now()));
+                  },
+                }
+              : false,
             onNativeStopped: (stopped, readReceipt) => {
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
             },
           },
         );
+      };
       const store = registration
         ? await settleAgentRegistration(registration, openStore)
         : await openStore();
@@ -417,7 +439,7 @@ export function createAgentDatabaseNativeGeneration(
         opening = undefined;
       }
       if (!store && createIfMissing) {
-        return open(source, assertCallerCurrent, true);
+        return open(source, assertCallerCurrent, true, preparation);
       }
       return store;
     });
@@ -427,8 +449,16 @@ export function createAgentDatabaseNativeGeneration(
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
+    preparation?: AgentDatabaseExecutionPreparation,
   ): Promise<T | undefined> {
-    const store = openedStore ?? (await open(source, assertCallerCurrent, createIfMissing));
+    const assertOperationCurrent = () => {
+      assertCurrent();
+      source.assertCurrent();
+      assertCallerCurrent?.();
+      preparation?.signal?.throwIfAborted();
+    };
+    const store =
+      openedStore ?? (await open(source, assertCallerCurrent, createIfMissing, preparation));
     assertCurrent();
     source.assertCurrent();
     assertCurrent();
@@ -444,12 +474,24 @@ export function createAgentDatabaseNativeGeneration(
         onRegistryChange: source.onRegistryChange,
       });
       await settleAgentRegistration(registration, async () => {
+        const createAdmission = admission(source, registration, assertCallerCurrent);
         await runSqliteWorkerStoreOperation(
           store,
-          (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }),
+          (scope) =>
+            scope.execute(
+              { type: "database.prepareWrite", input: undefined },
+              { signal: preparation?.signal },
+            ),
           undefined,
-          assertCurrent,
-          admission(source, registration, assertCallerCurrent),
+          assertOperationCurrent,
+          createAdmission,
+          preparation
+            ? {
+                get waitMs() {
+                  return Math.max(0, Math.ceil(preparation.deadlineMs - performance.now()));
+                },
+              }
+            : false,
         );
         assertCurrent();
         source.assertCurrent();
@@ -463,7 +505,7 @@ export function createAgentDatabaseNativeGeneration(
       store,
       operation,
       undefined,
-      assertCurrent,
+      assertOperationCurrent,
       admission(source, undefined, assertCallerCurrent),
     );
   }
@@ -501,6 +543,23 @@ export function createAgentDatabaseNativeGeneration(
   return {
     failed: () =>
       openingFailed || Boolean(openedStore && !isSqliteWorkerStoreAvailable(openedStore)),
+    captureClaim() {
+      assertCurrent();
+      const captured = nativeIdentity;
+      if (!captured) {
+        throw new Error("Agent database generation has not been admitted");
+      }
+      return {
+        identity: captured.physicalIdentity,
+        incarnation: captured.incarnation,
+        assertCurrent() {
+          assertCurrent();
+          if (nativeIdentity !== captured) {
+            throw new Error("Agent database generation changed");
+          }
+        },
+      };
+    },
     run,
     close() {
       retiring = true;

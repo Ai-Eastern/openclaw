@@ -494,29 +494,36 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         throw new Error(`SQLite worker module must export ${factoryName}`);
       }
       const factory = module[factoryName];
-      // Module loading can yield before the factory opens native state.
-      if (request.existingIdentity) {
-        assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
-      }
-      const backend: unknown = await runInActorContext(request.actor, () => {
-        const input = deserialize(request.input);
-        if (request.openAdmission) {
-          try {
-            requestSqliteWorkerOperationAdmission({
-              stage: "open",
-              facts: request.openAdmission === "input" ? input : undefined,
-            });
-          } catch (error) {
-            openNotEntered = true;
-            throw error;
-          }
+      const coordinator = await prepareLifecycle();
+      preparedGatewayActor = undefined;
+      let backend: unknown;
+      try {
+        // Loading and lifecycle acquisition can yield before the factory opens native state.
+        if (request.existingIdentity) {
+          assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
         }
-        return factory(input, {
-          databasePath: request.databasePath,
-          ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
-          ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
+        backend = await runInActorContext(request.actor, () => {
+          const input = deserialize(request.input);
+          if (request.openAdmission) {
+            try {
+              requestSqliteWorkerOperationAdmission({
+                stage: "open",
+                facts: request.openAdmission === "input" ? input : undefined,
+              });
+            } catch (error) {
+              openNotEntered = true;
+              throw error;
+            }
+          }
+          return factory(input, {
+            databasePath: request.databasePath,
+            ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
+            ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
+          });
         });
-      });
+      } finally {
+        releaseLifecycle(coordinator);
+      }
       if (
         !isRecord(backend) ||
         typeof backend.execute !== "function" ||

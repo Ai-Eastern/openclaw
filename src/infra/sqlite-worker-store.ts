@@ -192,6 +192,8 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     assertCurrent(): void;
     createAdmission: SqliteWorkerAdmissionFactory;
+    requireStateLifecycle?: SqliteWorkerStateLifecycle;
+    signal?: AbortSignal;
   },
 ): Promise<SqliteWorkerStore<Operations> | undefined> {
   if (!isMainThread) {
@@ -209,6 +211,8 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
         onNativeStopped: custody.onNativeStopped,
+        requireStateLifecycle: custody.requireStateLifecycle,
+        signal: custody.signal,
       },
     ),
   );

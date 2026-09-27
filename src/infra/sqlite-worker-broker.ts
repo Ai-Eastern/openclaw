@@ -243,6 +243,8 @@ export class SqliteWorkerBroker {
           assertCurrent: options.assertCurrent,
           maintenanceScope: options.maintenanceScope,
           createAdmission: options.createAdmission ?? options.createOpenAdmission,
+          requireStateLifecycle: options.requireStateLifecycle,
+          signal: options.signal,
         },
       ).then(async () => {
         opening.initialized = true;
@@ -502,7 +504,7 @@ export class SqliteWorkerBroker {
     }
     const result = createDeferredCore<unknown>();
     const job: Job = {
-      requireStateLifecycle: scope?.requireStateLifecycle,
+      requireStateLifecycle: options.requireStateLifecycle ?? scope?.requireStateLifecycle,
       maintenanceScope,
       createAdmission,
       assertCurrent,

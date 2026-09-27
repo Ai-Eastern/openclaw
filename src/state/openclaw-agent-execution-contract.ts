@@ -12,7 +12,7 @@ import type {
   PublishedSessionTranscriptArchive,
   SessionLegacyArchiveRemovalResult,
 } from "../config/sessions/session-history-archive-pruning.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -41,6 +41,18 @@ export type AgentDatabaseExecutionFileIdentity = Pick<
   AgentDatabaseExecutionIdentity,
   "kind" | "physicalIdentity" | "birthtime" | "nativeLocation"
 >;
+
+/** A borrowed native generation, never a file locator that can adopt a later open. */
+export type AgentDatabaseGenerationClaim = {
+  readonly identity: string;
+  readonly incarnation: string;
+  assertCurrent(): void;
+};
+
+export type AgentDatabaseExecutionPreparation = {
+  deadlineMs: number;
+  signal?: AbortSignal;
+};
 
 export type AgentDatabaseExecutionOpen = {
   leaseId: string;
@@ -72,7 +84,7 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
     output: SessionTranscriptInitializationPublication;
   };
   "database.prepareWrite": { input: undefined; output: void };
-  "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
+  "session.entry.read": { input: { sessionKey: string }; output: InternalSessionEntry | undefined };
   "session.entries.replace": {
     input: SessionEntryReplacementCommit & {
       initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
