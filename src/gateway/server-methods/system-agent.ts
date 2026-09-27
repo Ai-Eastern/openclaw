@@ -65,7 +65,7 @@ import {
   startSetupActivationWizard,
 } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export type { SystemAgentChatSession };
 
@@ -138,7 +138,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "openclaw.chat.history": defineValidatedGatewayMethod(
+  "openclaw.chat.history": defineValidatedGatewayHandler(
     "openclaw.chat.history",
     validateSystemAgentChatHistoryParams,
     ({ params, respond }) => {
@@ -150,7 +150,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     },
   ),
   /** Structured onboarding: list reusable AI access on this host. */
-  "openclaw.setup.detect": defineValidatedGatewayMethod(
+  "openclaw.setup.detect": defineValidatedGatewayHandler(
     "openclaw.setup.detect",
     validateSystemAgentSetupDetectParams,
     async ({ params, respond }) => {
@@ -159,7 +159,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     },
   ),
   /** Re-run the exact current default-agent inference route without mutating setup. */
-  "openclaw.setup.verify": defineValidatedGatewayMethod(
+  "openclaw.setup.verify": defineValidatedGatewayHandler(
     "openclaw.setup.verify",
     validateSystemAgentSetupVerifyParams,
     async ({ params, respond, context }) => {
@@ -174,7 +174,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     },
   ),
   /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
-  "openclaw.setup.auth.start": defineValidatedGatewayMethod(
+  "openclaw.setup.auth.start": defineValidatedGatewayHandler(
     "openclaw.setup.auth.start",
     validateSystemAgentSetupAuthStartParams,
     async ({ params, respond, context, client }) => {
@@ -190,7 +190,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     },
   ),
   /** Activate a detected or manual route with server-owned capability review. */
-  "openclaw.setup.activate.start": defineValidatedGatewayMethod(
+  "openclaw.setup.activate.start": defineValidatedGatewayHandler(
     "openclaw.setup.activate.start",
     validateSystemAgentSetupActivateStartParams,
     async ({ params, respond, context }) => {
@@ -205,7 +205,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     },
   ),
   /** Run one provider-owned prepare flow over the shared wizard transport. */
-  "openclaw.setup.prepare.start": defineValidatedGatewayMethod(
+  "openclaw.setup.prepare.start": defineValidatedGatewayHandler(
     "openclaw.setup.prepare.start",
     validateSystemAgentSetupAuthStartParams,
     async ({ params, respond, context }) => {
@@ -296,7 +296,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
    * queueing work that could outlive their RPC timeout. Verification failures never
    * commit a broken model; post-commit application failures explain the saved state.
    */
-  "openclaw.setup.activate": defineValidatedGatewayMethod(
+  "openclaw.setup.activate": defineValidatedGatewayHandler(
     "openclaw.setup.activate",
     validateSystemAgentSetupActivateParams,
     async ({ params, respond }) => {

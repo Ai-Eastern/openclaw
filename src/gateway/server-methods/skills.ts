@@ -641,7 +641,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resolved = resolveSkillsAgentWorkspace(params, context);
+      const resolved = resolveSkillsAgentWorkspace(p, context);
       if (!resolved.ok) {
         respond(false, undefined, resolved.error);
         return;
