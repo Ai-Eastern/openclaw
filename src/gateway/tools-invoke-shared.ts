@@ -211,7 +211,7 @@ async function invokeGatewayToolWithSignal(
   params: InvokeGatewayToolParams & { signal: AbortSignal },
 ): Promise<ToolsInvokeOutcome> {
   let hasClientUploads = false;
-  const assertInputCommitAllowed = () => {
+  const assertCapturedInputCommitAllowed = () => {
     params.signal.throwIfAborted();
     if (hasClientUploads) {
       assertGatewayUploadsEnabled(getRuntimeConfig());
@@ -270,6 +270,13 @@ async function invokeGatewayToolWithSignal(
     params.toolCallIdPrefix === "rpc" &&
     (sourceClient?.internal?.syntheticClient === true ||
       sourceClient?.internal?.agentRuntimeIdentity !== undefined);
+  // Plugins opt in at their byte writer, including names the wire classifier cannot know.
+  const assertInputCommitAllowed = () => {
+    params.signal.throwIfAborted();
+    if (!internalRpc) {
+      assertGatewayUploadsEnabled(getRuntimeConfig());
+    }
+  };
   hasClientUploads = !internalRpc && isToolUploadRequest(toolName, args);
   if (hasClientUploads && !areGatewayUploadsEnabled(params.cfg)) {
     return failure(403, "tool_call_blocked", GATEWAY_UPLOADS_DISABLED_MESSAGE);
@@ -430,11 +437,11 @@ async function invokeGatewayToolWithSignal(
         operatorRoleActor: params.operatorRoleActor,
         scopes: client.connect.scopes ?? [],
         assertCurrent: assertInvocationCurrent,
-        assertInputCommitAllowed,
+        assertInputCommitAllowed: assertCapturedInputCommitAllowed,
       },
       async () => {
         assertInvocationCurrent();
-        assertInputCommitAllowed();
+        assertCapturedInputCommitAllowed();
         return await tool.execute?.(toolCallId, hookResult.params, params.signal);
       },
     );

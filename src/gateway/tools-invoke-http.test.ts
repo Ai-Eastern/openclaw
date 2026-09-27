@@ -8,10 +8,9 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
-import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -52,7 +51,7 @@ const hookMocks = vi.hoisted(() => ({
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
 let cfg: Record<string, unknown> = {};
-let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
+let lastCreateOpenClawToolsContext: OpenClawToolsOptions | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -120,7 +119,10 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 // routing/policy tests we only need a small set of tool names.
 vi.mock("../agents/openclaw-tools.js", async () => {
   const { createTerminalTool } = await import("../agents/tools/terminal-tool.js");
-  const { createUploadToolFixtures } = await import("./tools-invoke.policy.test-support.js");
+  const { createUploadToolFixtures, createClientUploadToolFixture } =
+    await import("./tools-invoke.policy.test-support.js");
+  const { resolveOpenClawPluginToolInputs } =
+    await import("../agents/openclaw-tools.plugin-context.js");
   const { setPluginToolMeta } = await import("../plugins/tool-metadata.js");
   const toolInputError = (message: string) => {
     const err = new Error(message);
@@ -239,23 +241,26 @@ vi.mock("../agents/openclaw-tools.js", async () => {
   ];
 
   return {
-    createOpenClawTools: (ctx: Record<string, unknown>) => {
+    createOpenClawTools: (ctx: OpenClawToolsOptions) => {
       lastCreateOpenClawToolsContext = ctx;
       const selected = ctx.disablePluginTools
         ? tools.filter((tool) => tool.name !== "browser")
         : tools;
       return [
         ...selected,
+        ...(ctx.disablePluginTools
+          ? []
+          : [
+              createClientUploadToolFixture(
+                resolveOpenClawPluginToolInputs({ options: ctx }).context,
+              ),
+            ]),
         createTerminalTool({
-          agentId:
-            typeof ctx.requesterAgentIdOverride === "string"
-              ? ctx.requesterAgentIdOverride
-              : "main",
-          agentSessionKey:
-            typeof ctx.agentSessionKey === "string" ? ctx.agentSessionKey : undefined,
-          sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
-          config: ctx.config as OpenClawConfig | undefined,
-          execSession: (ctx.execSession as ExecSessionDefaults | undefined) ?? {},
+          agentId: ctx.requesterAgentIdOverride ?? "main",
+          agentSessionKey: ctx.agentSessionKey,
+          sessionId: ctx.sessionId,
+          config: ctx.config,
+          execSession: ctx.execSession ?? {},
         }),
       ];
     },

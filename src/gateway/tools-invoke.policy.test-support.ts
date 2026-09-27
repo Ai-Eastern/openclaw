@@ -1,14 +1,19 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { expect, it, vi, type Mock } from "vitest";
+import { afterAll, beforeAll, expect, it, vi, type Mock } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { defaultSkillUploadStore } from "../skills/lifecycle/upload-store.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMethodRegistry, type GatewayMethodRegistry } from "./methods/registry.js";
@@ -63,6 +68,75 @@ export function registerToolsInvokeUploadTests({
   setMainAllowedTools: (params: { allow: string[] }) => void;
   expectOkInvokeResponse: (res: Response) => Promise<unknown>;
 }): void {
+  const dirs = useAutoCleanupTempDirTracker(afterAll);
+  let uploadDir: string;
+  beforeAll(() => {
+    uploadDir = dirs.make("custom-client-upload");
+  });
+  it.each([
+    {
+      label: "late-disabled",
+      initiallyEnabled: true,
+      enabled: false,
+      internal: false,
+      text: false,
+    },
+    { label: "disabled", initiallyEnabled: false, enabled: false, internal: false, text: false },
+    { label: "enabled", initiallyEnabled: true, enabled: true, internal: false, text: false },
+    { label: "internal", initiallyEnabled: false, enabled: false, internal: true, text: false },
+    { label: "text", initiallyEnabled: false, enabled: false, internal: false, text: true },
+  ])("protects custom plugin final storage: $label", async (scenario) => {
+    setMainAllowedTools({ allow: ["client_blob_fixture", "upload-fixture"] });
+    getConfig().gateway = { uploads: { enabled: scenario.initiallyEnabled } };
+    const fileName = scenario.label + ".txt";
+    const destination = path.join(uploadDir, fileName);
+    await fs.writeFile(destination, "original");
+    const before = await fs.readdir(uploadDir);
+    const nativeRoot = fsSafe.root;
+    using opening = vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+      const opened = await nativeRoot(...args);
+      if (args[0] === uploadDir) {
+        getConfig().gateway = { uploads: { enabled: scenario.enabled } };
+      }
+      return opened;
+    });
+    const args = {
+      directory: uploadDir,
+      fileName,
+      ...(scenario.text ? {} : { bytes: "client bytes" }),
+    };
+    const allowed = scenario.enabled || scenario.internal || scenario.text;
+    if (scenario.internal) {
+      const rpc = await withPluginRuntimeGatewayRequestScope(
+        { client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
+        () => invokeToolsRpc({ name: "client_blob_fixture", args }),
+      );
+      expect(rpc?.[1]?.ok).toBe(true);
+    } else {
+      const res = await invokeToolAuthed({ tool: "client_blob_fixture", args });
+      expect.soft(res.status).toBe(allowed ? 200 : 403);
+      const body: unknown = await res.json();
+      expect.soft(body).toMatchObject(
+        allowed
+          ? { ok: true }
+          : {
+              ok: false,
+              error: {
+                message: expect.stringContaining("gateway.uploads.enabled"),
+              },
+            },
+      );
+    }
+    expect(await fs.readFile(destination, "utf8")).toBe(
+      allowed && !scenario.text ? "client bytes" : "original",
+    );
+    expect(await fs.readdir(uploadDir)).toEqual(before);
+    if (scenario.text) {
+      expect(opening).not.toHaveBeenCalled();
+    } else {
+      expect(opening).toHaveBeenCalledWith(uploadDir);
+    }
+  });
   it.each([false, true])(
     "carries HTTP input policy into nested archive storage (disabled=%s)",
     async (disabled) => {
@@ -388,4 +462,34 @@ export function createUploadToolFixtures(execute: AnyAgentTool["execute"]) {
     }
   }
   return uploadTools;
+}
+
+export function createClientUploadToolFixture(context: OpenClawPluginToolContext): AnyAgentTool {
+  const tool: AnyAgentTool = {
+    name: "client_blob_fixture",
+    label: "Client blob fixture",
+    description: "Custom client-input plugin fixture using native storage admission",
+    parameters: Type.Object({
+      directory: Type.String(),
+      fileName: Type.String(),
+      bytes: Type.Optional(Type.String()),
+    }),
+    execute: async (_id, args) => {
+      if (
+        !isRecord(args) ||
+        typeof args.directory !== "string" ||
+        typeof args.fileName !== "string"
+      ) {
+        throw new Error("Invalid custom plugin fixture arguments");
+      }
+      if (typeof args.bytes === "string") {
+        const guard = expectDefined(context.assertInputCommitAllowed, "custom plugin input guard");
+        const storage = await fsSafe.root(args.directory);
+        await storage.write(args.fileName, args.bytes, { assertBeforeMutation: guard });
+      }
+      return { content: [], details: { accepted: true } };
+    },
+  };
+  setPluginToolMeta(tool, { pluginId: "upload-fixture", optional: true });
+  return tool;
 }
