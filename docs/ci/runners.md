@@ -38,6 +38,9 @@ Current PR Node plans use measured hosted costs kept separately from hourly main
 costs. Smaller groups retain the complete inventory, worker limits, and test
 deadlines. Ordinary group admission targets 340 seconds and packed compute targets
 375 seconds; CLI process groups retain a 120-second target for runtime preparation.
+Small CLI groups without a runtime build can share a serial job within the
+existing 150-second CLI cap. Each group keeps its separate child process and
+worker limit; hourly main and other backend budgets are unchanged.
 The 200-second setup reserve includes shared worker-bundle preparation once per
 job, leaving another 25 seconds for workload variation. PR timing records keep
 raw spans separate from workload measurements: only a uniquely attributed parent
@@ -52,6 +55,13 @@ optional PR hosted admission budget is 300 jobs; main retains 45. These are
 per-run bounds, not a reservation of the organization’s shared hosted pool.
 Qualification records job-created-to-started waits separately from prerequisite
 waits and complete job walls.
+
+Hosted Node 24 setup honors the workflow's existing `NODE_VERSION` pin when the
+setup input is `24.x`. This prevents runner-image refreshes from silently choosing
+a different patch version. Explicit compatibility versions retain their own
+selection, and self-hosted setup retains its existing range and toolchain-cache
+policy. A restored cache key is not runtime proof: record the selected binary and
+`node -v` when comparing runner backends.
 
 Runner choice follows contributor trust, not whether a pull request came from a fork. Every `runs-on` expression admits Blacksmith only when `github.event.pull_request.author_association` is `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`, so a fork pull request from someone who has already landed a commit is routed exactly like a maintainer pull request. `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, and `MANNEQUIN` stay on GitHub-hosted runners, which are free for public repositories, so an unreviewed author cannot spend Blacksmith capacity. Maintainers report `CONTRIBUTOR` here because org membership is concealed; keep `CONTRIBUTOR` in that list or maintainer pull requests lose Blacksmith. Pushes and manual dispatches are unaffected. Cache trust is a separate, stricter boundary: exact dependency restores require a pull request from `openclaw/openclaw`, and ordinary CI never publishes the shared archives. The separate trusted warmer owns publication.
 

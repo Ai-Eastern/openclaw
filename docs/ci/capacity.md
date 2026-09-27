@@ -24,6 +24,13 @@ runner demand or the per-row work budget. PR preflight, monitor, security and st
 artifact build, Windows, Node, Control UI E2E, and aggregate gate use hosted capacity; hourly main and
 manual/release routing retain the policies described below. Measure hosted
 assignment waits against the shared organization pool before expanding admission.
+The broad PR in [run 36274529895](https://github.com/openclaw/openclaw/actions/runs/36274529895)
+peaked at 259 simultaneous hosted jobs, including 200 Node jobs. Against an
+approximately 500-job shared pool, one such peak leaves 241 slots for other work;
+two aligned peaks need 518 slots before other workflows. Staggered runs can
+overlap more efficiently, but average occupancy alone does not establish a
+queue-free concurrency limit. This run was cancelled after a test failure, so
+its observed peak is capacity evidence, not complete latency qualification.
 The PR base budget includes every Control UI E2E row and the aggregate gate;
 the browser-extension row is counted once rather than as an optional offload.
 Windows PR planning uses its measured hosted file costs for up to twelve rows,

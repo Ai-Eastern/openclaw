@@ -522,6 +522,7 @@ describe("startDebugProxyServer", () => {
     const responseBodyBytes = 16 * 1024 * 1024;
     const origin = await startStreamingProxyOrigin(responseBodyBytes);
     const proxy = await startDebugProxyServer({ settings });
+    let phase = "downstream request";
 
     try {
       const aborted = await rawSlowGetThroughProxy({
@@ -531,6 +532,7 @@ describe("startDebugProxyServer", () => {
         targetUrl: `${origin.url}/capture`,
       });
 
+      phase = "transport assertions";
       expect(aborted).toMatchObject({
         aborted: true,
         resumed: true,
@@ -539,11 +541,14 @@ describe("startDebugProxyServer", () => {
       expect(aborted.bodyBytes).toBeGreaterThanOrEqual(64 * 1024);
 
       await vi.waitFor(async () => {
+        phase = "transport assertions";
         expect(origin.state.closedResponses).toBe(1);
         expect(origin.state.finishedResponses).toBe(0);
+        phase = "capture read";
         const captureEvents = (await readCaptureEvents(settings.sessionId, 20)).filter(
           (event) => event.path === "/capture",
         );
+        phase = "capture assertions";
         const capturedRequest = captureEvents.find((event) => event.kind === "request");
         expect(capturedRequest).toBeDefined();
         expect(captureEvents.filter((event) => event.kind === "error")).toEqual([
@@ -556,6 +561,7 @@ describe("startDebugProxyServer", () => {
         expect(captureEvents.filter((event) => event.kind === "response")).toEqual([]);
       });
 
+      phase = "healthy follow-up";
       const healthy = await getThroughProxy(proxy.proxyUrl, `${origin.url}/healthy`);
       expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
       await proxy.stop();
@@ -564,6 +570,13 @@ describe("startDebugProxyServer", () => {
           (event) => event.path === "/healthy" && event.kind === "error",
         ),
       ).toEqual([]);
+    } catch (error) {
+      console.error("Proxy downstream abort failed", {
+        phase,
+        closedResponses: origin.state.closedResponses,
+        finishedResponses: origin.state.finishedResponses,
+      });
+      throw error;
     } finally {
       await proxy.stop();
       await origin.stop();
@@ -574,6 +587,7 @@ describe("startDebugProxyServer", () => {
     const settings = await makeSettings();
     const origin = await startStreamingProxyOrigin(16 * 1024 * 1024);
     const proxy = await startDebugProxyServer({ settings });
+    let phase = "downstream request";
 
     try {
       const aborted = await rawSlowGetThroughProxy({
@@ -584,6 +598,7 @@ describe("startDebugProxyServer", () => {
         targetUrl: `${origin.url}/capture`,
       });
 
+      phase = "transport assertions";
       expect(aborted).toMatchObject({
         aborted: true,
         resumed: true,
@@ -591,11 +606,14 @@ describe("startDebugProxyServer", () => {
       });
 
       await vi.waitFor(async () => {
+        phase = "transport assertions";
         expect(origin.state.closedResponses).toBe(1);
         expect(origin.state.finishedResponses).toBe(0);
+        phase = "capture read";
         const captureEvents = (await readCaptureEvents(settings.sessionId, 20)).filter(
           (event) => event.path === "/capture",
         );
+        phase = "capture assertions";
         const capturedRequest = captureEvents.find((event) => event.kind === "request");
         expect(capturedRequest).toBeDefined();
         expect(captureEvents.filter((event) => event.kind === "error")).toEqual([
@@ -608,6 +626,7 @@ describe("startDebugProxyServer", () => {
         expect(captureEvents.filter((event) => event.kind === "response")).toEqual([]);
       });
 
+      phase = "healthy follow-up";
       const healthy = await getThroughProxy(proxy.proxyUrl, `${origin.url}/healthy`);
       expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
       await proxy.stop();
@@ -616,6 +635,13 @@ describe("startDebugProxyServer", () => {
           (event) => event.path === "/healthy" && event.kind === "error",
         ),
       ).toEqual([]);
+    } catch (error) {
+      console.error("Proxy downstream reset failed", {
+        phase,
+        closedResponses: origin.state.closedResponses,
+        finishedResponses: origin.state.finishedResponses,
+      });
+      throw error;
     } finally {
       await proxy.stop();
       await origin.stop();

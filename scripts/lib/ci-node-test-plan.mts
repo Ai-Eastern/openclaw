@@ -4686,10 +4686,9 @@ function createCompactNodeTestShardBundles(
         return false;
       }
       const combined = [...candidate, group];
-      // Spend the larger budget only on a complete no-build CLI bin. Each child
-      // keeps its 150s admission limit, worker budget and separate process.
-      const sharesSerialCliBudget =
-        options.runnerBackend === "hybrid" &&
+      // Serial CLI siblings keep separate processes; only hybrid gets the larger budget.
+      const sharesSerialCliFamily =
+        (options.runnerBackend === "hybrid" || options.runnerBackend === "github-pr") &&
         combined.every(
           (entry) =>
             !entry.requiresDist &&
@@ -4702,15 +4701,16 @@ function createCompactNodeTestShardBundles(
       const sharesHostedBuild =
         isHostedNodeBackend(options.runnerBackend) &&
         combined.every((entry) => entry.pretestBuildMode !== undefined && !entry.requiresDist);
-      const serialSecondsCap = sharesSerialCliBudget
-        ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
-        : exclusive && !sharesHostedBuild
-          ? COMPACT_EXCLUSIVE_JOB_SECONDS
-          : options.runnerBackend === "github-pr"
-            ? COMPACT_HOSTED_PR_JOB_SECONDS
-            : usesExpandedRunnerProfile(options.runnerBackend)
-              ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
-              : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
+      const serialSecondsCap =
+        sharesSerialCliFamily && options.runnerBackend === "hybrid"
+          ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
+          : exclusive && !sharesHostedBuild
+            ? COMPACT_EXCLUSIVE_JOB_SECONDS
+            : options.runnerBackend === "github-pr"
+              ? COMPACT_HOSTED_PR_JOB_SECONDS
+              : usesExpandedRunnerProfile(options.runnerBackend)
+                ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
+                : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
       const parallel =
         usesBlacksmithRunner &&
         combined.every(isParallelCompactGroup) &&
@@ -4719,7 +4719,7 @@ function createCompactNodeTestShardBundles(
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         admitsCompactBin(combined, secondsCap, estimateBinSeconds, {
-          sharedFamily: sharesSerialCliBudget,
+          sharedFamily: sharesSerialCliFamily,
           parallel,
         })
       );
