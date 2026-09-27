@@ -708,7 +708,16 @@ describe("runCodexAppServerSideQuestion", () => {
       sideParams({
         hostCapabilities: { ...TEST_HOST_CAPABILITIES, requestApproval, waitForApproval },
       }),
-      { pluginConfig: { appServer: { mode: "yolo" } } },
+      {
+        pluginConfig: {
+          appServer: { mode: "yolo" },
+          codexPlugins: {
+            enabled: true,
+            allow_destructive_actions: "auto",
+            plugins: { docs: { marketplaceName: "company-tools", pluginName: "docs" } },
+          },
+        },
+      },
     );
     await vi.waitFor(() =>
       expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),

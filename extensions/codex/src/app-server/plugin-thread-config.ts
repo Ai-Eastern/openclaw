@@ -575,11 +575,34 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
 /** Projects current ask overrides before a side thread replays its bound app policy. */
 export async function refreshCodexPluginAppApprovalPolicy(params: {
   policyContext: PluginAppPolicyContext;
+  pluginConfig: unknown;
   request: CodexPluginRuntimeRequest;
   configCwd?: string;
 }): Promise<
   Pick<CodexPluginThreadConfig, "policyContext" | "diagnostics"> & { configPatch: JsonObject }
 > {
+  const currentPluginPolicies = resolveCodexPluginsPolicy(params.pluginConfig).pluginPolicies;
+  // A side fork replays bound native approval context after config may have
+  // changed; stale owner policy must not authorize an MCP prompt.
+  if (
+    Object.values(params.policyContext.nativePlugins ?? {}).some((owner) => {
+      if (!owner) {
+        return false;
+      }
+      const current = currentPluginPolicies.find((policy) => policy.configKey === owner.configKey);
+      return (
+        !current?.enabled ||
+        current.marketplaceName !== owner.marketplaceName ||
+        current.pluginName !== owner.pluginName ||
+        current.allowDestructiveActions !== owner.allowDestructiveActions ||
+        current.destructiveApprovalMode !== owner.destructiveApprovalMode
+      );
+    })
+  ) {
+    throw new Error(
+      "Codex /btw cannot verify current native plugin policy for this thread. Send a normal message to refresh plugin ownership, then retry /btw.",
+    );
+  }
   if (Object.keys(params.policyContext.apps).length === 0) {
     return {
       policyContext: params.policyContext,

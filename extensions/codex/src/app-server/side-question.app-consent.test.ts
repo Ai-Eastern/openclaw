@@ -108,4 +108,52 @@ describe("Codex side-question app consent", () => {
     ).rejects.toThrow("Send a normal message to refresh plugin ownership");
     expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["ask", { allow_destructive_actions: "ask" }],
+    ["deny", { allow_destructive_actions: false }],
+    ["disabled", { enabled: false }],
+  ] as const)(
+    "rejects a stored native MCP allow after plugin policy changes to %s",
+    async (_, policy) => {
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
+      readCodexAppServerBindingMock.mockReturnValue(
+        readCodexAppServerThreadBinding({
+          ...readCodexAppServerBindingMock(),
+          pluginAppPolicyContext: {
+            fingerprint: "stored-native-allow",
+            apps: {},
+            pluginAppIds: {},
+            nativePlugins: {
+              "native/docs": {
+                configKey: "docs",
+                marketplaceName: "company-tools",
+                pluginName: "docs",
+                allowDestructiveActions: true,
+                destructiveApprovalMode: "allow",
+                mcpServerNames: ["docs"],
+              },
+            },
+            mcpServers: { docs: "native/docs" },
+          },
+        }),
+      );
+
+      await expect(
+        runCodexAppServerSideQuestion(sideParams(), {
+          pluginConfig: {
+            appServer: { mode: "yolo" },
+            codexPlugins: {
+              enabled: true,
+              plugins: {
+                docs: { marketplaceName: "company-tools", pluginName: "docs", ...policy },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow("Send a normal message to refresh plugin ownership");
+      expect(client.request.mock.calls.map(([method]) => method)).not.toContain("thread/fork");
+    },
+  );
 });

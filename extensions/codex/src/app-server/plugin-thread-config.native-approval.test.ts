@@ -46,6 +46,13 @@ describe("Codex native app approval settings", () => {
     });
     const replay = await refreshCodexPluginAppApprovalPolicy({
       policyContext: config.policyContext,
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "auto",
+        },
+      },
       request,
     });
 
