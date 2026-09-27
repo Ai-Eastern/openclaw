@@ -1,5 +1,6 @@
 import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
 import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
@@ -181,20 +182,17 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const servers: Server[] = [];
   let settled = false;
   let binding = true;
-  const timeoutRef: { current?: NodeJS.Timeout } = {};
+  let timeout: NodeJS.Timeout | undefined;
   let closePromise: Promise<void> | undefined;
-  let resolveWait!: (result: OAuthLoopbackCallbackResult) => void;
-  let rejectWait!: (error: Error) => void;
-  const waitPromise = new Promise<OAuthLoopbackCallbackResult>((resolve, reject) => {
-    resolveWait = resolve;
-    rejectWait = reject;
-  });
+  const {
+    promise: waitPromise,
+    resolve: resolveWait,
+    reject: rejectWait,
+  } = createDeferredCore<OAuthLoopbackCallbackResult>();
   void waitPromise.catch(() => undefined);
   const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
   const cleanup = () => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
+    clearTimeout(timeout);
     params.signal?.removeEventListener("abort", onAbort);
   };
   const settleError = (error: unknown) => {
@@ -317,10 +315,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     throw error;
   }
   binding = false;
-  timeoutRef.current = setTimeout(
-    () => settleError(new Error("OAuth callback timeout")),
-    params.timeoutMs,
-  );
+  timeout = setTimeout(() => settleError(new Error("OAuth callback timeout")), params.timeoutMs);
   return {
     waitForCallback: () => waitPromise,
     close: async () => {

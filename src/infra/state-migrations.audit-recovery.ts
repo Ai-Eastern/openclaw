@@ -5,7 +5,6 @@ import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { writeFileWindowFully } from "./file-descriptor.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import {
-  legacyAuditRawCheckpointKey,
   legacyAuditRawCheckpointsMatch,
   legacyAuditSourceGenerationKey,
   openLegacyAuditRawCheckpointStore,
@@ -165,18 +164,11 @@ function createAuditRecoveryScrubPattern(): Buffer {
 }
 
 function buildScrubbedAuditRecoveryContent(rawBytes: Buffer, scrubPattern: Buffer): Buffer {
-  if (rawBytes.length === 0) {
-    return Buffer.alloc(0);
-  }
   // The readable sanitized sibling owns migrated history. This same-inode file
   // is only an append landing pad for predecessor writers, so blank the complete
   // fixed-size prefix and checkpoint it with zero records. Leading whitespace is
   // valid before any late JSONL row and preserves an open O_APPEND offset.
-  const scrubbed = Buffer.allocUnsafe(rawBytes.length);
-  for (let offset = 0; offset < scrubbed.length; offset += scrubPattern.length) {
-    scrubPattern.copy(scrubbed, offset, 0, Math.min(scrubPattern.length, scrubbed.length - offset));
-  }
-  return scrubbed;
+  return Buffer.alloc(rawBytes.length, scrubPattern);
 }
 
 const AUDIT_RECOVERY_WRITE_CHUNK_BYTES = 64 * 1024;
@@ -238,14 +230,7 @@ async function advanceAuditRecoveryWrite(params: {
 }): Promise<AuditRecoveryProgress> {
   let progress = params.progress;
   if (progress.pendingEnd > progress.committedBytes) {
-    await writeFileWindowFully(
-      params.handle,
-      params.desiredContent.subarray(progress.committedBytes, progress.pendingEnd),
-      progress.committedBytes,
-    );
-    await params.handle.sync();
-    progress = { ...progress, committedBytes: progress.pendingEnd };
-    await writeAuditRecoveryProgress({ ...params, progress });
+    progress = await reconcileAuditRecoveryPendingWrite(params);
   }
   while (progress.committedBytes < progress.extentBytes) {
     const end = Math.min(
@@ -390,10 +375,7 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
     ) {
       // Checkpoint commit won the crash race; the restore journal is stale and
       // must not roll the already-checkpointed sanitized inode backward.
-      await params.root.remove(progressRelativePath).catch(() => undefined);
-      await params.root.remove(stagingRelativePath).catch(() => undefined);
-      await params.root.remove(restoreRelativePath);
-      await syncAuditRecoveryDirectory(params.root, params.relativePath);
+      await finalizeLegacyAuditRecoveryArchive(params);
       return true;
     }
     {
@@ -447,10 +429,7 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
       await writable.handle.chmod(0o600);
       await writable.handle.sync();
     }
-    await params.root.remove(progressRelativePath).catch(() => undefined);
-    await params.root.remove(stagingRelativePath).catch(() => undefined);
-    await params.root.remove(restoreRelativePath);
-    await syncAuditRecoveryDirectory(params.root, params.relativePath);
+    await finalizeLegacyAuditRecoveryArchive(params);
     return true;
   } catch (error) {
     params.warnings.push(
@@ -613,10 +592,7 @@ export async function recordLegacyAuditRawCheckpoint(params: {
       );
       return false;
     }
-    openLegacyAuditRawCheckpointStore(params.stateDir).upsert(
-      legacyAuditRawCheckpointKey(checkpoint),
-      checkpoint,
-    );
+    openLegacyAuditRawCheckpointStore(params.stateDir).upsert(checkpoint.generationKey, checkpoint);
     return true;
   } catch (error) {
     params.warnings.push(

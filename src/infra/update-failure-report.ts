@@ -95,32 +95,16 @@ function resultFromExistingReceipt(
         .savedReportPath
     : prepared.savedReportPath,
 ): UpdateFailureReportSubmitResult {
-  if (receipt?.status === "pending") {
+  if (receipt && receipt.status !== "created" && receipt.status !== "fallback") {
     return {
-      message: "This update attempt already has a report submission in progress.",
+      message: {
+        pending: "This update attempt already has a report submission in progress.",
+        preparing: "This update attempt already has a report preparation in progress.",
+        prepared: "This update attempt already has a report publication in progress.",
+        retryable: "No GitHub issue submission was started. This report can be retried.",
+      }[receipt.status],
       savedReportPath,
-      status: "pending",
-    };
-  }
-  if (receipt?.status === "preparing") {
-    return {
-      message: "This update attempt already has a report preparation in progress.",
-      savedReportPath,
-      status: "retryable",
-    };
-  }
-  if (receipt?.status === "prepared") {
-    return {
-      message: "This update attempt already has a report publication in progress.",
-      savedReportPath,
-      status: "retryable",
-    };
-  }
-  if (receipt?.status === "retryable") {
-    return {
-      message: "No GitHub issue submission was started. This report can be retried.",
-      savedReportPath,
-      status: "retryable",
+      status: receipt.status === "pending" ? "pending" : "retryable",
     };
   }
   const previewMatches = receipt?.previewDigest === prepared.previewDigest;
@@ -431,6 +415,12 @@ export async function submitUpdateFailureReport(
   }
 
   const ownedPrepared = bindSavedReportArtifact(prepared, reservationId);
+  const currentReceiptResult = () =>
+    resultFromExistingReceipt(
+      readReceipt(prepared.attemptId, stateEnv),
+      prepared,
+      ownedPrepared.savedReportPath,
+    );
   const saved: SavedUpdateFailureReport = {
     reportCreated: false,
     reportDirCreated: false,
@@ -453,11 +443,7 @@ export async function submitUpdateFailureReport(
     await savePreparedUpdateFailureReport(ownedPrepared, saved, options.hasCurrentAuthority);
     if (options.validateCurrentAttempt && !(await options.validateCurrentAttempt())) {
       if (!(await cleanupOwnedPreparation())) {
-        return resultFromExistingReceipt(
-          readReceipt(prepared.attemptId, stateEnv),
-          prepared,
-          ownedPrepared.savedReportPath,
-        );
+        return currentReceiptResult();
       }
       return {
         message: "This failed update attempt is stale or unavailable.",
@@ -478,11 +464,7 @@ export async function submitUpdateFailureReport(
     );
     if (!publicationReserved) {
       await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
-      return resultFromExistingReceipt(
-        readReceipt(prepared.attemptId, stateEnv),
-        prepared,
-        ownedPrepared.savedReportPath,
-      );
+      return currentReceiptResult();
     }
     await publishPreparedUpdateFailureReport(ownedPrepared, saved);
   } catch (error) {
@@ -560,18 +542,10 @@ export async function submitUpdateFailureReport(
     }
     if (error.reason === "reservation") {
       await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
-      return resultFromExistingReceipt(
-        readReceipt(prepared.attemptId, stateEnv),
-        prepared,
-        ownedPrepared.savedReportPath,
-      );
+      return currentReceiptResult();
     }
     if (!(await cleanupOwnedPreparation())) {
-      return resultFromExistingReceipt(
-        readReceipt(prepared.attemptId, stateEnv),
-        prepared,
-        ownedPrepared.savedReportPath,
-      );
+      return currentReceiptResult();
     }
     if (error.reason === "stale") {
       return {

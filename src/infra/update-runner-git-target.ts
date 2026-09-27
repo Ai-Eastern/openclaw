@@ -10,7 +10,13 @@ import {
 } from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errno.js";
 import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
-import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
+import {
+  DEV_BRANCH,
+  isBetaTag,
+  isStableTag,
+  selectNpmChannelVersion,
+  type UpdateChannel,
+} from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
@@ -669,14 +675,7 @@ export function selectChannelTag(
   if (channel === "beta") {
     const betaTag = orderedTags.find((tag) => isBetaTag(tag)) ?? null;
     const stableTag = orderedTags.find((tag) => isStableTag(tag)) ?? null;
-    if (!betaTag) {
-      return stableTag;
-    }
-    if (!stableTag) {
-      return betaTag;
-    }
-    const comparison = compareSemverStrings(betaTag, stableTag);
-    return comparison != null && comparison < 0 ? stableTag : betaTag;
+    return selectNpmChannelVersion({ version: betaTag }, { version: stableTag }).version;
   }
   return orderedTags.find((tag) => isStableTag(tag)) ?? null;
 }

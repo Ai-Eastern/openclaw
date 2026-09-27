@@ -29,6 +29,7 @@ import {
 } from "./session-binding-native-selection.js";
 import {
   buildChannelAccountKey,
+  captureConversationRef,
   normalizeConversationRef,
   withSessionBindingInspectionConversation,
 } from "./session-binding-normalization.js";
@@ -100,19 +101,11 @@ function normalizePlacement(raw: unknown): SessionBindingPlacement | undefined {
   return raw === "current" || raw === "child" ? raw : undefined;
 }
 
-function inferDefaultPlacement(ref: ConversationRef): SessionBindingPlacement {
-  return ref.conversationId ? "current" : "child";
-}
-
 function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindingPlacement[] {
-  const configured = adapter.capabilities?.placements?.map((value) => normalizePlacement(value));
-  const placements = configured?.filter((value): value is SessionBindingPlacement =>
-    Boolean(value),
+  const placements = adapter.capabilities?.placements?.filter(
+    (value) => normalizePlacement(value) !== undefined,
   );
-  if (placements && placements.length > 0) {
-    return uniqueValues(placements);
-  }
-  return ["current", "child"];
+  return placements?.length ? uniqueValues(placements) : ["current", "child"];
 }
 
 function resolveAdapterCapabilities(
@@ -248,17 +241,6 @@ function routableBinding(record: SessionBindingRecord | null): SessionBindingRec
   return resolveSpawnThreadBindingPlacement(record.conversation.channel, placements) === "child"
     ? record
     : null;
-}
-
-function captureConversationRef(ref: ConversationRef): ConversationRef {
-  return normalizeConversationRef({
-    channel: ref.channel,
-    accountId: ref.accountId,
-    conversationId: ref.conversationId,
-    ...(ref.parentConversationId !== undefined
-      ? { parentConversationId: ref.parentConversationId }
-      : {}),
-  });
 }
 
 function getActiveRegisteredAdapters(
@@ -484,7 +466,8 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         );
       }
       const placement =
-        normalizePlacement(input.placement) ?? inferDefaultPlacement(normalizedConversation);
+        normalizePlacement(input.placement) ??
+        (normalizedConversation.conversationId ? "current" : "child");
       const supportedPlacements = adapter
         ? resolveAdapterPlacements(adapter)
         : genericCapabilities!.placements;
@@ -538,10 +521,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
       }
       const results: SessionBindingRecord[] = [];
       for (const adapter of getActiveRegisteredAdapters()) {
-        const entries = adapter.listBySession(key);
-        if (entries.length > 0) {
-          results.push(...entries);
-        }
+        results.push(...adapter.listBySession(key));
       }
       results.push(...listGenericCurrentConversationBindingsBySession(key));
       return dedupeBindings(results).filter((record) => routableBinding(record));
@@ -620,10 +600,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         if (!adapter.unbind) {
           continue;
         }
-        const entries = await adapter.unbind(input);
-        if (entries.length > 0) {
-          removed.push(...entries);
-        }
+        removed.push(...(await adapter.unbind(input)));
       }
       if (!input.scope || adapters.length === 0) {
         removed.push(...(await unbindGenericCurrentConversationBindings(input)));

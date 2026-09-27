@@ -1,5 +1,6 @@
 // SQLite import and receipt semantics for retired workspace state.
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "../agents/workspace-legacy-state.js";
 import {
@@ -163,18 +164,6 @@ export function parseSource(
   return source.kind === "setup" ? parseSetup(snapshot.raw) : parseAttestation(snapshot);
 }
 
-function mapsEqual(left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>): boolean {
-  if (left.size !== right.size) {
-    return false;
-  }
-  for (const [key, value] of left) {
-    if (right.get(key) !== value) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function canonicalFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -300,7 +289,7 @@ export function canonicalCoversParsedSource(params: {
           .where("workspace_key", "=", params.source.workspaceKey),
       ).rows.map((hashRow) => [hashRow.filename, hashRow.sha256]),
     );
-    if (mapsEqual(hashes, params.parsed.value.generatedHashes)) {
+    if (isDeepStrictEqual(hashes, params.parsed.value.generatedHashes)) {
       return true;
     }
     const fingerprint = attestationFingerprint({
@@ -486,7 +475,7 @@ export function importAndRecordReceipt(params: {
           };
           const equivalent =
             existing.attested_at_ms === parsedAttestation.attestedAtMs &&
-            mapsEqual(existingHashes, parsedAttestation.generatedHashes);
+            isDeepStrictEqual(existingHashes, parsedAttestation.generatedHashes);
           if (equivalent) {
             resolution = "verified";
             verifiedFingerprint = existingFingerprint;

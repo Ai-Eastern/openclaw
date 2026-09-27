@@ -297,21 +297,22 @@ export async function autoMigrateLegacyStateDir(params: {
   const notices: string[] = [];
   const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
   const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
-  const migratePluginInstallIndex = async () => {
+  const finishMigration = async (): Promise<StateDirMigrationResult> => {
     const result = await migrateLegacyInstalledPluginIndex({ stateDir: targetDir });
     changes.push(...result.changes);
     warnings.push(...result.warnings);
     notices.push(...(result.notices ?? []));
-  };
-  if (hasCustomStateDir) {
-    await migratePluginInstallIndex();
     return {
       migrated: changes.length > 0,
-      skipped: changes.length === 0 && warnings.length === 0 && notices.length === 0,
+      skipped:
+        hasCustomStateDir && changes.length === 0 && warnings.length === 0 && notices.length === 0,
       changes,
       warnings,
       ...(notices.length > 0 ? { notices } : {}),
     };
+  };
+  if (hasCustomStateDir) {
+    return await finishMigration();
   }
 
   const legacyDirs = resolveLegacyStateDirs(homedir);
@@ -330,14 +331,7 @@ export async function autoMigrateLegacyStateDir(params: {
     legacyStat = null;
   }
   if (!legacyStat) {
-    await migratePluginInstallIndex();
-    return {
-      migrated: changes.length > 0,
-      skipped: false,
-      changes,
-      warnings,
-      ...(notices.length > 0 ? { notices } : {}),
-    };
+    return await finishMigration();
   }
   if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
     warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
@@ -354,14 +348,7 @@ export async function autoMigrateLegacyStateDir(params: {
       return { migrated: false, skipped: false, changes, warnings };
     }
     if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
-      await migratePluginInstallIndex();
-      return {
-        migrated: changes.length > 0,
-        skipped: false,
-        changes,
-        warnings,
-        ...(notices.length > 0 ? { notices } : {}),
-      };
+      return await finishMigration();
     }
     if (legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))) {
       legacyDir = legacyTarget;
@@ -393,14 +380,7 @@ export async function autoMigrateLegacyStateDir(params: {
 
   if (safeStatSync(targetDir)?.isDirectory()) {
     if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
-      await migratePluginInstallIndex();
-      return {
-        migrated: changes.length > 0,
-        skipped: false,
-        changes,
-        warnings,
-        ...(notices.length > 0 ? { notices } : {}),
-      };
+      return await finishMigration();
     }
     if (legacyDir && isEmptyDirPath(legacyDir)) {
       try {
@@ -416,14 +396,7 @@ export async function autoMigrateLegacyStateDir(params: {
         `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
       );
     }
-    await migratePluginInstallIndex();
-    return {
-      migrated: changes.length > 0,
-      skipped: false,
-      changes,
-      warnings,
-      ...(notices.length > 0 ? { notices } : {}),
-    };
+    return await finishMigration();
   }
 
   if (legacyDir) {
@@ -487,12 +460,5 @@ export async function autoMigrateLegacyStateDir(params: {
     }
   }
 
-  await migratePluginInstallIndex();
-  return {
-    migrated: changes.length > 0,
-    skipped: false,
-    changes,
-    warnings,
-    ...(notices.length > 0 ? { notices } : {}),
-  };
+  return await finishMigration();
 }

@@ -126,7 +126,7 @@ async function secureAuditArchiveFile(params: {
 async function archiveLegacyAuditClaim(params: {
   source: LegacyAuditLogSource;
   claimRelativePath: string;
-  archivePaths: { sanitized: string; raw: string; resumeSanitized: boolean };
+  archivePaths: AuditArchiveRelativePaths;
   snapshot: LegacyAuditSourceSnapshot;
   sanitizedJsonl: string;
   root: AuditMigrationRoot;
@@ -417,7 +417,7 @@ async function migrateLegacyAuditLogSource(params: {
     let candidateRecords = previousCheckpoint
       ? prepared.records.slice(previousCheckpoint.recordCount)
       : prepared.records;
-    if (!previousCheckpoint && candidateRecords === prepared.records) {
+    if (!previousCheckpoint) {
       const lastRetainedSourceIndex = prepared.records.findLastIndex((record) =>
         existingKeys.has(record.key),
       );

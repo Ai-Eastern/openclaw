@@ -90,10 +90,6 @@ export function startHeartbeatRunner(opts: {
     return agent;
   };
 
-  // Centralized cooldown gate. Both targeted and broadcast dispatch branches
-  // call this before invoking `runOnce`. Manual wakes are never deferred.
-  // Everything else respects the event cooldown, minimum spacing, and flood
-  // guard owned by heartbeat-cooldown.ts.
   const evaluateWakeDeferral = (
     agent: HeartbeatAgentState,
     now: number,
@@ -103,7 +99,6 @@ export function startHeartbeatRunner(opts: {
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
-      reason,
       now,
       nextDueMs: options.authoritativeScheduledTick ? now : agent.cooldownUntilMs,
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
@@ -123,8 +118,6 @@ export function startHeartbeatRunner(opts: {
     return decision;
   };
 
-  // Called immediately before `runOnce` actually executes. Updates the
-  // bookkeeping that the cooldown gate consults on the next wake.
   const recordRunBookkeeping = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunStartedAtMs = now;
     agent.cooldownUntilMs = now + (agent.intervalMs ?? 0);

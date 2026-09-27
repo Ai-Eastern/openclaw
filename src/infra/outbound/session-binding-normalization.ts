@@ -40,6 +40,17 @@ export function normalizeConversationRef<T extends ConversationRef>(ref: T): T {
   };
 }
 
+/** Captures canonical identity without carrying caller context across asynchronous work. */
+export function captureConversationRef(ref: ConversationRef): ConversationRef {
+  const { channel, accountId, conversationId, parentConversationId } = ref;
+  return normalizeConversationRef({
+    channel,
+    accountId,
+    conversationId,
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+  });
+}
+
 /**
  * Builds the adapter registry key shared by channel/account scoped bindings.
  */

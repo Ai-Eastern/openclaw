@@ -221,16 +221,8 @@ export type ClawHubPackageVersion = {
     }>;
     sha256hash?: string | null;
     compatibility?: ClawHubPackageCompatibility | null;
-    capabilities?: ClawHubPackageDetail["package"] extends infer T
-      ? T extends { capabilities?: infer C }
-        ? C
-        : never
-      : never;
-    verification?: ClawHubPackageDetail["package"] extends infer T
-      ? T extends { verification?: infer C }
-        ? C
-        : never
-      : never;
+    capabilities?: NonNullable<ClawHubPackageDetail["package"]>["capabilities"];
+    verification?: NonNullable<ClawHubPackageDetail["package"]>["verification"];
     artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
   } | null;
@@ -251,17 +243,11 @@ function parseOptionalSecurityPackage(value: unknown): ClawHubPackageSecurityRes
     );
   }
   const result: NonNullable<ClawHubPackageSecurityResponse["package"]> = {};
-  const name = readClawHubStringField(value, "name", "security package");
-  const displayName = readClawHubStringField(value, "displayName", "security package");
-  const family = readClawHubStringField(value, "family", "security package");
-  if (name !== undefined) {
-    result.name = name;
-  }
-  if (displayName !== undefined) {
-    result.displayName = displayName;
-  }
-  if (family !== undefined) {
-    result.family = family;
+  for (const field of ["name", "displayName", "family"] as const) {
+    const parsed = readClawHubStringField(value, field, "security package");
+    if (parsed !== undefined) {
+      result[field] = parsed;
+    }
   }
   return result;
 }

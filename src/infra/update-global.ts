@@ -956,37 +956,20 @@ export async function resolvePnpmGlobalInstallOwner(
   return { ownerRoot, packageRoot };
 }
 
-function resolvePreferredGlobalManagerCommand(
-  manager: GlobalInstallManager,
-  pkgRoot?: string | null,
-): string {
-  if (manager !== "npm") {
-    return manager;
-  }
-  return resolvePreferredNpmCommand(pkgRoot) ?? manager;
-}
-
-/**
- * Resolves the package-manager command to execute for a global install.
- * npm may use the npm binary beside an existing package root when available.
- */
-function resolveGlobalInstallCommand(
-  manager: GlobalInstallManager,
-  pkgRoot?: string | null,
-): ResolvedGlobalInstallCommand {
-  return {
-    manager,
-    command: resolvePreferredGlobalManagerCommand(manager, pkgRoot),
-  };
-}
-
 function normalizeGlobalInstallCommand(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   pkgRoot?: string | null,
 ): ResolvedGlobalInstallCommand {
-  return typeof managerOrCommand === "string"
-    ? resolveGlobalInstallCommand(managerOrCommand, pkgRoot)
-    : managerOrCommand;
+  if (typeof managerOrCommand !== "string") {
+    return managerOrCommand;
+  }
+  return {
+    manager: managerOrCommand,
+    command:
+      managerOrCommand === "npm"
+        ? (resolvePreferredNpmCommand(pkgRoot) ?? managerOrCommand)
+        : managerOrCommand,
+  };
 }
 
 function resolveBunGlobalInstallSpec(spec: string): string {
@@ -1010,7 +993,7 @@ function resolveInstallCommandForManager(
   const normalized = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   return normalized.manager === manager
     ? normalized
-    : resolveGlobalInstallCommand(manager, pkgRoot);
+    : normalizeGlobalInstallCommand(manager, pkgRoot);
 }
 
 /**
@@ -1179,7 +1162,7 @@ async function inspectNpmGlobalOwner(
   const selected = await probeNpmGlobalPrefix(
     runCommand,
     timeoutMs,
-    resolvePreferredGlobalManagerCommand("npm", pkgRoot),
+    resolvePreferredNpmCommand(pkgRoot) ?? "npm",
     diagnostics,
   );
   const pkgReal = await tryRealpath(pkgRoot);

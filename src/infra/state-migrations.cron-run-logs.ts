@@ -63,10 +63,6 @@ export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
   );
 }
 
-function parseDetail(raw: string | null): Record<string, unknown> | undefined {
-  return raw ? safeParseJsonRecord(raw) : undefined;
-}
-
 function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]> {
   const rows = db
     .prepare(
@@ -77,7 +73,7 @@ function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]>
     .all() as MirroredTask[];
   const bySource = new Map<string, MirroredIdentity[]>();
   for (const row of rows) {
-    const detail = parseDetail(row.detail_json);
+    const detail = row.detail_json ? safeParseJsonRecord(row.detail_json) : undefined;
     if (!row.source_id || detail?.kind !== "cron-run") {
       continue;
     }
@@ -143,10 +139,6 @@ function parseLegacyRow(row: LegacyCronRunLogRow): CronRunLogEntry | null {
   };
 }
 
-function ordinalKey(jobId: string, ts: number): string {
-  return `${jobId}\0${ts}`;
-}
-
 /** Runs inside the state schema transaction and removes the retired table after import. */
 export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLogTaskImportResult {
   if (!hasLegacyCronRunLogs(db)) {
@@ -191,7 +183,7 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
         malformed++;
         continue;
       }
-      const key = ordinalKey(entry.jobId, entry.ts);
+      const key = `${entry.jobId}\0${entry.ts}`;
       const ordinal = (ordinals.get(key) ?? 0) + 1;
       ordinals.set(key, ordinal);
       const identities = mirrored.get(entry.jobId) ?? [];

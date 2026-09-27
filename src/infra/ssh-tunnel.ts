@@ -54,42 +54,26 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
     return null;
   }
 
-  const [userPart, hostPart] = trimmed.includes("@")
-    ? ((): [string | undefined, string] => {
-        const idx = trimmed.indexOf("@");
-        const user = trimmed.slice(0, idx).trim();
-        const host = trimmed.slice(idx + 1).trim();
-        return [user || undefined, host];
-      })()
-    : [undefined, trimmed];
-
-  const colonIdx = hostPart.lastIndexOf(":");
-  if (colonIdx > 0 && colonIdx < hostPart.length - 1) {
-    const host = hostPart.slice(0, colonIdx).trim();
-    const portRaw = hostPart.slice(colonIdx + 1).trim();
-    const port = parseStrictPositiveInteger(portRaw);
-    if (!host || port === undefined || port > 65535) {
+  const atIndex = trimmed.indexOf("@");
+  const user = atIndex < 0 ? undefined : trimmed.slice(0, atIndex).trim() || undefined;
+  let host = trimmed.slice(atIndex + 1).trim();
+  let port = 22;
+  const colonIdx = host.lastIndexOf(":");
+  if (colonIdx > 0 && colonIdx < host.length - 1) {
+    const parsedPort = parseStrictPositiveInteger(host.slice(colonIdx + 1).trim());
+    if (parsedPort === undefined || parsedPort > 65535) {
       return null;
     }
-    if (!isSafeSshTargetHost(host)) {
-      return null;
-    }
-    if (userPart !== undefined && !isSafeSshTargetUser(userPart)) {
-      return null;
-    }
-    return { user: userPart, host, port };
+    port = parsedPort;
+    host = host.slice(0, colonIdx).trim();
   }
-
-  if (!hostPart) {
+  if (!host || !isSafeSshTargetHost(host)) {
     return null;
   }
-  if (!isSafeSshTargetHost(hostPart)) {
+  if (user !== undefined && !isSafeSshTargetUser(user)) {
     return null;
   }
-  if (userPart !== undefined && !isSafeSshTargetUser(userPart)) {
-    return null;
-  }
-  return { user: userPart, host: hostPart, port: 22 };
+  return { user, host, port };
 }
 
 async function waitForLocalListener(

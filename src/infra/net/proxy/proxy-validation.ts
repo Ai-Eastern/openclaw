@@ -345,19 +345,20 @@ async function resolveDeniedTargets(
   };
 }
 
-async function runAllowedCheck(params: {
-  url: string;
+async function runFetchCheck(params: {
+  target: { kind: "allowed"; url: string } | (ProxyValidationDeniedTarget & { kind: "denied" });
   proxyUrl: string;
   proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
-  if (!isHttpUrl(params.url)) {
+  const { target } = params;
+  const check = { kind: target.kind, url: target.url };
+  if (!isHttpUrl(target.url)) {
     return {
-      kind: "allowed",
-      url: params.url,
+      ...check,
       ok: false,
-      error: "Invalid allowed destination URL",
+      error: `Invalid ${target.kind} destination URL`,
     };
   }
 
@@ -365,99 +366,58 @@ async function runAllowedCheck(params: {
     const result = await params.fetchCheck({
       proxyUrl: params.proxyUrl,
       ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-      targetUrl: params.url,
+      targetUrl: target.url,
       timeoutMs: params.timeoutMs,
     });
-    if (!result.ok) {
-      return {
-        kind: "allowed",
-        url: params.url,
-        ok: false,
-        status: result.status,
-        error: `Allowed destination returned HTTP ${result.status}`,
-      };
+    if (target.kind === "allowed") {
+      return result.ok
+        ? { ...check, ok: true, status: result.status }
+        : {
+            ...check,
+            ok: false,
+            status: result.status,
+            error: `Allowed destination returned HTTP ${result.status}`,
+          };
     }
-    return { kind: "allowed", url: params.url, ok: true, status: result.status };
-  } catch (err) {
-    return {
-      kind: "allowed",
-      url: params.url,
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-async function runDeniedCheck(params: {
-  target: ProxyValidationDeniedTarget;
-  proxyUrl: string;
-  proxyTls?: ManagedProxyTlsOptions;
-  timeoutMs: number;
-  fetchCheck: ProxyValidationFetchCheck;
-}): Promise<ProxyValidationCheck> {
-  if (!isHttpUrl(params.target.url)) {
-    return {
-      kind: "denied",
-      url: params.target.url,
-      ok: false,
-      error: "Invalid denied destination URL",
-    };
-  }
-
-  try {
-    const result = await params.fetchCheck({
-      proxyUrl: params.proxyUrl,
-      ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-      targetUrl: params.target.url,
-      timeoutMs: params.timeoutMs,
-    });
     if (
-      params.target.expectedCanaryToken !== undefined &&
-      result.deniedCanaryToken !== params.target.expectedCanaryToken
+      target.expectedCanaryToken !== undefined &&
+      result.deniedCanaryToken !== target.expectedCanaryToken
     ) {
       // A blocked loopback canary may return a denial status; only a matching
       // token proves the proxy actually forwarded the forbidden loopback URL.
       if (result.ok) {
         return {
-          kind: "denied",
-          url: params.target.url,
+          ...check,
           ok: false,
           status: result.status,
           error: `Denied loopback canary returned HTTP ${result.status} without the validation token`,
         };
       }
       return {
-        kind: "denied",
-        url: params.target.url,
+        ...check,
         ok: true,
         status: result.status,
       };
     }
     return {
-      kind: "denied",
-      url: params.target.url,
+      ...check,
       ok: false,
       status: result.status,
       error:
-        params.target.expectedCanaryToken === undefined
+        target.expectedCanaryToken === undefined
           ? `Denied destination returned HTTP ${result.status}; expected the proxy to block the connection`
           : `Denied loopback canary was reachable through the proxy with HTTP ${result.status}`,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (params.target.transportErrorMeansBlocked) {
-      return {
-        kind: "denied",
-        url: params.target.url,
-        ok: true,
-        error: message,
-      };
-    }
+    const blocked = target.kind === "denied" && target.transportErrorMeansBlocked;
     return {
-      kind: "denied",
-      url: params.target.url,
-      ok: false,
-      error: `Denied destination failed without a verifiable proxy-deny signal: ${message}`,
+      ...check,
+      ok: blocked,
+      error:
+        target.kind === "denied" && !blocked
+          ? `Denied destination failed without a verifiable proxy-deny signal: ${message}`
+          : message,
     };
   }
 }
@@ -535,8 +495,8 @@ export async function runProxyValidation(
   try {
     for (const url of allowedUrls) {
       checks.push(
-        await runAllowedCheck({
-          url,
+        await runFetchCheck({
+          target: { kind: "allowed", url },
           proxyUrl: config.proxyUrl,
           proxyTls,
           timeoutMs,
@@ -546,8 +506,8 @@ export async function runProxyValidation(
     }
     for (const target of deniedTargets.targets) {
       checks.push(
-        await runDeniedCheck({
-          target,
+        await runFetchCheck({
+          target: { ...target, kind: "denied" },
           proxyUrl: config.proxyUrl,
           proxyTls,
           timeoutMs,

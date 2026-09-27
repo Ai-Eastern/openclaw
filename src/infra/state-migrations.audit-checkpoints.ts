@@ -28,10 +28,6 @@ export type LegacyAuditRawCheckpoint = LegacyAuditFileCheckpoint & {
 const LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE = "migration.legacy-audit-raw";
 const LEGACY_AUDIT_RAW_CHECKPOINT_MAX_ENTRIES = 10_000;
 
-export function legacyAuditRawCheckpointKey(checkpoint: LegacyAuditRawCheckpoint): string {
-  return checkpoint.generationKey;
-}
-
 export function legacyAuditSourceGenerationKey(rawArchiveRelativePath: string): string {
   // The numbered raw archive path is the durable generation identity. Unlike
   // device/inode metadata, it survives backup restore and cross-device moves.
@@ -95,25 +91,13 @@ function legacyAuditRawCheckpointIsCurrent(
   try {
     fd = fs.openSync(sourcePath, "r");
     const beforeStat = fs.fstatSync(fd);
-    const before = {
-      dev: beforeStat.dev,
-      ino: beforeStat.ino,
-      mtimeMs: beforeStat.mtimeMs,
-      size: beforeStat.size,
-    };
-    if (!beforeStat.isFile() || !legacyAuditRawCheckpointsMatch(checkpoint, before)) {
+    if (!beforeStat.isFile() || !legacyAuditRawCheckpointsMatch(checkpoint, beforeStat)) {
       return false;
     }
     const hash = sha256FileSync(fd, { maxBytes: checkpoint.size });
     const afterStat = fs.fstatSync(fd);
-    const after = {
-      dev: afterStat.dev,
-      ino: afterStat.ino,
-      mtimeMs: afterStat.mtimeMs,
-      size: afterStat.size,
-    };
     return (
-      legacyAuditRawCheckpointsMatch(before, after) &&
+      legacyAuditRawCheckpointsMatch(beforeStat, afterStat) &&
       hash.bytes === checkpoint.size &&
       hash.digest === checkpoint.contentHash
     );

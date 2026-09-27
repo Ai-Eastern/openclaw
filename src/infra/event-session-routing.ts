@@ -1,6 +1,9 @@
 // Resolves event-triggered work to the correct session key and target.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -55,10 +58,6 @@ function readDmAllowFrom(value: unknown): Array<string | number> | undefined {
 
 function readAccountConfig(value: unknown): UnknownRecord | undefined {
   return isRecord(value) && isRecord(value.config) ? value.config : undefined;
-}
-
-function normalizeEntry(value: string): string | undefined {
-  return normalizeLowercaseStringOrEmpty(value) || undefined;
 }
 
 /** Parse an agent direct-session key into channel/account/peer routing parts. */
@@ -220,9 +219,9 @@ export function resolveMainScopedEventSessionKey(params: {
   const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
     dmScope: policy.dmScope ?? params.cfg?.session?.dmScope,
     allowFrom,
-    normalizeEntry,
+    normalizeEntry: normalizeOptionalLowercaseString,
   });
-  if (!pinnedOwner || normalizeEntry(target.peerId) !== pinnedOwner) {
+  if (!pinnedOwner || normalizeOptionalLowercaseString(target.peerId) !== pinnedOwner) {
     return null;
   }
   if (

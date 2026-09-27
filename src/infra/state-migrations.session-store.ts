@@ -315,32 +315,17 @@ export function canonicalizeSessionStore(params: {
     if (!isCanonical) {
       legacyKeys.push(key);
     }
-    const existing = canonical[canonicalKey];
-    if (!existing) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: resolveUpdatedAt(entry) });
-      continue;
-    }
-
     const existingMeta = meta.get(canonicalKey);
     const incomingUpdated = resolveUpdatedAt(entry);
-    const existingUpdated = existingMeta?.updatedAt ?? resolveUpdatedAt(existing);
-    if (incomingUpdated > existingUpdated) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
+    if (
+      existingMeta &&
+      (incomingUpdated < existingMeta.updatedAt ||
+        (incomingUpdated === existingMeta.updatedAt && (existingMeta.isCanonical || !isCanonical)))
+    ) {
       continue;
     }
-    if (incomingUpdated < existingUpdated) {
-      continue;
-    }
-    if (existingMeta?.isCanonical && !isCanonical) {
-      continue;
-    }
-    if (!existingMeta?.isCanonical && isCanonical) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
-      continue;
-    }
+    canonical[canonicalKey] = entry;
+    meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
   }
 
   return { store: canonical, legacyKeys };
@@ -634,18 +619,9 @@ export async function migrateOrphanedSessionKeys(params: {
     storeAliasCandidates.set(storePath, aliasCandidates);
     storeMap.set(storePath, (storeMap.get(storePath) ?? new Set<string>()).add(ownerId));
   };
-  // Configured ownership includes normal agents plus ACP runtime/default hints.
-  for (const configuredAgentId of listConfiguredSessionStoreAgentIds(params.cfg)) {
-    const id = normalizeAgentId(configuredAgentId);
-    const p = storeConfig
-      ? resolveStorePathFromTemplate(storeConfig, id, env)
-      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-    addToStoreMap(p, id);
-  }
-  // Plugins can route core sessions to agents that are not declared in
-  // agents.list. A templated path proves ownership for those stores too.
-  for (const pluginAgentId of pluginAgentIds) {
-    const id = normalizeAgentId(pluginAgentId);
+  // Plugin-routed owners may not appear in agents.list; keep them after configured owners.
+  for (const agentId of [...listConfiguredSessionStoreAgentIds(params.cfg), ...pluginAgentIds]) {
+    const id = normalizeAgentId(agentId);
     const p = storeConfig
       ? resolveStorePathFromTemplate(storeConfig, id, env)
       : path.join(stateDir, "agents", id, "sessions", "sessions.json");

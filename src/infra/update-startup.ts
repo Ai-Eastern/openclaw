@@ -466,6 +466,33 @@ async function runGatewayUpdateCheckOwned(
   }
 
   const { root, status, installReceipt } = installStatus;
+  const announceUpdate = (
+    target: NonNullable<UpdateScheduleState["target"]>,
+    update: () => Pick<
+      Parameters<typeof runCampaignUpdate>[0],
+      "channel" | "mode" | "version" | "tag" | "devTarget"
+    >,
+  ) =>
+    updateCampaign.announce({
+      target,
+      inspect: params.activeWorkInspectors,
+      onChange: onCampaignChange,
+      apply: ({ forced }) =>
+        lifecycle.run(() =>
+          runCampaignUpdate({
+            ...update(),
+            forced,
+            root: root ?? status.root ?? undefined,
+            log: params.log,
+            runAuto,
+            canApply,
+            onAttempt: recordAutoUpdateAttempt,
+            campaign: updateCampaign,
+            onUpdateRunCreated: params.onUpdateRunCreated,
+            signal: params.signal,
+          }),
+        ),
+    });
   setSchedule(
     withUpdateInstallStatus(
       getUpdateSchedule() ?? initialSchedule,
@@ -556,30 +583,13 @@ async function runGatewayUpdateCheckOwned(
         Number.isFinite(lastAttemptAt) &&
         now - lastAttemptAt < ONE_HOUR_MS;
       if (!recentAttempt) {
-        updateCampaign.announce({
-          target,
-          inspect: params.activeWorkInspectors,
-          onChange: onCampaignChange,
-          apply: ({ forced }) =>
-            lifecycle.run(() =>
-              runCampaignUpdate({
-                channel: "dev",
-                mode: "git",
-                version: upstreamSha,
-                tag: "dev",
-                forced,
-                root: root ?? status.root ?? undefined,
-                devTarget: devUpdateTargetFromGitTarget(target),
-                log: params.log,
-                runAuto,
-                canApply,
-                onAttempt: recordAutoUpdateAttempt,
-                campaign: updateCampaign,
-                onUpdateRunCreated: params.onUpdateRunCreated,
-                signal: params.signal,
-              }),
-            ),
-        });
+        announceUpdate(target, () => ({
+          channel: "dev",
+          mode: "git",
+          version: upstreamSha,
+          tag: "dev",
+          devTarget: devUpdateTargetFromGitTarget(target),
+        }));
       }
     } else {
       updateCampaign.clear();
@@ -691,29 +701,12 @@ async function runGatewayUpdateCheckOwned(
           tag,
         });
       } else {
-        updateCampaign.announce({
-          target,
-          inspect: params.activeWorkInspectors,
-          onChange: onCampaignChange,
-          apply: ({ forced }) =>
-            lifecycle.run(() =>
-              runCampaignUpdate({
-                channel,
-                mode: status.packageManager,
-                version: resolvedVersion,
-                tag,
-                forced,
-                root: root ?? status.root ?? undefined,
-                log: params.log,
-                runAuto,
-                canApply,
-                onAttempt: recordAutoUpdateAttempt,
-                campaign: updateCampaign,
-                onUpdateRunCreated: params.onUpdateRunCreated,
-                signal: params.signal,
-              }),
-            ),
-        });
+        announceUpdate(target, () => ({
+          channel,
+          mode: status.packageManager,
+          version: resolvedVersion,
+          tag,
+        }));
       }
     }
   } else {

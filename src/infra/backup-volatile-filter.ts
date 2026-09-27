@@ -133,25 +133,13 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         }
       }
 
-      const sessionsRoot = path.posix.join(stateDirPosix, "sessions");
-      if (isUnder(filePosix, sessionsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
-        return true;
-      }
-
       if (
-        isAgentSessionTranscriptPath(filePosix, stateDirPosix) &&
-        hasExtension(filePosix, [".jsonl", ".log"])
+        hasExtension(filePosix, [".jsonl", ".log"]) &&
+        (isAgentSessionTranscriptPath(filePosix, stateDirPosix) ||
+          [["sessions"], ["cron", "runs"], ["logs"]].some((parts) =>
+            isUnder(filePosix, path.posix.join(stateDirPosix, ...parts)),
+          ))
       ) {
-        return true;
-      }
-
-      const cronRunsRoot = path.posix.join(stateDirPosix, "cron", "runs");
-      if (isUnder(filePosix, cronRunsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
-        return true;
-      }
-
-      const logsRoot = path.posix.join(stateDirPosix, "logs");
-      if (isUnder(filePosix, logsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
         return true;
       }
 

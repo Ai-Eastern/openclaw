@@ -41,10 +41,6 @@ export function resolveLegacyVoiceWakeRoutingPath(stateDir: string): string {
   return path.join(stateDir, "settings", "voicewake-routing.json");
 }
 
-function readLegacyJsonObject(sourcePath: string): unknown {
-  return JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
-}
-
 type LegacyJsonImportOutcome = {
   changes: string[];
   notices?: string[];
@@ -69,7 +65,7 @@ export function migrateLegacyJsonState<Value>(params: {
 
   let value: Value;
   try {
-    value = params.normalize(readLegacyJsonObject(params.sourcePath));
+    value = params.normalize(JSON.parse(fs.readFileSync(params.sourcePath, "utf8")) as unknown);
   } catch (err) {
     const advisory = params.recoverableReadFailure?.(err);
     if (advisory) {
@@ -284,13 +280,7 @@ function normalizeLegacyConfigHealthFile(input: unknown): LegacyConfigHealthEntr
     .toSorted((a, b) => a.configPath.localeCompare(b.configPath));
 }
 
-function configHealthRow(entry: LegacyConfigHealthEntry): {
-  config_path: string;
-  last_known_good_json: string | null;
-  last_promoted_good_json: string | null;
-  last_observed_suspicious_signature: string | null;
-  updated_at_ms: number;
-} {
+function configHealthRow(entry: LegacyConfigHealthEntry) {
   return {
     config_path: entry.configPath,
     last_known_good_json: entry.lastKnownGoodJson,
@@ -488,14 +478,7 @@ function normalizeLegacyPluginBindingApprovalsFile(
   );
 }
 
-function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry): {
-  plugin_root: string;
-  channel: string;
-  account_id: string;
-  plugin_id: string;
-  plugin_name: string | null;
-  approved_at: number;
-} {
+function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry) {
   return {
     plugin_root: entry.pluginRoot,
     channel: entry.channel,
@@ -504,10 +487,6 @@ function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry): {
     plugin_name: entry.pluginName ?? null,
     approved_at: entry.approvedAt,
   };
-}
-
-function pluginBindingApprovalComparable(entry: LegacyPluginBindingApprovalEntry): string {
-  return JSON.stringify(pluginBindingApprovalRow(entry));
 }
 
 export function migrateLegacyPluginBindingApprovals(params: {
@@ -558,7 +537,7 @@ export function migrateLegacyPluginBindingApprovals(params: {
         const existingApprovalJson = existingByKey.get(pluginBindingApprovalScopeKey(approval));
         if (existingApprovalJson === undefined) {
           approvalsToInsert.push(approval);
-        } else if (existingApprovalJson !== pluginBindingApprovalComparable(approval)) {
+        } else if (existingApprovalJson !== JSON.stringify(pluginBindingApprovalRow(approval))) {
           conflictCount += 1;
         }
       }
