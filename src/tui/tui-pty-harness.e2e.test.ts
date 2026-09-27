@@ -131,6 +131,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
         },
       });
       try {
+        await modeFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
         await modeFixture.run.waitForOutput("deliver:on", STARTUP_TIMEOUT_MS);
         await modeFixture.run.write("/session agent:main:mode-source\r", { delay: false });
         await modeFixture.waitForLogEntry(
@@ -143,15 +144,20 @@ describe("TUI PTY harness", { concurrent: false }, () => {
           STARTUP_TIMEOUT_MS,
         );
 
-        const targetOutputOffset = modeFixture.run.visibleOutput().length;
         await modeFixture.run.write("/session agent:main:mode-target\r", { delay: false });
         await modeFixture.waitForLogEntry(
           (entry) =>
             entry.method === "loadHistory" &&
             objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
         );
-        await modeFixture.run.waitForOutput("session mode-target", STARTUP_TIMEOUT_MS);
-        const targetOutput = modeFixture.run.visibleOutput().slice(targetOutputOffset);
+        const targetRows = await waitForSynchronizedFrameRows(
+          modeFixture.run,
+          (rows) =>
+            rows.some((row) => row.trim() === "session agent:main:mode-target") &&
+            rows.some((row) => row.includes("| session mode-target | fixture-model |")),
+          STARTUP_TIMEOUT_MS,
+        );
+        const targetOutput = targetRows.join("\n");
         expect(targetOutput).toContain("deliver:on");
         expect(targetOutput).not.toContain("fast:auto");
         expect(targetOutput).not.toContain("verbose full");

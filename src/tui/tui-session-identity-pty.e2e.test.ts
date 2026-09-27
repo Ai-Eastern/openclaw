@@ -209,8 +209,13 @@ it("refreshes the footer only for an accepted fallback destination without reloa
   }
 }, 65_000);
 it("submits provider-specific thinking labels with one Enter", async () => {
+  const agentDir = tempDirs.make("openclaw-tui-thinking-agent-");
   const fixture = await startTuiFixture({
     env: {
+      // File completion is outside this contract; keep fd discovery from replacing its menu.
+      OPENCLAW_AGENT_DIR: agentDir,
+      OPENCLAW_OFFLINE: "1",
+      PATH: "",
       OPENCLAW_TUI_PTY_THINKING_LABEL: "on",
       OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL: "always on",
     },
@@ -218,6 +223,7 @@ it("submits provider-specific thinking labels with one Enter", async () => {
 
   try {
     await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.waitForLogEntry((entry) => entry.method === "listCommands");
 
     for (const [index, { label, id }] of [
       { label: "on", id: "fixture-thinking" },
