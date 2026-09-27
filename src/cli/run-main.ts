@@ -1470,15 +1470,6 @@ async function runCliWithPreparedOutputMode(
       delayMs: 0,
       ...(suppressStartupProgress ? { enabled: false } : {}),
     });
-    let startupProgressStopped = false;
-    const stopStartupProgress = () => {
-      if (startupProgressStopped) {
-        return;
-      }
-      startupProgressStopped = true;
-      startupProgress.done();
-    };
-
     try {
       const [
         { buildProgram },
@@ -1506,8 +1497,6 @@ async function runCliWithPreparedOutputMode(
       );
       await options.harnessCleanup?.pluginResources?.waitForRegistrations();
 
-      // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
-      // These log the error and exit gracefully instead of crashing without trace.
       if (!unhandledRejectionHandlerInstalled) {
         installUnhandledRejectionHandler();
       }
@@ -1591,7 +1580,7 @@ async function runCliWithPreparedOutputMode(
         normalizeRootNoColorArgvForProgram(parseArgv, program),
         program,
       );
-      stopStartupProgress();
+      startupProgress.done();
 
       let completedHelpOrVersion = false;
       try {
@@ -1623,7 +1612,7 @@ async function runCliWithPreparedOutputMode(
         requestExitAfterOneShotOutput();
       }
     } finally {
-      stopStartupProgress();
+      startupProgress.done();
     }
   } finally {
     pluginCliSession?.close();

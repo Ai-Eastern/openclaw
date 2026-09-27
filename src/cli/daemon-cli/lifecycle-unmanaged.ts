@@ -50,15 +50,6 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   }
 }
 
-export function resolveVerifiedGatewayListenerPids(
-  port: number,
-  env?: NodeJS.ProcessEnv,
-): number[] {
-  return findVerifiedGatewayListenerPidsOnPortSync(port, { env }).filter(
-    (pid): pid is number => Number.isFinite(pid) && pid > 0,
-  );
-}
-
 export async function signalGatewayRestart(
   port: number,
   params: {
@@ -76,7 +67,7 @@ export async function signalGatewayRestart(
   if (params.enforceRestartConfig) {
     await assertUnmanagedGatewayRestartEnabled(port);
   }
-  const pids = resolveVerifiedGatewayListenerPids(port, params.env);
+  const pids = findVerifiedGatewayListenerPidsOnPortSync(port, { env: params.env });
   if (pids.length === 0) {
     return null;
   }

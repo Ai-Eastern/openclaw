@@ -209,25 +209,20 @@ export function registerTasksCommand(program: Command): void {
       );
     });
 
-  tasksCmd
-    .command("retry <lookups...>")
-    .description("Retry delivery for up to 10 blocked subagent completions")
-    .action(async (lookups: string[], _opts, command) => {
-      resolveTasksLeafOptions(command, "retry");
-      await runOwner(loadTasksCommands, ({ tasksRetryCommand }) =>
-        tasksRetryCommand({ lookups }, defaultRuntime),
-      );
-    });
-
-  tasksCmd
-    .command("dismiss <lookups...>")
-    .description("Dismiss delivery for up to 10 blocked subagent completions")
-    .action(async (lookups: string[], _opts, command) => {
-      resolveTasksLeafOptions(command, "dismiss");
-      await runOwner(loadTasksCommands, ({ tasksDismissCommand }) =>
-        tasksDismissCommand({ lookups }, defaultRuntime),
-      );
-    });
+  for (const [name, verb, handler] of [
+    ["retry", "Retry", "tasksRetryCommand"],
+    ["dismiss", "Dismiss", "tasksDismissCommand"],
+  ] as const) {
+    tasksCmd
+      .command(`${name} <lookups...>`)
+      .description(`${verb} delivery for up to 10 blocked subagent completions`)
+      .action(async (lookups: string[], _opts, command) => {
+        resolveTasksLeafOptions(command, name);
+        await runOwner(loadTasksCommands, (commands) =>
+          commands[handler]({ lookups }, defaultRuntime),
+        );
+      });
+  }
 
   const tasksFlowCmd = tasksCmd
     .command("flow")

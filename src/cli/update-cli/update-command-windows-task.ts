@@ -49,6 +49,11 @@ export function createWindowsTaskAutoStartRecovery(params: {
   let interrupted = false;
   let unregisterSignalExitBarrier = () => {};
   let finishUpdate: (() => void) | undefined;
+  const assertCurrentService = async () => {
+    params.assertCurrent?.();
+    await guard?.();
+    params.assertCurrent?.();
+  };
   const updateFinished = new Promise<void>((resolve) => {
     finishUpdate = resolve;
   });
@@ -136,11 +141,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
         ) {
           await suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
             assertCurrent: params.assertCurrent,
-            beforeMutation: async () => {
-              params.assertCurrent?.();
-              await guard?.();
-              params.assertCurrent?.();
-            },
+            beforeMutation: assertCurrentService,
             // Failed verification removed the original safety proof. A timed-out
             // /DISABLE must never be compensated by enabling that installation.
             restoreOnFailure: false,
@@ -201,11 +202,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
     ? Promise.resolve(true)
     : suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
         assertCurrent: params.assertCurrent,
-        beforeMutation: async () => {
-          params.assertCurrent?.();
-          await guard?.();
-          params.assertCurrent?.();
-        },
+        beforeMutation: assertCurrentService,
       });
   return {
     suspended: suspensionPromise,

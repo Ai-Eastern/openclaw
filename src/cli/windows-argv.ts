@@ -17,19 +17,9 @@ export function normalizeWindowsArgv(
     return argv;
   }
 
-  const stripControlChars = (value: string): string => {
-    let out = "";
-    for (let i = 0; i < value.length; i += 1) {
-      const code = value.charCodeAt(i);
-      if (code >= 32 && code !== 127) {
-        out += value[i];
-      }
-    }
-    return out;
-  };
-
   const normalizeCandidate = (value: string): string =>
-    stripControlChars(value)
+    value
+      .replace(/[\u0000-\u001f\u007f]/g, "")
       .replace(/^['"]+|['"]+$/g, "")
       .trim()
       .replace(/^\\\\\\?\\/, "");

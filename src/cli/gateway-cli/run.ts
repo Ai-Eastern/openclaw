@@ -1,6 +1,6 @@
 // Gateway run option resolution and local server startup command implementation.
 import fs from "node:fs";
-import { asOptionalObjectRecord, expectDefined } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -147,20 +147,6 @@ function parseEnumOption<T extends string>(
   allowed: readonly T[],
 ): T | null {
   return raw ? (allowed.find((value) => value === raw) ?? null) : null;
-}
-
-function formatModeErrorList(modes: readonly string[]): string {
-  const quoted = modes.map((mode) => `"${mode}"`);
-  if (quoted.length === 0) {
-    return "";
-  }
-  if (quoted.length === 1) {
-    return expectDefined(quoted[0], "quoted entry at 0");
-  }
-  if (quoted.length === 2) {
-    return `${quoted[0]} or ${quoted[1]}`;
-  }
-  return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
 }
 
 async function readGatewayStartupConfig(params: {
@@ -751,16 +737,14 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const authModeRaw = toOptionString(opts.auth);
   const authMode = parseEnumOption(authModeRaw, GATEWAY_AUTH_MODES);
   if (authModeRaw && !authMode) {
-    defaultRuntime.error(`Invalid --auth. Use ${formatModeErrorList(GATEWAY_AUTH_MODES)}.`);
+    defaultRuntime.error('Invalid --auth. Use "none", "token", "password", or "trusted-proxy".');
     defaultRuntime.exit(1);
     return;
   }
   const tailscaleRaw = toOptionString(opts.tailscale);
   const tailscaleMode = parseEnumOption(tailscaleRaw, GATEWAY_TAILSCALE_MODES);
   if (tailscaleRaw && !tailscaleMode) {
-    defaultRuntime.error(
-      `Invalid --tailscale. Use ${formatModeErrorList(GATEWAY_TAILSCALE_MODES)}.`,
-    );
+    defaultRuntime.error('Invalid --tailscale. Use "off", "serve", or "funnel".');
     defaultRuntime.exit(1);
     return;
   }

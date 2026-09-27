@@ -42,6 +42,7 @@ function hasSupportedSecretResolutionWiring(source: string): boolean {
   return (
     source.includes("resolveAgentRuntimeConfig(") ||
     source.includes("resolveLocalCapabilityRuntimeConfig(") ||
+    source.includes("resolveLocalCapabilityAgent(") ||
     source.includes("resolveCommandConfigWithSecrets(") ||
     source.includes("resolveCommandSecretRefsViaGateway(") ||
     source.includes("collectStatusScanOverview(")
