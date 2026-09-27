@@ -15,6 +15,7 @@ import {
   createWorkerEnvironmentAccess,
   createWorkerEnvironmentTransportLifecycle,
 } from "./environment-access.js";
+import { createWorkerEnvironmentErrorRecorder } from "./environment-errors.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
 import { createWorkerInferenceManager } from "./inference.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
@@ -37,7 +38,6 @@ import type {
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
 import { joinWorkerTunnelStops } from "./tunnel-contract.js";
-import { boundedWorkerError as boundedError } from "./worker-error.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 class WorkerEnvironmentServiceError extends Error {
@@ -187,24 +187,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return next;
   };
 
-  const saveError = async (
-    record: WorkerEnvironmentRecord,
-    error: unknown,
-    assertCurrent?: () => void,
-  ) => {
-    assertCurrent?.();
-    // Once bootstrap failure owns the terminal outcome, preserve that causal error across
-    // transient provider/inspection failures so the final failed row stays actionable.
-    if (record.teardownTerminalState === "failed" && record.lastError) {
-      return record;
-    }
-    return store.recordError({
-      environmentId: record.environmentId,
-      state: record.state,
-      error: boundedError(error),
-      assertCurrent,
-    });
-  };
+  const saveError = createWorkerEnvironmentErrorRecorder(store);
 
   const credentialBroker = createWorkerCredentialBroker({
     ...options,
@@ -669,8 +652,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         os: args[6],
         runSetupScript: args[7],
       }),
-    destroy: async (environmentId: string, abandonment?: WorkerEnvironmentAbandonment) =>
-      environmentAccess.project(await providerLifecycle.destroy(environmentId, { abandonment })),
+    destroy: async (
+      environmentId: string,
+      abandonment?: WorkerEnvironmentAbandonment,
+      forceAbandon?: () => Promise<void>,
+    ) =>
+      environmentAccess.project(
+        await providerLifecycle.destroy(environmentId, { abandonment, forceAbandon }),
+      ),
     requestDestroy: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),

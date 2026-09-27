@@ -13,7 +13,9 @@ import {
   recoverPendingWorkspaceResults,
   type PlacementRecoveryDeps,
 } from "./placement-dispatch-pending-results.js";
+import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
@@ -188,6 +190,28 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         placements.listPendingWorkspaceResults().map((pending) => pending.sessionId),
       );
       for (const placement of placements.listForReconcile()) {
+        const environment = placement.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        if (
+          (placement.state === "active" ||
+            placement.state === "draining" ||
+            placement.state === "reconciling") &&
+          environment &&
+          environment.destroyRequestedAtMs !== null &&
+          environment.lastError === FORCED_WORKER_ABANDONMENT_ERROR &&
+          environment.ownerEpoch === placement.activeOwnerEpoch &&
+          !placements.getPlacementMove(placement.sessionId)
+        ) {
+          await deps.workspaceOperations.run(environment.environmentId, async () => {
+            await forceAbandonWorkerEnvironment({
+              ...deps,
+              environmentId: environment.environmentId,
+            });
+            await environments.reconcileEnvironment(environment.environmentId);
+          });
+          continue;
+        }
         if (
           placement.state !== "draining" ||
           placement.turnClaim ||
