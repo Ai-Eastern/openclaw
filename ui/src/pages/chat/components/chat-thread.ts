@@ -159,6 +159,13 @@ function renderTranscriptShell(
         @contextmenu=${(event: MouseEvent) => handleTranscriptContextMenu(event, props)}
         @pointerup=${(event: PointerEvent) => handleTranscriptPointerUp(event, props)}
       >
+        <span
+          class="chat-transcript-announcement sr-only"
+          role="status"
+          aria-live=${props.announceTranscript !== false ? "polite" : "off"}
+          aria-atomic="true"
+          >${transcript.liveAnnouncementText}</span
+        >
         ${renderChatPositionRail({
           positions: projection.positionIndex,
           transcript,
