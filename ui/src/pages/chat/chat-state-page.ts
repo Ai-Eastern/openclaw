@@ -46,6 +46,7 @@ import {
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -103,6 +104,7 @@ function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean 
     sessionKey: view.sessionKey,
     agentId: view.agentId,
     runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
   }).then(async (result) => {
     if (!current()) {
       return;

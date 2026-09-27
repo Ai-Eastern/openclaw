@@ -33,7 +33,6 @@ function acceptedInput(
     state,
     message: {
       role: "user",
-      provenance: { kind: "external_user" },
       content: text,
       timestamp: acceptedAt,
       __openclaw: { id: `pending:${text}` },
@@ -102,18 +101,17 @@ describe("transcript input order", () => {
       ].map((clock) => ({ state, label: clock.label, timestamps: clock.timestamps })),
     ),
   )(
-    "renders server $state inputs with $label timestamps without reviving cancelled prompts",
+    "preserves server $state input order and attached notices with $label timestamps",
     ({ state, timestamps }) => {
       const notice =
         state === "interrupted"
           ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
-          : null;
-      const expectedInputs =
-        state === "cancelled"
-          ? []
-          : ["First accepted input", "Second accepted input"].flatMap((text) =>
-              notice ? [text, notice] : [text],
-            );
+          : state === "cancelled"
+            ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
+            : null;
+      const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
+        notice ? [text, notice] : [text],
+      );
 
       expect(
         visibleRows({
