@@ -215,6 +215,7 @@ export async function prepareChatSendAttachments(params: {
     lifecycleGeneration,
   } = admission;
   const assertInputCurrent = () => {
+    activeRunAbort.controller.signal.throwIfAborted();
     admission.assertWorkAdmissionCurrent();
     admission.assertClientUploadAllowed?.();
   };
