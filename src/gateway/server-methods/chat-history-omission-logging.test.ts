@@ -9,7 +9,9 @@ import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js"
 function runHistoryBudgetPipeline(messages: unknown[], maxHistoryBytes: number) {
   const events: DiagnosticPayloadLargeEvent[] = [];
   const unsubscribe = onDiagnosticEvent((event) => {
-    if (event.type === "payload.large") events.push(event);
+    if (event.type === "payload.large") {
+      events.push(event);
+    }
   });
   try {
     const page = prepareChatHistoryResponsePage(

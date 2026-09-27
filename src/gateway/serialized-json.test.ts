@@ -5,7 +5,7 @@ describe("serialized Gateway response arrays", () => {
   it("forwards worker JSON without materializing its messages", () => {
     const messages = [{ role: "assistant", content: 'é🦞\\\"\n__RAW_JSON_0__' }, null];
     const bytes = Buffer.from(`prefix${JSON.stringify(messages)}suffix`);
-    const carrier = new SerializedJsonArray(bytes.subarray(6, bytes.length - 6));
+    const carrier = new SerializedJsonArray(bytes.subarray(6, -6));
     const materialize = vi.spyOn(carrier, "materialize");
     const frame = {
       type: "res",
@@ -45,7 +45,7 @@ describe("serialized Gateway response arrays", () => {
     const carrier = new SerializedJsonArray(Buffer.from(JSON.stringify(messages)));
     const frame = { type: "res", id: "ordinary", ok: true, payload: { messages } };
     expect(serializeGatewayFrame(frame)).toBe(JSON.stringify(frame));
-    expect(JSON.parse(JSON.stringify({ messages: carrier }))).toEqual({ messages });
+    expect(JSON.stringify({ messages: carrier })).toBe(JSON.stringify({ messages }));
     expect(carrier.materialize()).toEqual(messages);
     expect(() => new SerializedJsonArray(Buffer.from("{}")).materialize()).toThrow(
       "must contain an array",

@@ -3,6 +3,7 @@ import { composeTranscriptDisplay } from "../../chat/transcript-display-position
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
+  ChatHistoryResponsePage,
 } from "../../config/sessions/session-history-types.js";
 import {
   isForwardedUserMessage,
@@ -30,7 +31,7 @@ export function prepareChatHistoryResponsePage(
     maxHistoryBytes,
     messageId,
   }: Pick<ChatHistoryPageParams, "entry" | "maxHistoryBytes" | "messageId">,
-) {
+): ChatHistoryResponsePage {
   const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, historyEntry);
   // Imported snapshots have no back-scroll cursor. Preserve their complete
   // snapshot budget until the external history owner supports pagination.
@@ -115,11 +116,6 @@ export function prepareChatHistoryResponsePage(
   };
 }
 
-export type EncodedChatHistoryResponsePage = Omit<
-  ReturnType<typeof prepareChatHistoryResponsePage>,
-  "messages"
-> & { messages: Uint8Array };
-
 /** Keep host-owned live labels and legacy enrichment on the object path. */
 export function encodeChatHistoryResponsePage(
   page: ChatHistoryPage,
@@ -129,7 +125,7 @@ export function encodeChatHistoryResponsePage(
     !params.encodeResponse ||
     page.messages.some((value) => {
       const message = asOptionalRecord(value);
-      const metadata = asOptionalRecord(message?.__openclaw);
+      const metadata = asOptionalRecord(message?.["__openclaw"]);
       return (
         !message ||
         isForwardedUserMessage(message) ||

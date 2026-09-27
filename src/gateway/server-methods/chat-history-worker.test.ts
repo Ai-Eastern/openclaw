@@ -350,8 +350,9 @@ it("forwards large worker history as text JSON while preserving object callers a
     expect(Array.isArray((await request(true, 200_000, "cron.history")).messages)).toBe(true);
     const omissions: DiagnosticPayloadLargeEvent[] = [];
     const stop = onDiagnosticEvent((event) => {
-      if (event.type === "payload.large" && event.surface === "gateway.chat.history")
+      if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
         omissions.push(event);
+      }
     });
     try {
       const tiny = await request(true, 1024);

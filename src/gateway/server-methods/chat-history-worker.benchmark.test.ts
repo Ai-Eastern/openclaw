@@ -326,7 +326,7 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each([16, 32])(
           message: {
             role: "assistant",
             content: [
-              { type: "text", text: `Synthetic ${index}: 漢字🤖\\\"\n` + "x".repeat(65_000) },
+              { type: "text", text: `Synthetic ${index}: 漢字🤖\\"\n` + "x".repeat(65_000) },
             ],
           },
         })),
@@ -334,9 +334,9 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each([16, 32])(
       await waitForSessionTranscriptProjection(scope);
       vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
       const context = await createHistoryReadContext();
-      let encoded: string | Buffer = "";
       let acceptsSerializedJson = false;
-      const request = async () => {
+      const request = async (): Promise<string | Buffer> => {
+        const response: { encoded?: string | Buffer } = {};
         await chatHistoryHandlers["chat.history"]!({
           params: { sessionKey: scope.sessionKey, maxChars: 100_000, maxBytes: 1_048_576 },
           context,
@@ -345,18 +345,31 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each([16, 32])(
           req: { type: "req", id: "reply-bench", method: "chat.history" },
           isWebchatConnect: () => false,
           respond: (ok, payload, error) => {
-            if (!ok) throw new Error(JSON.stringify(error));
-            encoded = serializeGatewayFrame({ type: "res", id: "reply-bench", ok, payload });
+            if (!ok) {
+              throw new Error(JSON.stringify(error));
+            }
+            response.encoded = serializeGatewayFrame({
+              type: "res",
+              id: "reply-bench",
+              ok,
+              payload,
+            });
           },
         });
+        return expectDefined(response.encoded, "history response");
       };
       let objectGolden = "";
       for (acceptsSerializedJson of [false, true]) {
-        for (let index = 0; index < 5; index++) await request();
-        const golden = encoded;
-        if (!acceptsSerializedJson) objectGolden = golden.toString();
-        expect(golden.toString() === objectGolden).toBe(true);
-        expect(JSON.parse(golden.toString()).payload.messages).toHaveLength(16);
+        let encoded = await request();
+        for (let index = 1; index < 5; index++) {
+          encoded = await request();
+        }
+        const golden = encoded.toString();
+        if (!acceptsSerializedJson) {
+          objectGolden = golden;
+        }
+        expect(golden === objectGolden).toBe(true);
+        expect(JSON.parse(golden).payload.messages).toHaveLength(16);
         expect(Buffer.byteLength(golden)).toBeGreaterThan(1_000_000);
         const inspector = new Session();
         inspector.connect();
@@ -368,7 +381,9 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each([16, 32])(
           });
           const cpu = process.threadCpuUsage();
           const start = performance.now();
-          for (let index = 0; index < 200; index++) await request();
+          for (let index = 0; index < 200; index++) {
+            encoded = await request();
+          }
           const wallMs = performance.now() - start;
           const elapsed = process.threadCpuUsage(cpu);
           const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -376,9 +391,12 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each([16, 32])(
             node.selfSize + node.children.reduce((total, child) => total + allocated(child), 0);
           const sites: Array<{ name: string; bytes: number }> = [];
           const walk = (node: typeof profile.head) => {
-            if (node.selfSize)
+            if (node.selfSize) {
               sites.push({ name: node.callFrame.functionName, bytes: node.selfSize });
-            for (const child of node.children) walk(child);
+            }
+            for (const child of node.children) {
+              walk(child);
+            }
           };
           walk(profile.head);
           console.log(
@@ -390,10 +408,10 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each([16, 32])(
               mainAllocatedBytesPerRead: allocated(profile.head) / 200,
               mainCpuMsPerRead: (elapsed.user + elapsed.system) / 200_000,
               wallMsPerRead: wallMs / 200,
-              topSites: sites.sort((a, b) => b.bytes - a.bytes).slice(0, 12),
+              topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 12),
             }),
           );
-          expect(encoded.toString() === golden.toString()).toBe(true);
+          expect(encoded.toString() === golden).toBe(true);
           expect(Buffer.isBuffer(encoded)).toBe(acceptsSerializedJson);
         } finally {
           inspector.disconnect();

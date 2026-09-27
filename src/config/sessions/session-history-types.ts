@@ -1,4 +1,3 @@
-import type { EncodedChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -22,8 +21,20 @@ import type {
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
+export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = unknown[]> = {
+  messages: Messages;
+  activity?: AgentHistoryActivity[];
+  messagesBytes: number;
+  responseHistoryBytes: number;
+  omission?: { omittedCount: number; normalizedBytes: number };
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+  completeSnapshot?: true;
+};
+
 export type ChatHistoryPage = {
-  encodedResponse?: EncodedChatHistoryResponsePage;
+  encodedResponse?: ChatHistoryResponsePage<Uint8Array>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
