@@ -44,7 +44,9 @@ worker limit; hourly main and other backend budgets are unchanged.
 The 200-second setup reserve includes shared worker-bundle preparation once per
 job, leaving another 25 seconds for workload variation. PR timing records keep
 raw spans separate from workload measurements: only a uniquely attributed parent
-preparation is removed from its triggering group's workload. The emitted
+preparation is removed from its triggering group's workload. When a completed
+span from a partial job raises the raw estimate without a qualified workload
+measurement, the older preparation discount is discarded. The emitted
 `sharedPreparationSeconds` records that cost in the job's setup reserve; runtime
 and private-QA builds retain their existing compute allowance. Storage groups
 balance file cost and the 16-file ceiling together. Measured heavy singleton files

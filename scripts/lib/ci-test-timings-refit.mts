@@ -791,6 +791,23 @@ export function refitTestTimings(
     false,
     options.seedPullRequest === true,
   );
+  const refreshedWorkloadPullRequest = refitMap(
+    samples.githubPullRequestWorkload,
+    {},
+    0,
+    observedParents.githubPullRequestWorkload,
+    options.seedPullRequest ? 1 : 2,
+  );
+  for (const [key, rawSeconds] of Object.entries(rawPullRequest)) {
+    // A slower partial job cannot reuse a prior job's preparation discount.
+    if (
+      rawSeconds >
+        (previous?.compactGroupSeconds.githubPullRequest?.groups[key]?.rawSeconds ?? 0) &&
+      refreshedWorkloadPullRequest[key] === undefined
+    ) {
+      delete workloadPullRequest[key];
+    }
+  }
   const timings: CiTestTimings = {
     compactGroupSeconds: {
       blacksmith: refitMap(

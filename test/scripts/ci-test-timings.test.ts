@@ -1361,7 +1361,11 @@ it.todo("retains todo coverage");
             blacksmith: { retained: 40 },
             github: { retained: 50 },
             githubPullRequest: {
-              groups: { omitted: { rawSeconds: 90 }, "kept-higher": { rawSeconds: 200 } },
+              groups: {
+                omitted: { rawSeconds: 90 },
+                "kept-higher": { rawSeconds: 200 },
+                "slower-complete": { rawSeconds: 80, workloadSeconds: 50 },
+              },
               sharedPreparationSeconds: 0,
             },
           },
@@ -1370,7 +1374,7 @@ it.todo("retains todo coverage");
           samplerJob(11, 1, {
             labels: ["ubuntu-24.04"],
             conclusion: "cancelled",
-            log: `${compactLog(100, "new-cost")}\n${compactLog(20, "kept-higher")}`,
+            log: `${compactLog(100, "new-cost")}\n${compactLog(20, "kept-higher")}\n${compactLog(200, "slower-complete")}`,
           }),
         ],
       },
@@ -1386,6 +1390,7 @@ it.todo("retains todo coverage");
               omitted: { rawSeconds: 90 },
               "kept-higher": { rawSeconds: 200 },
               "new-cost": { rawSeconds: 100 },
+              "slower-complete": { rawSeconds: 200 },
             },
             sharedPreparationSeconds: 0,
           },
