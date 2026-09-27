@@ -243,6 +243,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   });
 
   it("keeps same-named native MCP tools on different servers under separate reviewer lists", () => {
+    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
     const cfg: OpenClawConfig = {
       approvals: {
         plugin: {
