@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
+import { setImmediate } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -168,7 +168,7 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
           5_000,
           `${phase} admission never reached its native factory`,
         );
-        await sleep(10);
+        await setImmediate();
         expect(Atomics.load(holder.released, 0)).toBe(0);
         sql.expectIdle();
         expect(opened).not.toHaveBeenCalled();
@@ -285,7 +285,7 @@ it("cancels a contended persistent admission without claiming the reply or poiso
         "Concurrent admission never entered the writer queue",
       );
       controller.abort(new Error("Synthetic cancelled reply"));
-      await sleep(10);
+      await setImmediate();
       expect(Atomics.load(holder.released, 0)).toBe(0);
       expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
       expect(replyRunRegistry.get(followerKey)).toBeUndefined();
@@ -377,7 +377,7 @@ it("keeps successors behind physical claim release when another agent occupies t
           settled = true;
           return result;
         });
-        await sleep(10);
+        await setImmediate();
         expect(Atomics.load(holder.released, 0)).toBe(0);
         expect(settled).toBe(false);
         await releaseWriter();
