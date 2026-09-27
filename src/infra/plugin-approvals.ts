@@ -48,7 +48,7 @@ export type PluginApprovalRequestPayload = {
   /** Host-derived source context for the active approval card, not approval authority. */
   approvalSource?: PluginApprovalSource;
   /** Trusted harness-selected policy subject; distinct from display-only toolName. */
-  policySubject?: { pluginKey: string; appId?: string; tool?: string };
+  policySubject?: { pluginKey: string; appId?: string; tool?: string; mcpServer?: string };
   /** Exact MCP persistence intent; the host separately binds live tool-call proof. */
   mcpTool?: { server: string; tool: string };
   allowedDecisions?: readonly ExecApprovalDecision[] | null;

@@ -65,7 +65,7 @@ export async function requestPluginApproval(params: {
   severity: "info" | "warning";
   toolName: string;
   toolCallId?: string;
-  policySubject?: { pluginKey: string; appId?: string; tool?: string };
+  policySubject?: { pluginKey: string; appId?: string; tool?: string; mcpServer?: string };
   allowedDecisions?: ExecApprovalDecision[];
   mcpTool?: { server: string; tool: string };
   isMcpToolApprovalActive?: () => boolean;
@@ -171,7 +171,7 @@ export async function requestPluginApprovalOutcome(params: {
   allowedDecisions?: ExecApprovalDecision[];
   toolName: string;
   toolCallId?: string;
-  policySubject?: { pluginKey: string; appId?: string; tool?: string };
+  policySubject?: { pluginKey: string; appId?: string; tool?: string; mcpServer?: string };
   mcpTool?: { server: string; tool: string };
   isMcpToolApprovalActive?: () => boolean;
 }): Promise<PluginApprovalOutcome> {

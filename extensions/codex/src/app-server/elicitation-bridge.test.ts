@@ -1043,15 +1043,16 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
-  it("binds plugin reviewer policy to the selected Codex app and active raw tool", async () => {
+  it("binds plugin reviewer policy to the selected Codex app and catalog action", async () => {
     mockApprovalDecision("plugin:approval-calendar-tool", "allow-once");
     const correlate = vi.fn((serverName: string, connectorId?: string) =>
       serverName === "codex_apps" && connectorId === "connector_google_calendar"
         ? {
             id: "mcp-item-1",
             server: serverName,
-            tool: "create_event.raw",
+            tool: "renamed_123.create_event",
             arguments: { calendar: "work" },
+            actionName: "create_event",
           }
         : undefined,
     );
@@ -1079,7 +1080,7 @@ describe("Codex app-server elicitation bridge", () => {
       policySubject: {
         pluginKey: "google-calendar",
         appId: "connector_google_calendar",
-        tool: "create_event.raw",
+        tool: "create_event",
       },
     });
   });
@@ -1104,7 +1105,7 @@ describe("Codex app-server elicitation bridge", () => {
         id: "different-item",
         server: "codex_apps",
         tool: "create_event.raw",
-        arguments: { calendar: "personal" },
+        arguments: { calendar: "work" },
       }),
     });
 
@@ -1205,7 +1206,7 @@ describe("Codex app-server elicitation bridge", () => {
     expect(result).toEqual({ action: "accept", content: { approve: true }, _meta: null });
     expect(getActiveMcpToolCallAttribution).toHaveBeenCalledWith("docs");
     expect(gatewayToolArg(0, 2)).toMatchObject({
-      policySubject: { pluginKey: "docs", tool: "render.raw" },
+      policySubject: { pluginKey: "docs", mcpServer: "docs", tool: "render.raw" },
     });
   });
 
@@ -1225,7 +1226,11 @@ describe("Codex app-server elicitation bridge", () => {
 
     expect(result).toEqual({ action: "accept", content: { approve: true }, _meta: null });
     expect(gatewayToolArg(0, 2)).toMatchObject({
-      policySubject: { pluginKey: "google-calendar", tool: "create_event.raw" },
+      policySubject: {
+        pluginKey: "google-calendar",
+        mcpServer: "google-calendar-mcp",
+        tool: "create_event.raw",
+      },
     });
   });
 
@@ -1299,7 +1304,11 @@ describe("Codex app-server elicitation bridge", () => {
     });
 
     expect(gatewayToolArg(0, 2)).toMatchObject({
-      policySubject: { pluginKey: "google-calendar", tool: "create_event.raw" },
+      policySubject: {
+        pluginKey: "google-calendar",
+        mcpServer: "google-calendar-mcp",
+        tool: "create_event.raw",
+      },
     });
   });
 
@@ -1544,6 +1553,47 @@ describe("Codex app-server elicitation bridge", () => {
     });
     expect(result?.action).toBe("accept");
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("uses the admitted app ID for reviewer policy when Codex reports its connector alias", async () => {
+    const suffix = "0123456789abcdef0123456789abcdef";
+    const storedId = `asdk_app_${suffix}`;
+    const connectorId = `connector_${suffix}`;
+    mockApprovalDecision("plugin:approval-app-alias", "allow-once");
+    const correlate = vi.fn((_serverName: string, selectedConnectorId?: string) =>
+      selectedConnectorId === connectorId
+        ? {
+            id: "mcp-item-alias",
+            server: "codex_apps",
+            tool: "renamed_123.create_event",
+            actionName: "create_event",
+            arguments: { calendar: "work" },
+          }
+        : undefined,
+    );
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          app_id: storedId,
+          connector_id: connectorId,
+          tool_params_display: [{ name: "calendar", value: "work" }],
+        },
+      }),
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "auto",
+        apps: [{ appId: storedId, pluginName: "google-calendar", mcpServerNames: [] }],
+      }),
+      getActiveMcpToolCall: correlate,
+    });
+
+    expect(result?.action).toBe("accept");
+    expect(correlate).toHaveBeenCalledWith("codex_apps", connectorId);
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      policySubject: { pluginKey: "google-calendar", appId: storedId, tool: "create_event" },
+    });
   });
 
   it("declines live connector elicitations with mismatched app and connector ids", async () => {

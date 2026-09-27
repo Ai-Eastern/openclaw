@@ -751,7 +751,9 @@ describe("runCodexAppServerSideQuestion", () => {
       expect(fork).toMatchObject({ approvalPolicy: { granular: { mcp_elicitations: true } } });
       expect(response).toEqual({ action: "accept", content: { approve: true }, _meta: null });
       expect(requestApproval).toHaveBeenCalledWith(
-        expect.objectContaining({ policySubject: { pluginKey: "docs", tool: "render.raw" } }),
+        expect.objectContaining({
+          policySubject: { pluginKey: "docs", mcpServer: "docs", tool: "render.raw" },
+        }),
       );
       expect(waitForApproval).toHaveBeenCalledWith(
         expect.objectContaining({ approvalId: "plugin:side-mcp" }),

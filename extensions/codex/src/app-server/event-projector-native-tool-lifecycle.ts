@@ -50,6 +50,7 @@ export type CodexActiveMcpToolCall = {
   server: string;
   tool: string;
   arguments: JsonValue;
+  actionName?: string;
 };
 
 function isMcpToolCallItemNotification(method: string, params: JsonObject): boolean {
@@ -144,11 +145,15 @@ export class CodexNativeToolLifecycleProjector {
     } else if (candidate.appContext != null || candidate.pluginId != null) {
       return undefined;
     }
+    const actionName = isJsonObject(candidate.appContext)
+      ? readString(candidate.appContext, "actionName")
+      : undefined;
     return {
       id: candidate.id,
       server: candidate.server,
       tool: candidate.tool,
       arguments: candidate.arguments,
+      ...(actionName ? { actionName } : {}),
     };
   }
 

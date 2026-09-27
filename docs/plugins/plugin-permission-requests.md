@@ -234,10 +234,11 @@ list for one exact tool:
 
 For native OpenClaw tools, use the tool registration's plugin ID and a tool key
 of `encodeURIComponent(rawToolName)`. For Codex app tools, use the configured
-plugin key and `encodeURIComponent(appId) + "/" + encodeURIComponent(rawToolName)`;
-these IDs come from the selected app tool, not its display title. For Codex
-plugin-owned MCP server tools, use the configured plugin key and
-`encodeURIComponent(rawToolName)` from Codex's active MCP tool item.
+plugin key and `encodeURIComponent(appId) + "/" + encodeURIComponent(actionName)`;
+the action name comes from the selected app tool's native metadata, not its
+display title or raw MCP name. For Codex plugin-owned MCP server tools, use the
+configured plugin key and `"mcp/" + encodeURIComponent(serverName) + "/" +
+encodeURIComponent(rawToolName)` from Codex's active MCP tool item.
 
 Only the exact matching list applies: tool, then plugin, then default. Slack user IDs must
 include the bot's authenticated workspace ID as shown above; reviewers from a

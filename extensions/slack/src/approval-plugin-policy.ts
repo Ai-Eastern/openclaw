@@ -30,7 +30,9 @@ export function resolvePluginApprovalSlackApprovers(
     }
     const toolKey = subject.appId
       ? `${encodeURIComponent(subject.appId)}/${encodeURIComponent(subject.tool)}`
-      : encodeURIComponent(subject.tool);
+      : subject.mcpServer
+        ? `mcp/${encodeURIComponent(subject.mcpServer)}/${encodeURIComponent(subject.tool)}`
+        : encodeURIComponent(subject.tool);
     if (Object.hasOwn(tools, toolKey)) {
       return tools[toolKey]?.approvers ?? [];
     }
