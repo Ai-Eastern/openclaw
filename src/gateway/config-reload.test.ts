@@ -4,7 +4,6 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -106,7 +105,7 @@ import {
   startGatewayConfigReloader,
   waitForReloadState,
 } from "./config-reload.test-support.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
@@ -1508,9 +1507,11 @@ describe("buildGatewayReloadPlan", () => {
 });
 
 describe("startGatewayConfigReloader include files", () => {
+  beforeEach(() => vi.useFakeTimers());
   afterEach(async () => {
     await closeTestConfigReloaders();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("reloads when an included config file changes", async () => {
@@ -1542,6 +1543,7 @@ describe("startGatewayConfigReloader include files", () => {
     const initialSnapshot = await configIo.readConfigFileSnapshot();
     expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
+    const watcher = installWatcherMock();
     const applied = createDeferred<OpenClawConfig>();
     const { promise: watcherReady, resolve: signalWatcherReady } = createDeferred();
     const reloader = startGatewayConfigReloader({
@@ -1570,8 +1572,11 @@ describe("startGatewayConfigReloader include files", () => {
       expect(initialSnapshot.includedPaths).toEqual(
         [includeLinkPath, includePath, nestedIncludePath].toSorted(),
       );
+      watcher.emit("ready");
       await watcherReady;
       await writeFile(nestedIncludePath, `${JSON.stringify({ enabled: false }, null, 2)}\n`);
+      watcher.emit("change", nestedIncludePath);
+      await vi.advanceTimersByTimeAsync(0);
       await expect(applied.promise).resolves.toMatchObject({ hooks: { enabled: false } });
       expect(onHotReload).toHaveBeenCalledOnce();
     } finally {
@@ -2241,7 +2246,7 @@ describe("startGatewayConfigReloader", () => {
       harness.emitWrite(write);
       await vi.runAllTimersAsync();
       expect(harness.onHotReload).not.toHaveBeenCalled();
-      expect(chokidar.watch).not.toHaveBeenCalled();
+      expect(harness.watcher.adapter.start).not.toHaveBeenCalled();
       gate.resolve();
       await harness.reloader.ready;
       await flushReload(harness.reloader);
@@ -2361,10 +2366,7 @@ describe("startGatewayConfigReloader", () => {
       await harness.reloader.ready;
       harness.watcher.emit("ready");
       await flushReload(harness.reloader);
-      expect(chokidar.watch).toHaveBeenLastCalledWith(
-        ["/tmp/openclaw.json", "/tmp/new.json5"],
-        expect.any(Object),
-      );
+      expect(harness.watcher.paths).toEqual(["/tmp/openclaw.json", "/tmp/new.json5"]);
       expect(harness.onConfigAccepted).toHaveBeenCalledTimes(1);
     } finally {
       await harness.reloader.stop();
@@ -2478,7 +2480,7 @@ describe("startGatewayConfigReloader", () => {
         );
         await stopping;
         await vi.runAllTimersAsync();
-        expect(chokidar.watch).not.toHaveBeenCalled();
+        expect(harness.watcher.adapter.start).not.toHaveBeenCalled();
         expect(harness.onHotReload).not.toHaveBeenCalled();
         expect(configAuditMocks.upsertSnapshot).not.toHaveBeenCalled();
       } finally {
@@ -2510,20 +2512,21 @@ describe("startGatewayConfigReloader", () => {
     );
     await harness.reloader.ready;
 
-    expect(chokidar.watch).toHaveBeenCalledWith(
-      ["/tmp/openclaw.json", initialIncludePath, retainedIncludePath],
-      expect.objectContaining({ ignoreInitial: true }),
-    );
+    expect(harness.watcher.paths).toEqual([
+      "/tmp/openclaw.json",
+      initialIncludePath,
+      retainedIncludePath,
+    ]);
 
     await flushWatcherChange(harness);
 
     // Candidate discovery adds the new include before acceptance; acceptance
-    // then retires the old include in a second readiness-reconciled watcher.
-    expect(harness.watcher.close).toHaveBeenCalledTimes(2);
-    expect(chokidar.watch).toHaveBeenLastCalledWith(
-      ["/tmp/openclaw.json", retainedIncludePath, addedIncludePath],
-      expect.objectContaining({ ignoreInitial: true }),
-    );
+    // then commits the exact accepted include set.
+    expect(harness.watcher.paths).toEqual([
+      "/tmp/openclaw.json",
+      retainedIncludePath,
+      addedIncludePath,
+    ]);
     await harness.reloader.stop();
   });
 
@@ -2555,18 +2558,20 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.ready;
 
     await flushWatcherChange(harness);
-    expect(harness.watcher.close).toHaveBeenCalledOnce();
-    expect(chokidar.watch).toHaveBeenLastCalledWith(
-      ["/tmp/openclaw.json", acceptedIncludePath, firstCandidatePath],
-      expect.objectContaining({ ignoreInitial: true }),
-    );
+    expect(harness.watcher.adapter.acceptPaths).not.toHaveBeenCalled();
+    expect(harness.watcher.paths).toEqual([
+      "/tmp/openclaw.json",
+      acceptedIncludePath,
+      firstCandidatePath,
+    ]);
 
     await flushWatcherChange(harness);
-    expect(harness.watcher.close).toHaveBeenCalledTimes(2);
-    expect(chokidar.watch).toHaveBeenLastCalledWith(
-      ["/tmp/openclaw.json", acceptedIncludePath, secondCandidatePath],
-      expect.objectContaining({ ignoreInitial: true }),
-    );
+    expect(harness.watcher.adapter.acceptPaths).not.toHaveBeenCalled();
+    expect(harness.watcher.paths).toEqual([
+      "/tmp/openclaw.json",
+      acceptedIncludePath,
+      secondCandidatePath,
+    ]);
     await harness.reloader.stop();
   });
 
@@ -2585,10 +2590,7 @@ describe("startGatewayConfigReloader", () => {
     });
     await harness.reloader.ready;
 
-    expect(chokidar.watch).toHaveBeenCalledWith(
-      ["/tmp/openclaw.json", rejectedIncludeDir],
-      expect.objectContaining({ depth: 0 }),
-    );
+    expect(harness.watcher.paths).toEqual(["/tmp/openclaw.json", rejectedIncludeDir]);
 
     harness.watcher.emit("change", nodePath.join(rejectedIncludeDir, "session.json"));
     await flushReload(harness.reloader);
@@ -3100,8 +3102,7 @@ describe("startGatewayConfigReloader", () => {
       setRuntimeConfigSnapshot(initialConfig, initialConfig);
       initializePublishedConfigRuntimeEnv(initialConfig);
 
-      const watcher = createWatcherMock();
-      vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+      const watcher = installWatcherMock();
       const hotReloadGate = createDeferred();
       const hotReloadStarted = createDeferred();
       const competingRootCounts: number[] = [];
@@ -6535,8 +6536,7 @@ describe("startGatewayConfigReloader", () => {
       const after = { notes: { source: "npm" as const, spec: "notes@2" } };
       const started = createDeferred();
       const finishRuntime = createDeferred();
-      const watcher = createWatcherMock();
-      vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+      const watcher = installWatcherMock();
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
         async () => {

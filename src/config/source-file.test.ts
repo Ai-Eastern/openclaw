@@ -1,206 +1,259 @@
-import chokidar, { FSWatcher } from "chokidar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import * as observation from "@openclaw/fs-safe/watch";
+import type { WatchOptions, WatchSubscription } from "@openclaw/fs-safe/watch";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { admitConfigObservationRoots, configObservationEntries } from "./source-file-roots.js";
 import { createConfigFileAdapter } from "./source-file.js";
 
-describe("config file adapter", () => {
-  const adapters = new Set<ReturnType<typeof createConfigFileAdapter>>();
+vi.mock("@openclaw/fs-safe/watch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/watch")>()),
+}));
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.stubEnv("VITEST", undefined);
-    vi.stubEnv("CHOKIDAR_USEPOLLING", undefined);
-  });
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const adapters = new Set<ReturnType<typeof createConfigFileAdapter>>();
+afterEach(async () => {
+  await Promise.all([...adapters].map((adapter) => adapter.stop()));
+  adapters.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
 
-  afterEach(async () => {
-    await Promise.all([...adapters].map((adapter) => adapter.stop()));
-    adapters.clear();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
-  function createHarness(includedPaths: string[] = [], forcedPolling?: boolean) {
-    const watchers: FSWatcher[] = [];
-    const watch = vi.spyOn(chokidar, "watch").mockImplementation((_paths, options) => {
-      const watcher = new FSWatcher({
-        ...options,
-        ...(forcedPolling === undefined ? {} : { usePolling: forcedPolling }),
-      });
-      vi.spyOn(watcher, "close").mockResolvedValue();
-      watchers.push(watcher);
-      return watcher;
-    });
-    const onChange = vi.fn();
-    const onReady = vi.fn();
-    const log = { warn: vi.fn(), error: vi.fn() };
-    const adapter = createConfigFileAdapter({
-      path: "/tmp/openclaw.json",
-      includedPaths,
-      onChange,
-      onReady,
-      log,
-    });
-    adapters.add(adapter);
-    const current = () => {
-      const watcher = watchers.at(-1);
-      if (!watcher) {
-        throw new Error("adapter did not start watching");
+async function fixture() {
+  const directory = await fs.realpath(dirs.make("config-observation-"));
+  const p = (name: string) => path.join(directory, name);
+  await fs.writeFile(p("openclaw.json"), "{}");
+  await fs.writeFile(p("accepted.json"), "{}");
+  vi.useFakeTimers();
+  const setTimeout = globalThis.setTimeout;
+  const sampling: Promise<unknown>[] = [];
+  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) =>
+    setTimeout(() => {
+      const result = callback(...args);
+      if (ms === 50) {
+        sampling.push(Promise.resolve(result));
       }
-      return watcher;
-    };
-    return { adapter, watchers, watch, current, onChange, onReady, log };
-  }
-
-  it("starts explicitly, reconciles replacements, and ignores retired watcher events", async () => {
-    const { adapter, current, watch, onReady, onChange } = createHarness();
-    expect(watch).not.toHaveBeenCalled();
-    adapter.start();
-    adapter.start();
-    expect(watch).toHaveBeenCalledOnce();
-    const first = current();
-    first.emit("ready");
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(onChange).not.toHaveBeenCalled();
-
-    await adapter.observePaths(["/tmp/hooks.json5"]);
-    first.emit("change", "/tmp/openclaw.json");
-    first.emit("ready");
-    first.emit("error", new Error("retired watcher"));
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(onChange).not.toHaveBeenCalled();
-    current().emit("ready");
-    expect(onChange).toHaveBeenCalledOnce();
-
-    await adapter.stop();
-    current().emit("change", "/tmp/hooks.json5");
-    current().emit("ready");
-    adapter.start();
-    await vi.runAllTimersAsync();
-    expect(onChange).toHaveBeenCalledOnce();
-    expect(watch).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains accepted includes until acceptance and limits rejected includes to exact paths", async () => {
-    const { adapter, current, onChange, watch } = createHarness(["/tmp/accepted.json5"]);
-    adapter.start();
-    await adapter.observePaths(["/tmp/first-invalid.json5"]);
-    current().emit("change", "/tmp/accepted.json5");
-    current().emit("change", "/tmp/first-invalid.json5");
-    expect(onChange).toHaveBeenCalledTimes(2);
-
-    await adapter.observePaths(["/tmp/rejected-directory"]);
-    current().emit("change", "/tmp/first-invalid.json5");
-    current().emit("change", "/tmp/rejected-directory/session.json");
-    expect(onChange).toHaveBeenCalledTimes(2);
-    current().emit("change", "/tmp/accepted.json5");
-    current().emit("change", "/tmp/nested/../rejected-directory");
-    expect(onChange).toHaveBeenCalledTimes(4);
-
-    await adapter.acceptPaths(["/tmp/replacement.json5"]);
-    current().emit("change", "/tmp/accepted.json5");
-    current().emit("change", "/tmp/rejected-directory");
-    expect(onChange).toHaveBeenCalledTimes(4);
-    current().emit("unlink", "/tmp/replacement.json5");
-    current().emit("add", "/tmp/replacement.json5");
-    current().emit("change", "/tmp/openclaw.json");
-    expect(onChange).toHaveBeenCalledTimes(7);
-    const creations = watch.mock.calls.length;
-    await adapter.observePaths(["/tmp/replacement.json5"]);
-    await adapter.acceptPaths(["/tmp/replacement.json5"]);
-    expect(watch).toHaveBeenCalledTimes(creations);
-  });
-
-  it.each([
-    { setting: undefined, forced: undefined, modes: [false, true] },
-    { setting: "1", forced: undefined, modes: [true] },
-    { setting: "TrUe", forced: undefined, modes: [true] },
-    { setting: "0", forced: undefined, modes: [false] },
-    { setting: "FALSE", forced: undefined, modes: [false] },
-    { setting: undefined, forced: true, modes: [true] },
-  ])(
-    "bounds recovery with polling setting $setting and platform override $forced",
-    async (testCase) => {
-      vi.stubEnv("CHOKIDAR_USEPOLLING", testCase.setting);
-      const { adapter, current, watch, log, onChange } = createHarness([], testCase.forced);
-      adapter.start();
-      for (const [index, polling] of testCase.modes.entries()) {
-        expect(current().options.usePolling).toBe(polling);
-        for (const delay of [500, 2000, 5000]) {
-          const previous = current();
-          previous.emit("error", new Error("watch resources exhausted"));
-          previous.emit("ready");
-          expect(adapter.status()).toBe("active");
-          await vi.advanceTimersByTimeAsync(delay - 1);
-          expect(current()).toBe(previous);
-          await vi.advanceTimersByTimeAsync(1);
-          expect(current()).not.toBe(previous);
-          expect(current().options.usePolling).toBe(polling);
-          current().emit("ready");
-        }
-        current().emit("error", new Error("watch resources exhausted"));
-        if (index < testCase.modes.length - 1) {
-          expect(adapter.status()).toBe("active");
-          await vi.advanceTimersByTimeAsync(500);
-        }
-      }
-      expect(onChange).toHaveBeenCalledTimes(testCase.modes.length * 3);
-      expect(adapter.status()).toBe("disabled");
-      expect(log.error).toHaveBeenCalledWith(expect.stringContaining("config hot-reload disabled"));
-      const creations = watch.mock.calls.length;
-      await vi.runAllTimersAsync();
-      expect(watch).toHaveBeenCalledTimes(creations);
-    },
+    }, ms),
   );
-
-  it("resets the retry budget only after a current watched file event", async () => {
-    const { adapter, current, watch, onChange } = createHarness();
-    adapter.start();
-    for (let round = 0; round < 5; round += 1) {
-      const previous = current();
-      previous.emit("error", new Error("transient watch failure"));
-      await vi.advanceTimersByTimeAsync(500);
-      expect(current()).not.toBe(previous);
-      current().emit("change", "/tmp/openclaw.json");
+  const sources: Array<{ subscription: WatchSubscription; options: WatchOptions }> = [];
+  let installed: ((source: (typeof sources)[number]) => void) | undefined;
+  const watch = observation.watch;
+  vi.spyOn(observation, "watch").mockImplementation((root, options) => {
+    // Qualify owner policy through real scans without depending on native events.
+    const subscription = watch(root, { ...options, mode: "poll", intervalMs: 30_000 });
+    sources.push({ subscription, options });
+    installed?.({ subscription, options });
+    installed = undefined;
+    return subscription;
+  });
+  const onChange = vi.fn();
+  const ready = createDeferred();
+  const log = { warn: vi.fn(), error: vi.fn() };
+  const adapter = createConfigFileAdapter({
+    path: p("openclaw.json"),
+    includedPaths: [p("accepted.json")],
+    includeRoots: [],
+    onChange,
+    onReady: () => ready.resolve(),
+    log,
+  });
+  adapters.add(adapter);
+  adapter.start();
+  await ready.promise;
+  const reconcile = () =>
+    Promise.all(
+      sources
+        .filter(({ subscription }) => subscription.health().state !== "closed")
+        .map(({ subscription }) => subscription.reconcile()),
+    );
+  const settle = async (samples = 5) => {
+    for (let sample = 0; sample < samples; sample += 1) {
+      await vi.advanceTimersByTimeAsync(50);
+      await Promise.all(sampling.splice(0));
     }
-    expect(onChange).toHaveBeenCalledTimes(5);
-    expect(adapter.status()).toBe("active");
-    expect(current().options.usePolling).toBe(false);
-    current().emit("error", new Error("stopping while retry is pending"));
-    await adapter.stop();
-    await vi.runAllTimersAsync();
-    expect(watch).toHaveBeenCalledTimes(6);
+  };
+  const nextSource = () =>
+    new Promise<(typeof sources)[number]>((resolve) => {
+      installed = resolve;
+    });
+  return { adapter, p, directory, sources, onChange, log, reconcile, settle, nextSource };
+}
+
+describe("config file observation", () => {
+  it("settles primary/includes, atomic replacements, deletion and restore, and updates accepted scopes in place", async () => {
+    const h = await fixture();
+    expect(h.onChange).not.toHaveBeenCalled();
+    for (const name of ["openclaw.json", "accepted.json"]) {
+      await fs.writeFile(h.p(name), '{"changed":true}');
+      await h.reconcile();
+      await h.settle(4);
+      expect(h.onChange).not.toHaveBeenCalled();
+      await h.settle(1);
+      expect(h.onChange).toHaveBeenCalledOnce();
+      h.onChange.mockClear();
+    }
+    await fs.writeFile(h.p("atomic.tmp"), '{"atomic":true}');
+    await fs.rename(h.p("atomic.tmp"), h.p("openclaw.json"));
+    await h.reconcile();
+    await h.settle();
+    expect(h.onChange).toHaveBeenCalledOnce();
+    h.onChange.mockClear();
+    await h.reconcile();
+    await h.settle();
+    expect(h.onChange).not.toHaveBeenCalled();
+    for (const restore of [false, true]) {
+      if (restore) {
+        await fs.writeFile(h.p("accepted.json"), '{"restored":true}');
+      } else {
+        await fs.unlink(h.p("accepted.json"));
+      }
+      await h.reconcile();
+      await h.settle();
+      expect(h.onChange).toHaveBeenCalledOnce();
+      h.onChange.mockClear();
+    }
+    const subscription = h.sources[0]!.subscription;
+    const setScopes = vi.spyOn(subscription, "setScopes");
+    await h.adapter.observePaths([h.p("candidate.json")]);
+    expect(setScopes).toHaveBeenCalledOnce();
+    expect(h.sources).toHaveLength(1);
+    h.onChange.mockClear();
+    await fs.writeFile(h.p("candidate.json"), "{}");
+    await fs.writeFile(h.p("accepted.json"), '{"retained":true}');
+    await h.reconcile();
+    await h.settle();
+    expect(h.onChange).toHaveBeenCalledOnce();
+    await h.adapter.acceptPaths([h.p("candidate.json")]);
+    h.onChange.mockClear();
+    await fs.writeFile(h.p("accepted.json"), '{"retired":true}');
+    await h.reconcile();
+    await h.settle();
+    expect(h.onChange).not.toHaveBeenCalled();
+    expect(h.sources).toHaveLength(1);
+    await h.adapter.stop();
+    expect(subscription.health().state).toBe("closed");
   });
 
-  it.each(["resolve", "reject"] as const)(
-    "joins retired watcher cleanup after %s and never replaces it afterward",
-    async (outcome) => {
-      const { adapter, current, watch, onChange, onReady } = createHarness();
-      adapter.start();
-      const closing = createDeferred();
-      const close = vi.spyOn(current(), "close").mockReturnValue(closing.promise);
-      const updating = adapter.observePaths(["/tmp/next.json5"]);
-      current().emit("ready");
-      current().emit("change", "/tmp/openclaw.json");
-      let stopped = false;
-      const stopping = adapter.stop().then(() => {
-        stopped = true;
+  it("observes repairable rejected includes without following unadmitted links or directory children", async () => {
+    const h = await fixture();
+    const outside = await fs.realpath(dirs.make("config-unadmitted-"));
+    await fs.writeFile(path.join(outside, "secret.json"), "private");
+    await fs.symlink(outside, h.p("linked"), process.platform === "win32" ? "junction" : "dir");
+    await fs.mkdir(h.p("rejected-directory"));
+    await h.adapter.observePaths([
+      h.p("linked/include.json"),
+      h.p("rejected-directory"),
+      h.p("a".repeat(256) + ".json"),
+      path.join(outside, "secret.json"),
+    ]);
+    h.onChange.mockClear();
+    await fs.writeFile(path.join(outside, "include.json"), "{}");
+    await fs.writeFile(h.p("rejected-directory/child.json"), "{}");
+    await h.reconcile();
+    await h.settle();
+    expect(h.onChange).not.toHaveBeenCalled();
+    expect(h.adapter.status()).toBe("active");
+    await fs.unlink(h.p("linked"));
+    await fs.mkdir(h.p("linked"));
+    await fs.writeFile(h.p("linked/include.json"), "{}");
+    await h.reconcile();
+    // The link-to-directory transition replans the literal include scope.
+    await h.adapter.observePaths([h.p("linked/include.json")]);
+    expect(h.onChange).toHaveBeenCalled();
+    h.onChange.mockClear();
+    await fs.writeFile(h.p("linked/include.json"), '{"repaired":true}');
+    await h.reconcile();
+    await h.settle();
+    expect(h.onChange).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, "0", "false", "", "1"])(
+    "bounds watch-limit recovery and preserves polling override %s",
+    async (setting) => {
+      vi.stubEnv("CHOKIDAR_USEPOLLING", setting);
+      vi.stubEnv("CHOKIDAR_INTERVAL", "250");
+      const h = await fixture();
+      const initialMode = setting === undefined ? "auto" : setting === "1" ? "poll" : "events";
+      expect(h.sources[0]!.options).toMatchObject({
+        mode: initialMode,
+        intervalMs: initialMode === "poll" ? 250 : undefined,
       });
-      try {
-        await Promise.resolve();
-        expect(stopped).toBe(false);
-        expect(onReady).not.toHaveBeenCalled();
-        expect(onChange).not.toHaveBeenCalled();
-      } finally {
-        if (outcome === "reject") {
-          closing.reject(new Error("watcher close failed"));
-        } else {
-          closing.resolve();
-        }
-        await Promise.all([updating, stopping]);
+      const fail = () => {
+        const { options } = h.sources.at(-1)!;
+        options.onHealth?.({
+          state: "unavailable",
+          mode: options.mode === "poll" ? "poll" : "events",
+          directories: 0,
+          failure: {
+            operation: "watch",
+            code: "watch-limit",
+            error: new Error("watch limit reached"),
+          },
+        });
+      };
+      for (const ms of [500, 2000, 5000]) {
+        const previous = h.sources.at(-1)!;
+        const installed = h.nextSource();
+        fail();
+        await previous.subscription.close();
+        await vi.advanceTimersByTimeAsync(ms);
+        const current = await installed;
+        await current.subscription.ready;
+        expect(current.options.mode).toBe(initialMode);
       }
-      expect(close).toHaveBeenCalledOnce();
-      expect(watch).toHaveBeenCalledOnce();
+      const fallback = setting === undefined ? h.nextSource() : undefined;
+      fail();
+      await h.sources.at(-1)!.subscription.close();
+      await vi.advanceTimersByTimeAsync(500);
+      if (setting === undefined) {
+        const current = await fallback!;
+        await current.subscription.ready;
+        expect(current.options.mode).toBe("poll");
+        expect(h.log.warn).toHaveBeenCalledWith(expect.stringContaining("degrading to polling"));
+      } else {
+        expect(h.adapter.status()).toBe("disabled");
+        expect(h.sources).toHaveLength(4);
+        expect(h.log.warn).not.toHaveBeenCalledWith(
+          expect.stringContaining("degrading to polling"),
+        );
+      }
     },
   );
+
+  it("pins configured alias boundaries and the identity of admitted Roots", async () => {
+    const directory = await fs.realpath(dirs.make("config-root-admission-"));
+    const first = path.join(directory, "first");
+    const second = path.join(directory, "second");
+    const config = path.join(directory, "config");
+    await Promise.all([first, second, config].map((dir) => fs.mkdir(dir)));
+    const alias = path.join(directory, "allowed");
+    await fs.symlink(first, alias, process.platform === "win32" ? "junction" : "dir");
+    const cache: Parameters<typeof admitConfigObservationRoots>[2] = {
+      roots: new Map(),
+      canonicalBoundaries: new Map(),
+    };
+    const configPath = path.join(config, "openclaw.json");
+    const before = await admitConfigObservationRoots(configPath, [alias], cache);
+    await fs.unlink(alias);
+    await fs.symlink(second, alias, process.platform === "win32" ? "junction" : "dir");
+    const after = await admitConfigObservationRoots(configPath, [alias], cache);
+    const candidates = new Set([
+      path.join(first, "include.json"),
+      path.join(second, "include.json"),
+    ]);
+    expect(
+      after.flatMap((owner) => [...configObservationEntries(owner, candidates).values()]),
+    ).toEqual([path.join(first, "include.json")]);
+    expect(after.map((owner) => owner.authority)).toEqual(before.map((owner) => owner.authority));
+    const missing = path.join(directory, "stable", "missing", "openclaw.json");
+    await fs.mkdir(path.dirname(path.dirname(missing)));
+    const [owner] = await admitConfigObservationRoots(missing, [], cache);
+    await fs.rename(owner!.authority.rootDir, `${owner!.authority.rootDir}-old`);
+    await fs.mkdir(owner!.authority.rootDir);
+    const [replacement] = await admitConfigObservationRoots(missing, [], cache);
+    expect(replacement!.authority).toBe(owner!.authority);
+  });
 });

@@ -1066,10 +1066,8 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
 
   let mock;
   let gateway;
-  let scenarioWatcher;
   try {
     leaseHealth.assertHealthy();
-    if (args.scenario) scenarioWatcher = fs.watch(scenarioBarrierDir, readActionFailure);
     if (args.backend === "mock") {
       fs.writeFileSync(requestLog, "");
       mock = spawnProcess(
@@ -1548,7 +1546,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       },
     };
   } finally {
-    scenarioWatcher?.close();
     await stopChild(gateway);
     await stopChild(mock);
   }
