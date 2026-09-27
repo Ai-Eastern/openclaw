@@ -2,6 +2,7 @@ import ConcurrencyExtras
 import CryptoKit
 import Foundation
 import OpenClawKit
+import OSLog
 import Security
 
 struct MacGatewayProfile: Codable, Equatable, Identifiable, Sendable {
@@ -37,12 +38,14 @@ enum MacGatewayProfileError: LocalizedError, Equatable {
 /// Profiles are Keychain-backed so endpoint ownership and its secrets commit together.
 actor MacGatewayProfileStore {
     static let shared = MacGatewayProfileStore()
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.browser-sign-in")
 
     static let willChangePrincipalNotification = Notification.Name("openclaw.gateway-profiles.will-change-principal")
     static let didChangeNotification = Notification.Name("openclaw.gateway-profiles.did-change")
     static let changedProfileIDKey = "profileID"
     static let removedProfileKey = "removed"
     static let changeIDKey = "changeID"
+    static let renewedBrowserSessionKey = "renewedBrowserSession"
 
     struct StoredProfile: Codable, Equatable {
         var profile: MacGatewayProfile
@@ -105,13 +108,36 @@ actor MacGatewayProfileStore {
     private var cachedRegistry: Registry?
     private var keychainAccess = GatewayKeychainAccess()
     private var browserSignInAttempts: [String: BrowserSignInAttempt] = [:]
+    private var browserRenewalSchedule = BrowserRenewalSchedule()
+
+    struct BrowserRenewalSchedule {
+        private var lastAttempts: [String: Date] = [:]
+
+        mutating func admit(
+            profileID: String,
+            session: GatewayBrowserSession?,
+            now: Date,
+            userPresent: Bool,
+            inUse: Bool,
+            alreadySigningIn: Bool) -> Bool
+        {
+            guard userPresent, inUse, !alreadySigningIn, let session,
+                  session.expiresAt > now,
+                  session.expiresAt.timeIntervalSince(now) <= session.renewalLeadTime,
+                  self.lastAttempts[profileID].map({ now.timeIntervalSince($0) >= 24 * 60 * 60 }) ?? true
+            else { return false }
+            self.lastAttempts[profileID] = now
+            return true
+        }
+    }
+
     private struct CommitState {
         let removesProfile: Bool
         var identityWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     }
 
     private var committingBrowserSignIns: [UUID: CommitState] = [:]
-    private var credentialTransitions = Set<String>()
+    private var credentialTransitions: [String: Bool] = [:]
 
     static func migratingLegacyPrimaryConnection(
         root: [String: Any],
@@ -151,6 +177,28 @@ actor MacGatewayProfileStore {
         // Finish legacy import before capturing ownership; a late callback may
         // replace only this attempt, never a subsequently edited or forgotten profile.
         _ = try self.loadRegistryMigratingLegacyPrimary()
+        return self.makeBrowserSignInAttempt(url: url)
+    }
+
+    func beginAutomaticBrowserRenewal(
+        profileID: String, now: Date, userPresent: Bool, inUse: Bool) -> (MacGatewayProfile, BrowserSignInAttempt)?
+    {
+        // Automatic work only consumes an already loaded registry, never retries a
+        // denied Keychain read or imports profiles merely because a timer fired.
+        guard !Task.isCancelled,
+              let stored = self.cachedRegistry?.profiles.first(where: { $0.profile.id == profileID }),
+              self.browserRenewalSchedule.admit(
+                  profileID: profileID,
+                  session: stored.credentials.browserSession,
+                  now: now,
+                  userPresent: userPresent,
+                  inUse: inUse,
+                  alreadySigningIn: self.browserSignInAttempts[profileID]?.isCurrent == true)
+        else { return nil }
+        return (stored.profile, self.makeBrowserSignInAttempt(url: stored.profile.url))
+    }
+
+    private func makeBrowserSignInAttempt(url: URL) -> BrowserSignInAttempt {
         let attempt = BrowserSignInAttempt(id: UUID(), profileID: Self.profileID(url: url), url: url)
         if let previous = self.browserSignInAttempts[attempt.profileID] {
             previous.revoke()
@@ -202,9 +250,16 @@ actor MacGatewayProfileStore {
         let oldStoreID = old.map { Self.chatStoreID(profileID: $0.profile.id, credentials: $0.credentials) }
         let newStoreID = credentials.map { Self.chatStoreID(profileID: attempt.profileID, credentials: $0) }
         let changesPrincipal = oldStoreID != nil && oldStoreID != newStoreID
+        let previousSession = old?.credentials.browserSession
+        let nextSession = credentials?.browserSession
+        // Only a still-live session preserves its dashboard. After expiry the
+        // full sign-in path restores retired sockets and signed-out documents.
+        let renewsBrowserSession = !changesPrincipal && nextSession != nil &&
+            previousSession.map { $0.expiresAt > Date() } == true &&
+            previousSession?.browserDataPrincipal == nextSession?.browserDataPrincipal
         guard self.committingBrowserSignIns[attempt.id] == nil else { throw GatewayBrowserSessionError.superseded }
         self.committingBrowserSignIns[attempt.id] = CommitState(removesProfile: credentials == nil)
-        self.credentialTransitions.insert(attempt.profileID)
+        self.credentialTransitions[attempt.profileID] = renewsBrowserSession
         defer {
             self.finishCommit(attempt.id)
             if self.browserSignInAttempts[attempt.profileID]?.id == attempt.id {
@@ -229,12 +284,14 @@ actor MacGatewayProfileStore {
                 profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
         }
         try self.requireCurrentAttempt(attempt)
-        try await DashboardBrowserSessionStore.prepareProfileChange(
-            profileID: attempt.profileID,
-            registryNamespace: Self.service,
-            previous: old?.credentials.browserSession,
-            next: credentials?.browserSession,
-            ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+        if !renewsBrowserSession {
+            try await DashboardBrowserSessionStore.prepareProfileChange(
+                profileID: attempt.profileID,
+                registryNamespace: Self.service,
+                previous: previousSession,
+                next: nextSession,
+                ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+        }
         try self.requireCurrentAttempt(attempt)
         try credentials?.browserSession?.validate(for: attempt.url)
         if credentials?.browserSession != nil {
@@ -250,9 +307,33 @@ actor MacGatewayProfileStore {
         registry.profiles.removeAll { $0.profile.id == profile.id }
         if let credentials { registry.profiles.append(StoredProfile(profile: profile, credentials: credentials)) }
         try self.saveRegistry(registry)
+        // Once saved, cancellation must publish the new credentials or use normal
+        // document recovery. A later attempt inherits any unfinished transition.
+        self.credentialTransitions[profile.id] = false
+        var renewedBrowserSession = false
+        if renewsBrowserSession, let previousSession, let nextSession {
+            do {
+                try await DashboardBrowserSessionStore.renewProfileSession(
+                    profileID: profile.id,
+                    registryNamespace: Self.service,
+                    previous: previousSession,
+                    next: nextSession,
+                    ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+                renewedBrowserSession = true
+            } catch {
+                Self.logger.error("browser cookie renewal did not complete profile=\(profile.id, privacy: .public)")
+            }
+        }
+        guard self.browserSignInAttempts[profile.id]?.id == attempt.id else {
+            throw GatewayBrowserSessionError.superseded
+        }
         self.browserSignInAttempts.removeValue(forKey: attempt.profileID)?.revoke()
-        self.credentialTransitions.remove(profile.id)
-        self.postChange(profileID: profile.id, removed: credentials == nil, changeID: attempt.id)
+        self.credentialTransitions.removeValue(forKey: profile.id)
+        self.postChange(
+            profileID: profile.id,
+            removed: credentials == nil,
+            changeID: attempt.id,
+            renewedBrowserSession: renewedBrowserSession)
         return profile
     }
 
@@ -264,11 +345,11 @@ actor MacGatewayProfileStore {
     }
 
     private func reconcileCredentialTransition(profileID: String) {
-        guard self.credentialTransitions.remove(profileID) != nil else { return }
+        guard let renewal = self.credentialTransitions.removeValue(forKey: profileID) else { return }
         // Only the current attempt restores authoritative registry credentials
         // after retiring browser leases/cookies, including a failed renewal.
         let removed = self.cachedRegistry?.profiles.contains { $0.profile.id == profileID } != true
-        self.postChange(profileID: profileID, removed: removed)
+        self.postChange(profileID: profileID, removed: removed, renewedBrowserSession: renewal)
     }
 
     private static func chatStoreID(profileID: String, credentials: Credentials) -> String {
@@ -376,7 +457,9 @@ actor MacGatewayProfileStore {
         return attempt.id
     }
 
-    private func postChange(profileID: String, removed: Bool = false, changeID: UUID = UUID()) {
+    private func postChange(
+        profileID: String, removed: Bool = false, changeID: UUID = UUID(), renewedBrowserSession: Bool = false)
+    {
         NotificationCenter.default.post(
             name: Self.didChangeNotification,
             object: nil,
@@ -384,6 +467,7 @@ actor MacGatewayProfileStore {
                 Self.changedProfileIDKey: profileID,
                 Self.removedProfileKey: removed,
                 Self.changeIDKey: changeID,
+                Self.renewedBrowserSessionKey: renewedBrowserSession,
             ])
     }
 
@@ -539,19 +623,14 @@ actor MacGatewayProfileStore {
         submittedPassword: String?) -> Credentials
     {
         let submitted = Credentials(
-            token: Self.normalizedSecret(submittedToken),
-            password: Self.normalizedSecret(submittedPassword))
+            token: submittedToken?.nonEmpty,
+            password: submittedPassword?.nonEmpty)
         // An empty New Gateway form means "reuse this saved route", not
         // "erase its authentication". Supplying either field replaces both.
         if submitted.token == nil, submitted.password == nil {
             return saved ?? submitted
         }
         return submitted
-    }
-
-    private static func normalizedSecret(_ value: String?) -> String? {
-        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
     }
 
     private func load(account: String) throws -> Data? {
@@ -604,6 +683,13 @@ actor MacGatewayConnectionFleet {
 
     private var connections: [String: Owner] = [:]
     private var ownerRevision: UInt64 = 0
+
+    func boundProfileIDs() -> Set<String> {
+        Set(self.connections.compactMap { key, owner in
+            key.hasPrefix("profile:") && owner.connection.hasConnectedServer
+                ? String(key.dropFirst("profile:".count)) : nil
+        })
+    }
 
     struct Binding {
         let connection: GatewayConnection

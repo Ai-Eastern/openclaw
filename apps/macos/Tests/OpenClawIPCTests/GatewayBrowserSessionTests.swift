@@ -126,7 +126,8 @@ struct GatewayConnectionBrowserSessionTests {
     {
         let url = try #require(URL(string: "wss://gateway.example.test/team/"))
         let original = try gatewayBrowserSessionFixture(token: "first-browser-session")
-        let replacement = try gatewayBrowserSessionFixture(token: "second-browser-session")
+        let replacement = try gatewayBrowserSessionFixture(
+            token: "second-browser-session", expiresAt: original.expiresAt.addingTimeInterval(86400))
         let source = GatewayConnectionEndpointSource(endpoint: .init(
             config: (url, "stale-owner-token", "stale-owner-password"),
             routeAuthority: 1,
@@ -161,6 +162,7 @@ struct GatewayConnectionBrowserSessionTests {
                 })
             #expect(successor != oldLease)
             #expect(successor.route.browserSession == replacement)
+            #expect(successor.route.browserSession?.expiresAt == replacement.expiresAt)
             #expect(recorder.requests.value.map { $0.value(forHTTPHeaderField: "CF-Access-Token") } == [
                 "first-browser-session", "second-browser-session",
             ])
@@ -298,7 +300,7 @@ struct MacGatewayBrowserSessionStoreTests {
                     try await Task.sleep(for: .milliseconds(10))
                 }
                 #expect(refreshes.value == 1)
-                #expect(!oldLease.isCurrent)
+                #expect(oldLease.isCurrent)
                 let surviving = try #require(await store.endpoint(profileID: profile.id).browserSession)
                 #expect(surviving == original)
                 try await browser.lease(for: surviving).prepare(for: surviving.origin, in: WKUserContentController())
