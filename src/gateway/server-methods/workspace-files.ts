@@ -74,9 +74,6 @@ const SEARCH_SKIP_DIRS = new Set([
 
 function toDisplayPath(root: string, resolved: string): string {
   const relative = path.relative(root, resolved);
-  if (!relative) {
-    return "";
-  }
   return relative.split(path.sep).join("/");
 }
 
@@ -165,8 +162,7 @@ function relevanceForBrowserPath(
 }
 
 function displayNameForPath(filePath: string): string {
-  const base = path.basename(filePath);
-  return base || filePath;
+  return path.basename(filePath) || filePath;
 }
 
 function isDetectedTextMime(mimeType: string): boolean {
@@ -312,7 +308,7 @@ async function searchBrowserEntries(params: {
   root: string | WorkspaceRoot;
   query: string;
   relevance: ReadonlyMap<string, SessionFileRelevance>;
-}): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: boolean }> {
+}): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: true }> {
   const entries: SessionFileBrowserEntry[] = [];
   const query = params.query.toLowerCase();
   let visitedEntries = 0;
@@ -375,8 +371,7 @@ async function buildBrowserResult(params: {
     return {
       path: "",
       search,
-      entries: result.entries,
-      ...(result.truncated ? { truncated: result.truncated } : {}),
+      ...result,
     };
   }
   const browserPath = normalizeRelativePath(params.path);
@@ -419,24 +414,23 @@ export async function listSessionWorkspaceFiles(
   files: SessionFileEntry[];
   browser?: SessionFileBrowserResult;
 }> {
-  const loaded = params;
-  const root = loaded.root;
-  const gitCheckout = loaded.diffCwd ? insideGitCheckout(loaded.diffCwd) : undefined;
+  const root = params.root;
+  const gitCheckout = params.diffCwd ? insideGitCheckout(params.diffCwd) : undefined;
   const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
   const workspaceFiles = root
-    ? loaded.files.filter((file) =>
-        Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
+    ? params.files.filter((file) =>
+        Boolean(resolveTouchedFilePath({ root, fileRoot: params.fileRoot, filePath: file.path })),
       )
-    : loaded.files;
+    : params.files;
   const files = await Promise.all(
     workspaceFiles.map((file) =>
-      toSessionFileEntry(file, loaded.root, loaded.fileRoot, { workspaceRoot }),
+      toSessionFileEntry(file, params.root, params.fileRoot, { workspaceRoot }),
     ),
   );
   const browser = await buildBrowserResult({
     root,
     workspaceRoot,
-    fileRoot: loaded.fileRoot,
+    fileRoot: params.fileRoot,
     path: params.path,
     search: params.search,
     files: workspaceFiles,
@@ -452,45 +446,44 @@ export async function listSessionWorkspaceFiles(
 export async function getSessionWorkspaceFile(
   params: LoadedSessionFiles & { path: string },
 ): Promise<{ root?: string; file?: SessionFileEntry }> {
-  const loaded = params;
-  const exactTouched = loaded.files.find((file) => file.path === params.path);
+  const exactTouched = params.files.find((file) => file.path === params.path);
   if (exactTouched) {
     return {
-      ...(loaded.root ? { root: loaded.root } : {}),
-      file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
+      ...(params.root ? { root: params.root } : {}),
+      file: await toSessionFileEntry(exactTouched, params.root, params.fileRoot, {
         includeContent: true,
       }),
     };
   }
-  if (!loaded.root) {
+  if (!params.root) {
     return {};
   }
   // Any in-root file is previewable; fs-safe root enforces containment, symlink/hardlink
   // rejection, and the 256 KB cap.
   const candidates = resolveSessionFileCandidates({
-    root: loaded.root,
-    fileRoot: loaded.fileRoot,
+    root: params.root,
+    fileRoot: params.fileRoot,
     filePath: params.path,
   });
   if (candidates.length === 0) {
-    return { root: loaded.root };
+    return { root: params.root };
   }
-  const relevance = buildSessionRelevanceMap(loaded.files, loaded.root, loaded.fileRoot);
+  const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
   for (const candidate of candidates) {
-    const browserPath = toDisplayPath(loaded.root, candidate);
+    const browserPath = toDisplayPath(params.root, candidate);
     const sessionKind = relevance.get(browserPath);
     const touched: TouchedFile = {
       path: browserPath,
       kind: sessionKind === "modified" ? "modified" : "read",
     };
-    const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
+    const file = await toSessionFileEntry(touched, params.root, params.root, {
       includeContent: true,
     });
     if (!file.missing) {
-      return { root: loaded.root, file };
+      return { root: params.root, file };
     }
   }
-  return { root: loaded.root };
+  return { root: params.root };
 }
 
 export type SessionWorkspaceWriteResult =

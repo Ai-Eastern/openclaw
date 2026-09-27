@@ -38,7 +38,7 @@ import {
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 export type SkillLibraryRequestOwner = Pick<
   GatewayRequestHandlerOptions,
@@ -195,7 +195,7 @@ function selectedSession(options: SkillLibraryRequestOwner, sessionKey: string) 
   };
 }
 
-function libraryHandler<P>(
+function libraryHandler<P extends Record<string, unknown>>(
   name: string,
   validate: ProtocolValidator<P>,
   run: (
@@ -204,10 +204,7 @@ function libraryHandler<P>(
     options: GatewayRequestHandlerOptions,
   ) => unknown,
 ): GatewayRequestHandlers[string] {
-  return async (options) => {
-    if (!assertValidParams(options.params, validate, name, options.respond)) {
-      return;
-    }
+  return defineValidatedGatewayHandler(name, validate, async (options) => {
     try {
       options.respond(
         true,
@@ -235,7 +232,7 @@ function libraryHandler<P>(
             ),
       );
     }
-  };
+  });
 }
 
 export const skillsLibraryHandlers: GatewayRequestHandlers = {
