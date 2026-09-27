@@ -225,6 +225,21 @@ class ChatControllerSessionSearchTest {
         expectedPinned + "agent:main:dashboard:current",
         resolveSessionBrowserEntries(rows, "agent:main:dashboard:current", SessionFilter.Recent, recentFirst = true).map { it.key }.toSet(),
       )
+      val automationKeys =
+        setOf("agent:main:cron:daily", "cron:legacy", "agent:main:system-probe", "agent:main:unnamed-run", "agent:main:unnamed-internal")
+      assertEquals(
+        automationKeys,
+        resolveSessionBrowserEntries(rows, "agent:main:dashboard:current", SessionFilter.Automations, recentFirst = true).map { it.key }.toSet(),
+      )
+      assertEquals(
+        automationKeys - "agent:main:system-probe",
+        resolveSessionBrowserEntries(
+          rows.map { if (it.key == "agent:main:system-probe") it.copy(archived = true) else it },
+          "agent:main:system-probe",
+          SessionFilter.Automations,
+          recentFirst = true,
+        ).map { it.key }.toSet(),
+      )
       for (selectedKey in listOf("agent:main:cron:daily", "agent:main:system-probe", "agent:main:dashboard:archived")) {
         assertEquals(
           expectedPinned + selectedKey,
@@ -237,6 +252,10 @@ class ChatControllerSessionSearchTest {
         assertEquals(
           listOf(selectedKey),
           resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Current, recentFirst = true).map { it.key },
+        )
+        assertEquals(
+          automationKeys,
+          resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Automations, recentFirst = true).map { it.key }.toSet(),
         )
       }
       assertEquals(
