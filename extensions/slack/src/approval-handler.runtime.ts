@@ -64,6 +64,7 @@ type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
   resolveClient?: (teamId?: string) => WebClient | undefined;
+  workspaceTeamId?: string;
   enterprise?: {
     enterpriseId: string;
   };
@@ -359,17 +360,18 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       }
       const client = resolveApprovalClient(resolved.context, preparedTarget.teamId);
       const to = await resolveApprovalChannel(client, preparedTarget.to, preparedTarget.teamId);
-      const eventScope = preparedTarget.teamId
-        ? {
-            teamId: preparedTarget.teamId,
-            client,
-            writeClient: getSlackListenerWriteClient({
-              listenerClient: client,
+      const eventScope =
+        preparedTarget.teamId && resolved.context.enterprise
+          ? {
               teamId: preparedTarget.teamId,
-              clientOptions: resolved.context.app.webClientOptions,
-            }),
-          }
-        : undefined;
+              client,
+              writeClient: getSlackListenerWriteClient({
+                listenerClient: client,
+                teamId: preparedTarget.teamId,
+                clientOptions: resolved.context.app.webClientOptions,
+              }),
+            }
+          : undefined;
       const message = await sendMessageSlack(to, pendingPayload.text, {
         cfg,
         accountId: resolved.accountId,
@@ -424,7 +426,16 @@ function resolveApprovalClient(context: SlackApprovalHandlerContext, teamId?: st
   if (!teamId) {
     return context.app.client;
   }
-  if (!context.enterprise || !context.resolveClient) {
+  if (!context.enterprise) {
+    if (
+      !context.workspaceTeamId ||
+      context.workspaceTeamId.toUpperCase() !== teamId.toUpperCase()
+    ) {
+      throw new Error("Slack approval workspace does not match the authenticated installation");
+    }
+    return context.app.client;
+  }
+  if (!context.resolveClient) {
     throw new Error("Slack Enterprise Grid approval client is unavailable");
   }
   const client = context.resolveClient(teamId);
@@ -448,7 +459,7 @@ async function resolveApprovalChannel(client: WebClient, target: string, teamId?
   const opened = await client.conversations.open({ users: parsed.id, return_im: true });
   const channelId = normalizeOptionalString(opened.channel?.id);
   if (!channelId) {
-    throw new Error("Slack Enterprise Grid approval DM did not return a channel id");
+    throw new Error("Slack approval DM did not return a channel id");
   }
   return `channel:${channelId}`;
 }

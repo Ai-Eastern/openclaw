@@ -180,6 +180,11 @@ describe("plugin approval signed agent runtime", () => {
             pluginId: "forged-plugin",
             title: "Sensitive action",
             description: "D",
+            policySubject: {
+              pluginKey: "calendar",
+              appId: "connector_calendar",
+              tool: "create_event.raw",
+            },
             agentId: "forged-agent",
             sessionKey: "forged-session",
             turnSourceChannel: "forged-channel",
@@ -226,6 +231,11 @@ describe("plugin approval signed agent runtime", () => {
         const approvalId = String(broadcastPayload?.id);
         expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
           pluginId: "codex",
+          policySubject: {
+            pluginKey: "calendar",
+            appId: "connector_calendar",
+            tool: "create_event.raw",
+          },
           agentId: "main",
           sessionKey: "agent:main:session-1",
           turnSourceChannel: "slack",
@@ -261,6 +271,30 @@ describe("plugin approval signed agent runtime", () => {
       });
     });
   }
+
+  it("rejects a plugin reviewer policy subject from an unsigned client", async (testContext) => {
+    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
+    await fixture.run(async () => {
+      const opts = requestOptions({
+        request: {
+          title: "Sensitive action",
+          description: "D",
+          policySubject: { pluginKey: "calendar" },
+        },
+        identity: identityWithoutExecution(),
+      });
+      (opts.client as { internal?: unknown }).internal = undefined;
+
+      await requestHandler(fixture.manager)(opts);
+
+      expect(await fixture.manager.listPendingRecords()).toHaveLength(0);
+      expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
+        message: expect.stringContaining("requires agent runtime authority"),
+      });
+    });
+  });
 
   it("does not create execution identity storage when collection is disabled", async (testContext) => {
     const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(
