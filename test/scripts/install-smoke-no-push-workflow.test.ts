@@ -29,6 +29,7 @@ type WorkflowJob = {
   needs?: string | string[];
   outputs?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
+  "continue-on-error"?: boolean;
   "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
@@ -97,6 +98,8 @@ describe("install smoke no-push root image transport", () => {
         "${{ github.event_name == 'schedule' || inputs.run_bun_global_install_smoke }}",
       update_baseline_version: "${{ inputs.update_baseline_version || 'latest' }}",
     });
+    // The Bun-only lane is Full Release Validation only: never nightly or manual Install Smoke.
+    expect(delegated.with).not.toHaveProperty("run_bun_only_runtime_smoke");
     expect(readFileSync(INSTALL_SMOKE, "utf8")).not.toContain("packages: write");
   });
 
@@ -772,11 +775,16 @@ describe("install smoke no-push root image transport", () => {
       "./.release-harness/.github/actions/setup-node-env",
     );
 
+    expect(workflow.on?.workflow_call?.inputs?.run_bun_only_runtime_smoke).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
     const bunOnlyConsumer = job(workflow, "bun_only_runtime_smoke");
     expect(bunOnlyConsumer.needs).toEqual(["preflight", "installer_smoke_candidate_payload"]);
     expect(bunOnlyConsumer.if).toBe(
-      "needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true' && !inputs.allow_frozen_target_scenario_omissions",
+      "needs.preflight.outputs.run_full_install_smoke == 'true' && inputs.run_bun_only_runtime_smoke && !inputs.allow_frozen_target_scenario_omissions",
     );
+    expect(bunOnlyConsumer["continue-on-error"]).toBe(true);
     expect(bunOnlyConsumer["runs-on"]).toBe(bunConsumer["runs-on"]);
     expect(bunOnlyConsumer["runs-on"]).toContain("inputs.runner_group");
     expect(bunOnlyConsumer["runs-on"]).toContain("ubuntu-24.04");
@@ -813,7 +821,9 @@ describe("install smoke no-push root image transport", () => {
       uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       with: {
         name: "bun-only-runtime-smoke-${{ github.run_attempt }}",
-        path: "${{ runner.temp }}/bun-only-runtime-smoke",
+        path: ["md", "json", "jsonl", "log"]
+          .map((extension) => `\${{ runner.temp }}/bun-only-runtime-smoke/*.${extension}\n`)
+          .join(""),
         "retention-days": 14,
         "if-no-files-found": "ignore",
       },
@@ -974,6 +984,7 @@ describe("install smoke no-push root image transport", () => {
         "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       ref: "${{ needs.resolve_target.outputs.revision }}",
       run_bun_global_install_smoke: true,
+      run_bun_only_runtime_smoke: true,
     });
   });
 
