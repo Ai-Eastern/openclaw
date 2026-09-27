@@ -221,11 +221,7 @@ function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
 }
 
 function looksLikeHtml(value: string): boolean {
-  const trimmed = value.trimStart();
-  if (!trimmed) {
-    return false;
-  }
-  const head = normalizeLowercaseStringOrEmpty(trimmed.slice(0, 256));
+  const head = normalizeLowercaseStringOrEmpty(value.trimStart().slice(0, 256));
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
@@ -399,11 +395,6 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   const [raw] = value.split(";");
   const trimmed = raw?.trim();
   return trimmed ? trimmed.toLowerCase() : undefined;
-}
-
-function isJsonMediaType(value: string): boolean {
-  // Structured +json subtypes are single JSON documents; sequence formats are not.
-  return value === "application/json" || value.endsWith("+json");
 }
 
 type WebFetchRuntimeParams = {
@@ -714,9 +705,8 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       }
       const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
       throwIfFetchAborted(params.signal);
-      const rawDetail = rawDetailResult.text;
       const detail = formatWebFetchErrorDetail({
-        detail: rawDetail,
+        detail: rawDetailResult.text,
         contentType: res.headers.get("content-type"),
         maxChars: DEFAULT_ERROR_MAX_CHARS,
       });
@@ -788,7 +778,11 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
           "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
         );
       }
-    } else if (isJsonMediaType(normalizedContentType)) {
+    } else if (
+      normalizedContentType === "application/json" ||
+      normalizedContentType.endsWith("+json")
+    ) {
+      // Structured +json subtypes are single JSON documents; sequence formats are not.
       try {
         text = JSON.stringify(JSON.parse(body), null, 2);
         extractor = "json";
