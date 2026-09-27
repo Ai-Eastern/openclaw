@@ -152,6 +152,7 @@ export type SkillSnapshot = {
   skillRoots?: {
     agentWorkspaceDir: string;
     executionWorkspaceDir: string;
+    executionWorkspaceFileHost?: "gateway";
   };
   version?: number;
   promptFormatVersion?: number;

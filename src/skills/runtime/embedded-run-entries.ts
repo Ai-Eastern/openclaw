@@ -20,6 +20,7 @@ import { getSkillsSourceVersion } from "./refresh-state.js";
 export async function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config?: OpenClawConfig;
   agentId?: string;
   eligibility?: SkillEligibilityContext;
@@ -46,6 +47,7 @@ export async function resolveEmbeddedRunSkillEntries(params: {
           : undefined) ?? {
           agentWorkspaceDir: params.workspaceDir,
           executionWorkspaceDir: params.executionWorkspaceDir,
+          executionWorkspaceFileHost: params.executionWorkspaceFileHost,
         }),
   );
   let cachedSkillEntries: SkillEntry[] | undefined;
@@ -69,6 +71,7 @@ export async function resolveEmbeddedRunSkillEntries(params: {
       config,
       agentId: params.agentId,
       executionWorkspaceDir: skillRoots.executionWorkspaceDir,
+      executionWorkspaceFileHost: skillRoots.executionWorkspaceFileHost,
       ...(params.eligibility ? { eligibility: params.eligibility } : {}),
       ...(params.skillsSnapshot?.skillFilter
         ? { skillFilter: params.skillsSnapshot.skillFilter }

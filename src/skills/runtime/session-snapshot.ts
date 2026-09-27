@@ -32,6 +32,7 @@ type ReusableSkillSnapshotParams = {
   librarySelections?: SkillSnapshot["librarySelections"];
   workspaceDir: string;
   executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
@@ -59,11 +60,15 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   const normalizedRoots = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: params.workspaceDir,
     executionWorkspaceDir: params.executionWorkspaceDir,
+    executionWorkspaceFileHost: params.executionWorkspaceFileHost,
   });
   const skillRoots = normalizedRoots.executionWorkspaceDir
     ? {
         agentWorkspaceDir: normalizedRoots.agentWorkspaceDir,
         executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+        ...(normalizedRoots.executionWorkspaceFileHost
+          ? { executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost }
+          : {}),
       }
     : undefined;
   const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
@@ -79,7 +84,12 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   if (params.watch !== false) {
     ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
-      ...(skillRoots ? { executionWorkspaceDir: skillRoots.executionWorkspaceDir } : {}),
+      ...(skillRoots
+        ? {
+            executionWorkspaceDir: skillRoots.executionWorkspaceDir,
+            executionWorkspaceFileHost: skillRoots.executionWorkspaceFileHost,
+          }
+        : {}),
       config: params.config,
       agentId: params.agentId,
       ...(params.pluginMetadataSnapshot
@@ -123,6 +133,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   }
   const sourceScope = {
     executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+    executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
     agentId: params.agentId,
   };
   const sourceVersion = getSkillsSourceVersion(watcherWorkspaceDir, sourceScope);
@@ -135,6 +146,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   const buildSnapshot = async (assertCurrent: () => void) => {
     const snapshot = await buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
       executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+      executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
       librarySelections,
       config: params.config,
       preserveEntryOrder: Boolean(skillRoots),

@@ -155,6 +155,7 @@ export async function syncWorkspaceSkills(params: {
     const sourceWorkspace = skillRoots?.agentWorkspaceDir ?? sourceDir;
     const sourceScope = {
       executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+      executionWorkspaceFileHost: skillRoots?.executionWorkspaceFileHost,
       agentId: params.agentId,
     };
     // Names and versions do not identify a source tree. Both reuse paths must
@@ -169,6 +170,7 @@ export async function syncWorkspaceSkills(params: {
         params.pluginSkillsDir,
         skillRoots?.agentWorkspaceDir,
         skillRoots?.executionWorkspaceDir,
+        skillRoots?.executionWorkspaceFileHost,
         skillsSnapshot?.librarySelections,
       ]),
     );
@@ -215,6 +217,7 @@ export async function syncWorkspaceSkills(params: {
       entries = await prepareWorkspaceSkills(skillRoots?.agentWorkspaceDir ?? sourceDir, {
         ...loadOptions,
         executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+        executionWorkspaceFileHost: skillRoots?.executionWorkspaceFileHost,
       });
       if (
         getSkillsSnapshotVersion(sourceWorkspace) === skillsVersion &&
