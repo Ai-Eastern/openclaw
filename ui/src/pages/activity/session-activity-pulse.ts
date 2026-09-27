@@ -10,7 +10,8 @@ export function renderSessionActivityPulse(pulse: SessionActivityPulse, now: num
   const hour = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
   const label = (index: number) => hour.format(pulse.since + index * 3_600_000);
   const current = Math.max(0, Math.min(23, Math.floor((now - pulse.since) / 3_600_000)));
-  const peak = Math.max(...pulse.hours);
+  const shown = pulse.hours.slice(0, current + 1);
+  const peak = Math.max(...shown);
   const stats = [
     ["sessions", pulse.sessions],
     ["started", pulse.started],
@@ -43,7 +44,7 @@ export function renderSessionActivityPulse(pulse: SessionActivityPulse, now: num
     <div
       class="activity-pulse__bars"
       role="img"
-      aria-label=${t("activity.pulse.description", { count: String(pulse.sessions), hour: label(pulse.hours.indexOf(peak)) })}
+      aria-label=${t("activity.pulse.description", { count: String(pulse.sessions), hour: label(shown.indexOf(peak)) })}
     >
       ${pulse.hours.map(
         (count, index) => html`<span

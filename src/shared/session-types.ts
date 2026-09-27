@@ -49,6 +49,7 @@ export type SessionActivityPulse = {
   hours: number[];
   sessions: number;
   started: number;
+  /** Sessions with an active run anywhere in the filtered set, not only since `since`. */
   running: number;
   people?: number;
 };

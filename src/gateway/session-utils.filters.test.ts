@@ -112,7 +112,7 @@ it("aggregates activity after person filtering and before pagination using the a
   });
 });
 
-it("counts current runs through the owning agent projector only for today's sessions", () => {
+it("counts every live session as running now and only today's sessions in the buckets", () => {
   const since = 100;
   const projection = createSessionRowProjectionFixture({
     cfg: { agents: { entries: { worker: {} } } },
@@ -132,7 +132,7 @@ it("counts current runs through the owning agent projector only for today's sess
       }),
     }),
   );
-  expect(result.activityPulse).toMatchObject({ sessions: 2, running: 1 });
+  expect(result.activityPulse).toMatchObject({ sessions: 2, running: 2 });
 });
 
 it.each([undefined, -1, Number.NaN, Number.POSITIVE_INFINITY])(

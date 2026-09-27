@@ -418,15 +418,18 @@ export function* filterSessionEntries(
         }
       }
     }
+    if (activityPulse) {
+      // "Running now" is present tense: a run that started before midnight still counts.
+      const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      activityPulse.running += Number(
+        params.projectActiveRun?.(key, entry, agentId)?.active === true,
+      );
+    }
     if (inPulse) {
       const hour = Math.min(23, Math.floor((activityTs - activityPulse.since) / 3_600_000));
       activityPulse.hours[hour] = (activityPulse.hours[hour] ?? 0) + 1;
       activityPulse.sessions += 1;
       activityPulse.started += Number((entry.createdAt ?? -1) >= activityPulse.since);
-      const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
-      activityPulse.running += Number(
-        params.projectActiveRun?.(key, entry, agentId)?.active === true,
-      );
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&

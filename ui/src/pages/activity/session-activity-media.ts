@@ -301,7 +301,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
             </button>`,
           ]
         : [];
-    const showNote = Boolean(entry.error) || (!hasImages && Boolean(entry.omitted || entry.cursor));
+    const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
     const note = entry.error
       ? html`<span role="status">${t("activity.images.failed")}</span
           ><button
@@ -311,7 +311,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
           >
             ${t("common.retry")}
           </button>`
-      : html`${entry.omitted && !hasImages ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${older}`;
+      : html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${hasImages ? nothing : older}`;
     const imageIdentity = this.imageIdentity;
     const agentId = this.agentId;
     return html`

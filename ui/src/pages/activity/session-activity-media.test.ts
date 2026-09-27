@@ -302,6 +302,7 @@ it("coalesces queued revisions without moving the session behind later arrivals"
 
 it.each([
   { count: 3, cursor: true, omitted: false, error: false },
+  { count: 3, cursor: true, omitted: true, error: false },
   { count: 0, cursor: true, omitted: false, error: false },
   { count: 0, cursor: false, omitted: true, error: false },
   { count: 0, cursor: true, omitted: true, error: false },
@@ -344,7 +345,7 @@ it.each([
       expect(Boolean(media)).toBe(count > 0 || cursor || omitted || error);
       expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
       const note = row.querySelector(".activity-feed__note");
-      expect(Boolean(note)).toBe(count === 0 && (cursor || omitted || error));
+      expect(Boolean(note)).toBe(error || omitted || (count === 0 && cursor));
       if (note) {
         expect(note.parentElement).toBe(media);
       }
