@@ -9,7 +9,10 @@ import "./subagent-registry.persistence.mocks.test-support.js";
 // oxfmt-ignore
 import { useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-broker-admission.js";
@@ -553,7 +556,8 @@ it.each(["after rejection", "before rejection"] as const)(
         expect(scope.canLaunch()).toBe(false);
         const endedAt = Date.now();
         const emitTerminal = () => {
-          for (const listener of [...listeners]) {
+          const currentListeners = [...listeners];
+          for (const listener of currentListeners) {
             listener({
               runId,
               sessionKey: childSessionKey,
@@ -573,7 +577,7 @@ it.each(["after rejection", "before rejection"] as const)(
         };
         if (terminalTiming === "before rejection") {
           const session = expectDefined(
-            (await readSubagentSessionStore(storePath))[childSessionKey],
+            loadSessionEntry({ agentId: "main", storePath, sessionKey: childSessionKey }),
             "retained child session",
           );
           await replaceSessionEntry(
