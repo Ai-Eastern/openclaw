@@ -101,7 +101,10 @@ binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
 Node runtime returns `undefined`; the caller reports the missing requirement.
 
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
-It owns platform-specific terminal creation, including the Node helper on Bun.
+It owns platform-specific terminal creation: Bun's native PTY on macOS and Linux,
+and `node-pty` on Node and Windows. Bun terminal output flow control requires a
+build with `Terminal.pause()` and `Terminal.resume()`; see
+[Bun compatibility](/install/bun-compatibility#known-limitations).
 Pass the caller's construction signal and current-authority check through its
 second argument. The caller owns output subscriptions, termination, and waiting
 for the terminal's exit before releasing its backend resources.

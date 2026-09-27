@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { IPty } from "@lydell/node-pty";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -104,13 +103,6 @@ export async function spawnTerminalPty(
       throw new Error("PTY construction aborted");
     }
   };
-  if (process.versions.bun && process.platform !== "win32") {
-    // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN, hanging up the child.
-    const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
-    assertCurrent();
-    return await spawnNodeTerminalPty(params, assertCurrent);
-  }
-  const { spawn } = await import("@lydell/node-pty");
   const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
@@ -120,6 +112,16 @@ export async function spawnTerminalPty(
   if (env) {
     setPtyTerminalName({ env, name: terminalName, platform: process.platform });
   }
+  if (process.versions.bun && process.platform !== "win32") {
+    // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN; use its native PTY.
+    const { spawnBunTerminalPty } = await import("./terminal-pty-bun.js");
+    const bunEnv = env ?? inheritedTerminalEnv(terminalName);
+    // node-pty always exports the child's working directory as PWD.
+    bunEnv.PWD = params.cwd ?? process.cwd();
+    assertCurrent();
+    return spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+  }
+  const { spawn } = await import("@lydell/node-pty");
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
@@ -144,23 +146,51 @@ export async function spawnTerminalPty(
     resume: () => pty.resume(),
     onData: (listener) => pty.onData(listener),
     onExit: (listener) => pty.onExit(listener),
-    kill: (signal) => killPtyTree(pty, signal),
+    kill: (signal) =>
+      signalTerminalPtyTree(pty.pid, signal, (sig) =>
+        process.platform === "win32" ? pty.kill() : pty.kill(sig),
+      ),
   } satisfies TerminalPtyHandle;
+}
+
+// node-pty inherits process.env without host terminal-multiplexer state.
+const HOST_TERMINAL_ENV_KEYS = new Set([
+  "TMUX",
+  "TMUX_PANE",
+  "STY",
+  "WINDOW",
+  "WINDOWID",
+  "TERMCAP",
+  "COLUMNS",
+  "LINES",
+]);
+
+function inheritedTerminalEnv(terminalName: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !HOST_TERMINAL_ENV_KEYS.has(key)) {
+      env[key] = value;
+    }
+  }
+  env.TERM = terminalName;
+  return env;
 }
 
 // A long-running child of the interactive shell must not survive terminal
 // close. Signal the process tree, matching the process supervisor contract.
-function killPtyTree(pty: Pick<IPty, "pid" | "kill">, signal?: string): void {
+export function signalTerminalPtyTree(
+  pid: number,
+  signal: string | undefined,
+  signalDirect: (signal: NodeJS.Signals) => void,
+): void {
   const sig = (signal ?? "SIGKILL") as NodeJS.Signals;
   try {
-    if ((sig === "SIGKILL" || sig === "SIGTERM") && typeof pty.pid === "number" && pty.pid > 0) {
-      // forkpty creates a new session/process group; retain descendant cleanup
-      // after the shell exits and only its group remains.
-      signalPtySessionTree(pty.pid, sig);
-    } else if (process.platform === "win32") {
-      pty.kill();
+    if ((sig === "SIGKILL" || sig === "SIGTERM") && pid > 0) {
+      // The PTY child leads a new session/process group; retain descendant
+      // cleanup after the shell exits and only its group remains.
+      signalPtySessionTree(pid, sig);
     } else {
-      pty.kill(sig);
+      signalDirect(sig);
     }
   } catch {
     // Process may already be gone; teardown is best-effort.

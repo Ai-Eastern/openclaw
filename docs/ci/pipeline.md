@@ -124,6 +124,9 @@ Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary and isolated unit-fast lanes partition their existing file inventories: files with known Bun
 failures or additional skips stay on Node, and the compatible remainder runs on
 Bun. Those Node files still execute; they are not excluded from CI.
+The process lane runs `terminal-pty-bun.test.ts` on Bun and retains its other
+files on Node. Its flow-control cases skip when the pinned Bun build lacks
+`Terminal.pause()` and `Terminal.resume()`.
 TypeScript compiler analysis suites also stay on Node because the synchronous
 native compiler API requires Node child-process pipe handles. This includes
 compiler assertions in mixed runtime suites; their cases remain enabled.
