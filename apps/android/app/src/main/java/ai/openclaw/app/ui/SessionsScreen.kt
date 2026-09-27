@@ -1037,9 +1037,9 @@ internal fun resolveSessionBrowserEntries(
 ): List<ChatSessionEntry> {
   val filtered =
     when (filter) {
-      SessionFilter.Recent -> entries.filter { it.archived != true }
+      SessionFilter.Recent -> entries.filter { isSessionVisibleInNavigation(it, currentSessionKey) }
 
-      SessionFilter.Current -> entries.filter { it.key == currentSessionKey && it.archived != true }
+      SessionFilter.Current -> entries.filter { it.key == currentSessionKey }
 
       // Gate on the entry's own archived flag so a pre-toggle active list can
       // never render with archived-only actions while a refetch is in flight.
@@ -1050,6 +1050,24 @@ internal fun resolveSessionBrowserEntries(
   } else {
     filtered.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
   }
+}
+
+private val cronSessionDisplayKey = Regex("^(?:cron:|agent::*[^:]+:+cron:+[^:])")
+
+// Keep the native adapter aligned with src/shared/session-list-visibility.ts and
+// the selected-session exception in ui/src/lib/sessions/navigation.ts.
+internal fun isSessionVisibleInNavigation(
+  session: ChatSessionEntry,
+  currentSessionKey: String,
+): Boolean {
+  if (session.key == currentSessionKey) return true
+  if (session.archived == true || cronSessionDisplayKey.containsMatchIn(session.key.trim().lowercase())) return false
+  if (session.createdActorType == "system") return false
+  if (session.createdVia != "run" && session.createdVia != "internal") return true
+  return session.createdActorType == "human" ||
+    !session.label.isNullOrBlank() ||
+    !session.displayName.isNullOrBlank() ||
+    !session.subject.isNullOrBlank()
 }
 
 internal fun sessionListSubtitle(
