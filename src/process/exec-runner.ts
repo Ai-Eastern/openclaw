@@ -9,7 +9,10 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { releaseChildProcessOutputAfterExit } from "./child-process.js";
+import {
+  hasChildProcessExitedAndDrained,
+  releaseChildProcessOutputAfterExit,
+} from "./child-process.js";
 import {
   appendCapturedOutput,
   appendPreservedOutputLines,
@@ -45,6 +48,7 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import { setProcessTimeout } from "./process-deadline.js";
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
@@ -217,7 +221,7 @@ async function runCommandWithOutputEncoding(
   const outputBytesByStream = { stdout: 0, stderr: 0 };
   const combinedCapturedBytesByStream = { stdout: 0, stderr: 0 };
   const combinedTailChunks: Array<{ stream: CommandOutputStream; buffer: Buffer }> = [];
-  let noOutputTimer: NodeJS.Timeout | undefined;
+  let noOutputTimer: ReturnType<typeof setProcessTimeout> | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
   let terminatingOutputError: Error | undefined;
@@ -304,6 +308,8 @@ async function runCommandWithOutputEncoding(
     if (
       termination ||
       commandSettled ||
+      ((reason === "timeout" || reason === "no-output-timeout") &&
+        hasChildProcessExitedAndDrained(nodeChild)) ||
       (childExitState &&
         reason !== "output-limit" &&
         (!ownsExitedProcessTree || childExitState.code !== 0))
@@ -332,23 +338,26 @@ async function runCommandWithOutputEncoding(
     ) {
       return;
     }
-    noOutputTimer =
-      noOutputTimer?.refresh() ??
-      setTimeout(() => cancel("no-output-timeout"), resolvedNoOutputTimeoutMs);
+    if (noOutputTimer) {
+      noOutputTimer.refresh();
+    } else {
+      noOutputTimer = setProcessTimeout(
+        () => cancel("no-output-timeout"),
+        resolvedNoOutputTimeoutMs,
+      );
+    }
   };
 
   const timeoutTimer =
     resolvedTimeoutMs === undefined
       ? undefined
-      : setTimeout(() => cancel("timeout"), resolvedTimeoutMs);
+      : setProcessTimeout(() => cancel("timeout"), resolvedTimeoutMs);
   const onAbort = () => cancel("signal");
   signal?.addEventListener("abort", onAbort, { once: true });
   armNoOutputTimer();
   const clearTimers = () => {
-    if (timeoutTimer) {
-      clearTimeout(timeoutTimer);
-    }
-    clearTimeout(noOutputTimer);
+    timeoutTimer?.clear();
+    noOutputTimer?.clear();
     noOutputTimer = undefined;
     signal?.removeEventListener("abort", onAbort);
   };

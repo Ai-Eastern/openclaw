@@ -6,6 +6,15 @@ import type { ChildProcess } from "node:child_process";
 const EXIT_STDIO_GRACE_MS = 100;
 const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 
+/** Broker result delivery can follow native exit and EOF on the transferred pipes. */
+export function hasChildProcessExitedAndDrained(child: ChildProcess): boolean {
+  return (
+    (child.exitCode !== null || child.signalCode !== null) &&
+    (child.stdout === null || child.stdout.readableEnded) &&
+    (child.stderr === null || child.stderr.readableEnded)
+  );
+}
+
 /**
  * Execa waits for stdout/stderr after the direct child exits. Bound that wait
  * when detached descendants keep inherited pipes open, while still draining

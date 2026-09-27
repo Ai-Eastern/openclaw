@@ -1,7 +1,10 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { releaseChildProcessOutputAfterExit } from "./child-process.js";
+import {
+  hasChildProcessExitedAndDrained,
+  releaseChildProcessOutputAfterExit,
+} from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import { createSanitizedCommandError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
@@ -12,6 +15,7 @@ import {
   spawnCommand,
   waitForCommandSpawn,
 } from "./exec-spawn.js";
+import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 export { runCommandWithTimeout, runUtf8CommandWithTimeout } from "./exec-runner.js";
 export type { CommandOptions } from "./exec-runner.js";
@@ -82,61 +86,61 @@ export async function runExec(
             stdin: resolvedOptions.stdinFileDescriptor as 0,
           }),
       stripFinalNewline: false,
-      timeout,
     });
     const startupCanceled =
       subprocess.nodeChildProcess instanceof BrokerChild && subprocess.pid === undefined
         ? createDeferredCore<never>()
         : undefined;
-    if (startupCanceled) {
-      const signal = resolveCommandProcessSignal(resolvedOptions?.signal);
-      let cancellationOpen = true;
-      let deadline: NodeJS.Timeout | undefined;
-      const stopCommand = (reason: "timeout" | "signal") => {
-        if (!cancellationOpen) {
+    const signal = resolveCommandProcessSignal(resolvedOptions?.signal);
+    let cancellationOpen = true;
+    let deadline: ReturnType<typeof setProcessTimeout> | undefined;
+    const stopCommand = (reason: "timeout" | "signal") => {
+      if (!cancellationOpen) {
+        return;
+      }
+      releaseCancellation();
+      // Caller abort is already bridged; the command deadline owns its stop request.
+      if (reason === "timeout") {
+        if (hasChildProcessExitedAndDrained(subprocess.nodeChildProcess)) {
           return;
         }
-        releaseCancellation();
-        // Caller abort is already bridged; the host deadline needs its own stop request.
-        if (reason === "timeout") {
-          deadlineExpired = true;
-          subprocess.kill();
-        }
-        // After admission, await execa's output and cleanup before reporting the timeout.
-        if (!awaitingStartup) {
-          return;
-        }
-        acceptingOutput = false;
-        const flags = {
-          failed: true,
-          timedOut: reason === "timeout",
-          isCanceled: reason === "signal",
-          isMaxBuffer: false,
-          isTerminated: false,
-        };
-        const error = createSanitizedCommandError(flags);
-        startupCanceled.reject(
-          Object.assign(error, flags, {
-            shortMessage: error.message,
-            stdout: "",
-            stderr: "",
-            cleanup: "uncertain",
-          }),
-        );
-      };
-      const onAbort = () => stopCommand("signal");
-      releaseCancellation = () => {
-        cancellationOpen = false;
-        clearTimeout(deadline);
-        signal?.removeEventListener("abort", onAbort);
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (timeout !== undefined) {
-        deadline = setTimeout(() => stopCommand("timeout"), timeout);
+        deadlineExpired = true;
+        subprocess.kill();
       }
-      if (signal?.aborted) {
-        onAbort();
+      // After admission, await execa's output and cleanup before reporting the timeout.
+      if (!awaitingStartup || !startupCanceled) {
+        return;
       }
+      acceptingOutput = false;
+      const flags = {
+        failed: true,
+        timedOut: reason === "timeout",
+        isCanceled: reason === "signal",
+        isMaxBuffer: false,
+        isTerminated: false,
+      };
+      const error = createSanitizedCommandError(flags);
+      startupCanceled.reject(
+        Object.assign(error, flags, {
+          shortMessage: error.message,
+          stdout: "",
+          stderr: "",
+          cleanup: "uncertain",
+        }),
+      );
+    };
+    const onAbort = () => stopCommand("signal");
+    releaseCancellation = () => {
+      cancellationOpen = false;
+      deadline?.clear();
+      signal?.removeEventListener("abort", onAbort);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (timeout !== undefined) {
+      deadline = setProcessTimeout(() => stopCommand("timeout"), timeout);
+    }
+    if (signal?.aborted) {
+      onAbort();
     }
     // Keep draining and settling a late process after a local startup failure returns.
     const completion = (async () => {
