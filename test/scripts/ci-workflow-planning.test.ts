@@ -2521,7 +2521,7 @@ describe("ci workflow guards", () => {
       expect(actual).toContain("checks-baseline-ratchets");
       expect(actual).not.toContain("check-plan");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        Number(ordinary.outputs.hybrid_hosted_base_rows) + 3,
+        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
       );
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
