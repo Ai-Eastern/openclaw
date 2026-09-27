@@ -5184,7 +5184,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("allocates sparse selections without reserving their full-suite rows", () => {
+  it("allocates sparse selections without reserving their full-suite rows", async () => {
     const heavyCli = "src/cli/gateway-backed-exit-health.process.test.ts";
     const targets = [
       "src/config/allowed-values.test.ts",
@@ -5196,15 +5196,96 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/config/config.backup-rotation.test.ts",
       "src/config/commands.test.ts",
     ];
-    const options = {
-      runnerBackend: "hybrid",
-      includeReleaseOnlyRuntimeTests: false,
-    } satisfies NonNullable<Parameters<typeof createSelectedNodeTestShardBundles>[1]>;
-    // Precise selections inherit templates before whole-plan runtime relocation.
-    const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
-    let full: CompactNodeTestShard[];
+    const configs = {
+      infra: "test/vitest/vitest.infra.config.ts",
+      config: "test/vitest/vitest.runtime-config.config.ts",
+      commands: "test/vitest/vitest.commands.config.ts",
+      cli: "test/vitest/vitest.cli-process.config.ts",
+    };
+    const fillers = (prefix: string, count = 9) =>
+      Array.from({ length: count }, (_, index) => `${prefix}.fixture-${index}.test.ts`);
+    const configFiles = [
+      ...targets.filter((file) => file.startsWith("src/config/")),
+      ...fillers("src/config/fixture", 15),
+    ];
+    const cliFiles = [heavyCli, "src/cli/directory-cli.test.ts", ...fillers("src/cli/fixture", 8)];
+    const infraFiles = [
+      ...targets.filter((file) => file.startsWith("src/infra/")),
+      ...fillers("src/infra/heartbeat-runner"),
+      ...fillers("src/infra/runtime-guard"),
+      ...fillers("src/infra/os-summary", 10),
+      ...fillers("src/infra/provider-usage", 10),
+      ...fillers("src/infra/channel-runtime-context", 10),
+      ...fillers("src/infra/diagnostic-trace-context", 10),
+    ];
+    const commandFiles = [targets[1]!, ...fillers("src/commands/doctor-heartbeat-cadence")];
+    const inventory = [...configFiles, ...cliFiles, ...infraFiles, ...commandFiles];
+    const timings: Record<string, number> = {
+      "core-runtime-config": 240,
+      "core-runtime-infra-heartbeat-runner": 170,
+      "core-runtime-infra-system-runtime": 160,
+      "core-runtime-infra-misc-os": 170,
+      "core-runtime-infra-provider-push": 160,
+      "core-runtime-infra-channel-plugin": 150,
+      "core-runtime-infra-diagnostics-state": 150,
+      "agentic-cli-process": 240,
+      "agentic-commands-doctor-sessions-cron": 120,
+    };
+    vi.resetModules();
+    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+      fullSuiteVitestShards: [
+        { name: "core-runtime", config: configs.infra, projects: [configs.infra, configs.config] },
+        { name: "agentic", config: configs.commands, projects: [configs.commands, configs.cli] },
+      ],
+    }));
+    vi.doMock("../vitest/vitest.database-worker-core-paths.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.database-worker-core-paths.mjs")>()),
+      databaseWorkerCoreTestFiles: [],
+      isDatabaseWorkerCoreTestFile: () => false,
+    }));
+    vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
+      listTrackedTestFiles: (root: string) =>
+        inventory.filter((file) => file.startsWith(`${root}/`)),
+    }));
+    vi.doMock("../../scripts/lib/ci-node-test-inventory.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/ci-node-test-inventory.mts")>()),
+      listWholeConfigFiles: (owner: string) =>
+        owner === "core-runtime-config"
+          ? configFiles
+          : owner === "agentic-cli-process"
+            ? cliFiles
+            : undefined,
+      listWholeConfigSplitFiles: (owner: string) =>
+        owner === "core-runtime-config"
+          ? configFiles
+          : owner === "agentic-cli-process"
+            ? cliFiles
+            : undefined,
+      listNodeTestConfigFiles: (config: string) =>
+        ({
+          [configs.infra]: infraFiles,
+          [configs.config]: configFiles,
+          [configs.commands]: commandFiles,
+          [configs.cli]: cliFiles,
+        })[config],
+    }));
+    vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
+      ...testTimings,
+      readCompactGroupTimings: () => timings,
+      readRuntimePlacementTimings: () => [],
+    }));
     try {
-      full = createNodeTestShardBundles({
+      const {
+        createNodeTestShardBundles: createBundles,
+        createSelectedNodeTestShardBundles: createSelected,
+      } = await import("../../scripts/lib/ci-node-test-plan.mts");
+      const options = {
+        runnerBackend: "hybrid",
+        includeReleaseOnlyRuntimeTests: false,
+      } satisfies NonNullable<Parameters<typeof createSelected>[1]>;
+      let full = createBundles({
         ...options,
         includeReleaseOnlyPluginShards: false,
         compactMode: "pull-request",
@@ -5215,69 +5296,70 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .find((group) => group.includePatterns?.includes(heavyCli)),
         "indivisible CLI timing fixture",
       );
-      const readTimings = testTimings.readCompactGroupTimings;
-      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
-        ...readTimings(profile),
-        [heavyGroup.timing_key!]: 200,
-      }));
-      full = createNodeTestShardBundles({
+      timings[heavyGroup.timing_key!] = 200;
+      full = createBundles({
         ...options,
         includeReleaseOnlyPluginShards: false,
         compactMode: "pull-request",
       });
+      const owners = full.filter((job) =>
+        job.groups.some((group) => group.includePatterns?.some((file) => targets.includes(file))),
+      );
+      expect(owners.length).toBeGreaterThan(1);
+      const selected = createSelected(targets, options)!;
+      expect(selected).not.toBeNull();
+      expect(selected.length).toBeLessThan(owners.length);
+      expect(
+        selected
+          .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
+          .toSorted(),
+      ).toEqual(targets.toSorted());
+      expect(
+        selected.every((job) => job.groups.every((group) => group.includePatterns!.length > 0)),
+      ).toBe(true);
+      expect(selected.reduce((sum, job) => sum + job.predictedSeconds!, 0)).toBeLessThan(
+        owners.reduce((sum, job) => sum + job.predictedSeconds!, 0),
+      );
+      const heavyJob = selected.find((job) =>
+        job.groups.some((group) => group.includePatterns?.includes(heavyCli)),
+      )!;
+      expect(heavyJob.predictedSeconds).toBeGreaterThan(150);
+      expect(heavyJob.groups.flatMap((group) => group.includePatterns ?? [])).toEqual([heavyCli]);
+      for (const job of selected) {
+        expect(job.predictedTestSeconds).toBeGreaterThan(0);
+        expect(job.predictedTestSeconds).toBeLessThanOrEqual(job.predictedSeconds!);
+        if (job.planConcurrency === 2) {
+          expect(job.predictedTestSeconds).toBeLessThanOrEqual(300);
+          expect(
+            job.groups.filter((group) => group.shard_name.startsWith("core-runtime-config-hosted-"))
+              .length,
+          ).toBeLessThanOrEqual(1);
+        }
+        for (const group of job.groups) {
+          const original = full.find((owner) =>
+            owner.groups.some((entry) => entry.shard_name === group.shard_name),
+          )!;
+          expect(job).toMatchObject({
+            runner: original.runner,
+            planConcurrency: original.planConcurrency,
+            requiresDist: original.requiresDist,
+          });
+          expect(job.pretestBuildMode).toBe(original.pretestBuildMode);
+          expect(job.timeoutMinutes).toBe(original.timeoutMinutes);
+          expect(job.env).toEqual(original.env);
+          const owner = original.groups.find((entry) => entry.shard_name === group.shard_name)!;
+          expect(group.env).toEqual(owner.env);
+          expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+          expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
+        }
+      }
     } finally {
-      placement.mockRestore();
-    }
-    const owners = full.filter((job) =>
-      job.groups.some((group) => group.includePatterns?.some((file) => targets.includes(file))),
-    );
-    expect(owners.length).toBeGreaterThan(1);
-    const selected = createSelectedNodeTestShardBundles(targets, options)!;
-    expect(selected).not.toBeNull();
-    expect(selected.length).toBeLessThan(owners.length);
-    expect(
-      selected
-        .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
-        .toSorted(),
-    ).toEqual(targets.toSorted());
-    expect(
-      selected.every((job) => job.groups.every((group) => group.includePatterns!.length > 0)),
-    ).toBe(true);
-    expect(selected.reduce((sum, job) => sum + job.predictedSeconds!, 0)).toBeLessThan(
-      owners.reduce((sum, job) => sum + job.predictedSeconds!, 0),
-    );
-    const heavyJob = selected.find((job) =>
-      job.groups.some((group) => group.includePatterns?.includes(heavyCli)),
-    )!;
-    expect(heavyJob.predictedSeconds).toBeGreaterThan(150);
-    expect(heavyJob.groups.flatMap((group) => group.includePatterns ?? [])).toEqual([heavyCli]);
-    for (const job of selected) {
-      expect(job.predictedTestSeconds).toBeGreaterThan(0);
-      expect(job.predictedTestSeconds).toBeLessThanOrEqual(job.predictedSeconds!);
-      if (job.planConcurrency === 2) {
-        expect(job.predictedTestSeconds).toBeLessThanOrEqual(300);
-        expect(
-          job.groups.filter((group) => group.shard_name.startsWith("core-runtime-config-hosted-"))
-            .length,
-        ).toBeLessThanOrEqual(1);
-      }
-      for (const group of job.groups) {
-        const original = full.find((owner) =>
-          owner.groups.some((entry) => entry.shard_name === group.shard_name),
-        )!;
-        expect(job).toMatchObject({
-          runner: original.runner,
-          planConcurrency: original.planConcurrency,
-          requiresDist: original.requiresDist,
-        });
-        expect(job.pretestBuildMode).toBe(original.pretestBuildMode);
-        expect(job.timeoutMinutes).toBe(original.timeoutMinutes);
-        expect(job.env).toEqual(original.env);
-        const owner = original.groups.find((entry) => entry.shard_name === group.shard_name)!;
-        expect(group.env).toEqual(owner.env);
-        expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
-        expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-      }
+      vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+      vi.doUnmock("../../scripts/lib/ci-node-test-inventory.mts");
+      vi.doUnmock("../../scripts/lib/list-test-files.mts");
+      vi.doUnmock("../vitest/vitest.database-worker-core-paths.mjs");
+      vi.doUnmock("../vitest/vitest.test-shards.mjs");
+      vi.resetModules();
     }
   });
 

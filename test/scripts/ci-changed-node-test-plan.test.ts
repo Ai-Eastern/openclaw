@@ -2863,27 +2863,43 @@ describe("CI changed Node test plan", () => {
   });
 
   it("keeps extension-only fallbacks scoped to the changed extension config", () => {
-    const shards = createChangedExtensionFallbackShards(["extensions/discord/src/channel.ts"]);
-    for (const shard of shards) {
-      expect(shard).toMatchObject({ planConcurrency: 1, predictedSeconds: expect.any(Number) });
+    const workerFiles = databaseWorkerExtensionTestFiles
+      .filter((file) => file.startsWith("extensions/discord/"))
+      .toSorted();
+    // This scope fixture has a measured envelope; the next test covers unmeasured partitioning.
+    const timingKey = expectDefined(
+      extensionTestPlan.createExtensionTestTimingKey(
+        "test/vitest/vitest.extension-database-workers.config.ts",
+        workerFiles,
+      ),
+      "measured Discord worker envelope",
+    );
+    const timings = vi
+      .spyOn(testTimings, "readCompactGroupTimings")
+      .mockReturnValue({ [timingKey]: 120 });
+    try {
+      const shards = createChangedExtensionFallbackShards(["extensions/discord/src/channel.ts"]);
+      for (const shard of shards) {
+        expect(shard).toMatchObject({ planConcurrency: 1, predictedSeconds: expect.any(Number) });
+      }
+      const groups = fallbackGroups(shards);
+      expect(groups).toHaveLength(2);
+      expect(groups).toContainEqual(
+        expect.objectContaining({
+          configs: ["test/vitest/vitest.extension-discord.config.ts"],
+          requiresDist: false,
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+        }),
+      );
+      expect(groups).toContainEqual(
+        expect.objectContaining({
+          configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+          includePatterns: workerFiles,
+        }),
+      );
+    } finally {
+      timings.mockRestore();
     }
-    const groups = fallbackGroups(shards);
-    expect(groups).toHaveLength(2);
-    expect(groups).toContainEqual(
-      expect.objectContaining({
-        configs: ["test/vitest/vitest.extension-discord.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-      }),
-    );
-    expect(groups).toContainEqual(
-      expect.objectContaining({
-        configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
-        includePatterns: databaseWorkerExtensionTestFiles
-          .filter((file) => file.startsWith("extensions/discord/"))
-          .toSorted(),
-      }),
-    );
   });
 
   it("partitions every database-worker file exactly once in a broad fallback", () => {
