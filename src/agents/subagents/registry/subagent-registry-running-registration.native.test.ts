@@ -1,7 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { deserialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
@@ -15,8 +13,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
-import * as workerAdmission from "../../../infra/sqlite-worker-broker-admission.js";
-import type { Job } from "../../../infra/sqlite-worker-broker.types.js";
+import * as workerCpu from "../../../infra/worker-cpu.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
@@ -30,10 +27,7 @@ import {
 } from "../../../tasks/detached-task-runtime.test-support.js";
 import { findTaskByRunIdAsync } from "../../../tasks/task-registry-query.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import {
-  holdStateDatabaseCoordinator,
-  holdStateDatabaseWrite,
-} from "../../../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -49,67 +43,67 @@ import type { SubagentRegistrationScope } from "./subagent-registry.types.js";
 
 const fixture = useSubagentPersistenceFixture();
 
-it("keeps ordinary subagent registration responsive while coordinator custody is held", async () => {
+it("keeps ordinary subagent registration responsive while a SQLite writer is held", async () => {
   await fixture.allocateStateDir();
   vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
   openOpenClawStateDatabase();
   const context = captureOpenClawStateWorkerContext();
   expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);
-  // Settle worker startup before holding the coordinator used by this registration.
-  await registryState.persistSubagentRunsToDiskAsyncOrThrow(new Map(), [], { context });
   const runId = "contended-registration";
   const childSessionKey = "agent:main:subagent:contended-registration";
-  const contended = createDeferred();
-  const checks = new WeakMap<Job, number>();
-  let observedContention = false;
-  const borrowLifecycle = workerAdmission.borrowSqliteWorkerLifecycle;
-  const observeContention = vi
-    .spyOn(workerAdmission, "borrowSqliteWorkerLifecycle")
-    .mockImplementation((job, actor) => {
-      const delegate = borrowLifecycle(job, actor);
-      if (
-        !delegate &&
-        job.lifecyclePreparation &&
-        job.request.type === "execute" &&
-        (job.request.stateDatabasePath ?? actor.databasePath) === context.admission.databasePath
-      ) {
-        const command: unknown = deserialize(job.request.input);
-        if (
-          isRecord(command) &&
-          command.type === "subagents.persistChanges" &&
-          isRecord(command.input) &&
-          Array.isArray(command.input.values) &&
-          command.input.values.some((row: unknown) => isRecord(row) && row.run_id === runId)
-        ) {
-          const count = (checks.get(job) ?? 0) + 1;
-          checks.set(job, count);
-          // The second check follows a failed native coordinator acquisition.
-          if (count === 2) {
-            observedContention = true;
-            contended.resolve();
-          }
-        }
+  // Observe native entry/return without changing SQLite's lock wait or worker protocol.
+  const nativeBegin = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 3));
+  const preload = `
+    import { DatabaseSync } from "node:sqlite";
+    import { workerData } from "node:worker_threads";
+    const counts = new Int32Array(workerData.testRegistrationBegin);
+    const exec = DatabaseSync.prototype.exec;
+    DatabaseSync.prototype.exec = function(sql) {
+      if (sql !== "BEGIN IMMEDIATE" || this.location() !== workerData.testRegistrationPath ||
+          Atomics.load(counts, 0) === 0) {
+        return exec.call(this, sql);
       }
-      return delegate;
-    });
-  // Release a regressed synchronous waiter independently of the blocked test thread.
-  const holder = holdStateDatabaseCoordinator(
-    context.admission.databasePath,
-    context.coordinatorRuntime,
-    1_000,
-  );
+      Atomics.add(counts, 1, 1);
+      Atomics.notify(counts, 1);
+      try { return exec.call(this, sql); }
+      finally { Atomics.add(counts, 2, 1); }
+    };
+  `;
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  const observeWorker = vi
+    .spyOn(workerCpu, "createCpuTrackedWorker")
+    .mockImplementation((filename, options) =>
+      createWorker(filename, {
+        ...options,
+        execArgv: [
+          ...(options?.execArgv ?? []),
+          "--import",
+          `data:text/javascript,${encodeURIComponent(preload)}`,
+        ],
+        workerData: {
+          ...options?.workerData,
+          testRegistrationPath: context.admission.databasePath,
+          testRegistrationBegin: nativeBegin.buffer,
+        },
+      }),
+    );
+  let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
   let registration: Promise<void> | undefined;
   let registrationSettled = false;
   const failures: unknown[] = [];
   try {
+    // Warm the real worker before the independent holder starts its existing release deadline.
+    await registryState.persistSubagentRunsToDiskAsyncOrThrow(new Map(), [], { context });
+    holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 1_000);
     await holder.ready;
+    Atomics.store(nativeBegin, 0, 1);
     registration = Promise.resolve(
       registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
-        task: "Register while a foreign coordinator owner holds custody",
+        task: "Register while a foreign SQLite writer holds its transaction",
         cleanup: "keep",
         expectsCompletionMessage: false,
         taskRowOwnership: "gateway_best_effort",
@@ -118,26 +112,29 @@ it("keeps ordinary subagent registration responsive while coordinator custody is
     const settlement = registration.finally(() => {
       registrationSettled = true;
     });
-    await Promise.race([contended.promise, settlement, holder.joined]);
+    await Promise.race([Atomics.waitAsync(nativeBegin, 1, 0).value, settlement, holder.joined]);
     await setImmediate();
     await setImmediate();
     expect(
       Atomics.load(holder.released, 0),
-      "registration must let the event loop run before the coordinator holder releases",
+      "registration must let the event loop run before the SQLite writer releases",
     ).toBe(0);
-    expect(observedContention).toBe(true);
+    expect(Atomics.load(nativeBegin, 1)).toBeGreaterThan(0);
+    expect(Atomics.load(nativeBegin, 2)).toBe(0);
     expect(registrationSettled).toBe(false);
     expect(subagentRuns.has(runId)).toBe(false);
   } catch (error) {
     failures.push(error);
   } finally {
-    holder.release();
-    for (const result of await Promise.allSettled([registration, holder.joined])) {
+    Atomics.store(nativeBegin, 0, 0);
+    Atomics.notify(nativeBegin, 1);
+    holder?.release();
+    for (const result of await Promise.allSettled([registration, holder?.joined])) {
       if (result.status === "rejected" && !failures.includes(result.reason)) {
         failures.push(result.reason);
       }
     }
-    observeContention.mockRestore();
+    observeWorker.mockRestore();
   }
   if (failures.length > 0) {
     throw new AggregateError(failures, "Registration responsiveness or worker settlement failed");
@@ -156,7 +153,7 @@ it.each(["none", "before rollback commit", "after rollback commit"] as const)(
     vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
     await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), async () => {
       const createTask = createDeferred();
-      let holder: ReturnType<typeof holdStateDatabaseWrite> | undefined;
+      let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
       let older: Promise<unknown> | undefined;
       let newer: Promise<unknown> | undefined;
       let restoreWrites: (() => void) | undefined;
@@ -301,7 +298,7 @@ it.each(["none", "before rollback commit", "after rollback commit"] as const)(
           });
         }
         expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);
-        holder = holdStateDatabaseWrite(context.admission.databasePath, 1_000);
+        holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 1_000);
         await holder.ready;
         if (successorTiming === "after rollback commit") {
           const runOperation = stateWorker.runOpenClawStateWorkerOperation;

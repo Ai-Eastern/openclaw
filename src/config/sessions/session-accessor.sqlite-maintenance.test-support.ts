@@ -63,7 +63,6 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
         stateContext?: Parameters<typeof original>[2],
         assertCurrent?: Parameters<typeof original>[3],
         createAdmission?: Parameters<typeof original>[4],
-        requireStateLifecycle?: Parameters<typeof original>[5],
       ) => {
         let planning = false;
         let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
@@ -155,7 +154,6 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
                 observer?.mockRestore();
               }
             }),
-          requireStateLifecycle,
         );
       },
     );
@@ -218,7 +216,7 @@ export function registerSessionMaintenancePreparationTests() {
           released.push(id);
         },
       });
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       const pending = runSqliteSessionReclamation({ forceInProcess: false, plan });
       let foreground: Promise<void> | undefined;
       let retry: ReturnType<typeof runSqliteSessionReclamation> | undefined;
@@ -319,7 +317,7 @@ export function registerSessionMaintenancePreparationTests() {
         let current = true;
         let settled = false;
         const published = vi.fn();
-        const sql = observeHostDataSql(state.env);
+        const sql = observeHostDataSql();
         const first = runSqliteSessionReclamation({
           forceInProcess: false,
           plan,
@@ -436,7 +434,7 @@ export function registerSessionMaintenancePreparationTests() {
             await continuePreparation.promise;
           },
         });
-        const sql = observeHostDataSql(state.env);
+        const sql = observeHostDataSql();
         const pending = runSqliteSessionReclamation({ forceInProcess: false, plan });
         const outcome = pending.then(
           (value) => ({ kind: "returned" as const, value, nativeClosed }),
@@ -540,7 +538,7 @@ export function registerSessionMaintenancePreparationTests() {
           throw cleanupFailure;
         },
       });
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       const pending = runSqliteSessionReclamation({
         forceInProcess: false,
         plan,

@@ -34,6 +34,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -219,10 +220,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
   it("launches queued collectors after the parent admission lease is released", async () => {
     const gatewayContext = makeGatewayContext();
-    let releaseFirstLaunch!: () => void;
-    const firstLaunchGate = new Promise<void>((resolve) => {
-      releaseFirstLaunch = resolve;
-    });
+    const firstLaunchGate = createDeferredCore();
     const subordinateAdmissionStates: boolean[] = [];
     let launchCount = 0;
     subagentSpawnTesting.setDepsForTest({
@@ -233,7 +231,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         subordinateAdmissionStates.push(isGatewaySubordinateWorkAdmissionClosed());
         launchCount += 1;
         if (launchCount === 1) {
-          await firstLaunchGate;
+          await firstLaunchGate.promise;
         }
         return {
           runId: params.idempotencyKey as string,
@@ -290,7 +288,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     await waitForAssertion(() => {
       expect(launchCount).toBe(1);
     });
-    releaseFirstLaunch();
+    firstLaunchGate.resolve();
     await waitForAssertion(() => {
       expect(launchCount).toBe(2);
       for (const result of results) {
@@ -320,10 +318,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     );
     clearConfigCache();
     const launched: string[] = [];
-    let releaseLaunch!: () => void;
-    const launchGate = new Promise<void>((resolve) => {
-      releaseLaunch = resolve;
-    });
+    const launchGate = createDeferredCore();
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
         method: string,
@@ -331,7 +326,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       ) => {
         if (method === "agent") {
           launched.push(params.sessionKey as string);
-          await launchGate;
+          await launchGate.promise;
         }
         return { runId: params.idempotencyKey, status: "accepted" } as T;
       },
@@ -372,7 +367,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         ),
       );
     } finally {
-      releaseLaunch();
+      launchGate.resolve();
       await waitForAssertion(() =>
         expect(subagentRuns.get(results[0]!.runId!)?.swarmLaunchPending).toBe(false),
       );
@@ -536,10 +531,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
   it("aborts a collector cancelled while Gateway acceptance is in flight", async () => {
     const gatewayContext = makeGatewayContext();
-    let releaseFirstLaunch!: () => void;
-    const firstLaunchGate = new Promise<void>((resolve) => {
-      releaseFirstLaunch = resolve;
-    });
+    const firstLaunchGate = createDeferredCore();
+    const firstDispatch = createDeferredCore();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     let launchCount = 0;
     const transport = vi.fn(async () => {
@@ -553,11 +546,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       ) => {
         requests.push({ method, params });
         if (method === "agent") {
-          launchCount += 1;
-          if (launchCount === 1) {
-            await firstLaunchGate;
+          const launchOrdinal = ++launchCount;
+          if (launchOrdinal === 1) {
+            firstDispatch.resolve();
+            await firstLaunchGate.promise;
           }
-          return { runId: `gateway-run-${launchCount}`, status: "accepted" } as T;
+          return { runId: `gateway-run-${launchOrdinal}`, status: "accepted" } as T;
         }
         return {} as T;
       },
@@ -574,20 +568,23 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         },
         () =>
           Promise.all([
-            spawnSubagentDirect(
-              {
-                task: "cancelled collector",
-                collect: true,
-                context: "isolated",
-                lightContext: true,
-                groupId: "swarm-cancel-launch",
-                swarmLaunchReplayKey: "code-mode:agentSpawn:cancelled",
-              },
-              { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+            // Arrival order may differ from Promise.all result order.
+            firstDispatch.promise.then(() =>
+              spawnSubagentDirect(
+                {
+                  task: "queued collector",
+                  collect: true,
+                  context: "isolated",
+                  lightContext: true,
+                  groupId: "swarm-cancel-launch",
+                  swarmLaunchReplayKey: "code-mode:agentSpawn:cancelled",
+                },
+                { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+              ),
             ),
             spawnSubagentDirect(
               {
-                task: "next collector",
+                task: "in-flight collector",
                 collect: true,
                 context: "isolated",
                 lightContext: true,
@@ -600,9 +597,19 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       ),
     );
     parentAdmission!.release();
-    const firstRunId = results[0]?.runId;
-    expect(firstRunId).toBeTruthy();
     await waitForAssertion(() => expect(launchCount).toBe(1));
+    const firstRequest = expectDefined(
+      requests.find((request) => request.method === "agent"),
+      "in-flight Gateway request",
+    );
+    const firstRunId = expectDefined(
+      results.find((result) => result.runId === firstRequest.params.idempotencyKey)?.runId,
+      "accepted in-flight collector",
+    );
+    const nextRunId = expectDefined(
+      results.find((result) => result.runId !== firstRunId)?.runId,
+      "queued collector",
+    );
 
     expect(markSubagentRunTerminated({ runId: firstRunId, reason: "manual kill" })).toBe(1);
     const killedTask = structuredClone(findTaskByRunId(firstRunId!));
@@ -610,7 +617,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     const killedExecution = structuredClone(killedEntry.execution);
     const killedReconciliation = structuredClone(killedEntry.killReconciliation);
     expect(killedTask).toMatchObject({ status: "cancelled", endedAt: expect.any(Number) });
-    releaseFirstLaunch();
+    firstLaunchGate.resolve();
 
     await waitForAssertion(() => {
       expect(
@@ -628,7 +635,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       expect(subagentRuns.get(firstRunId!)?.killReconciliation).toEqual(killedReconciliation);
       expect(findTaskByRunId(firstRunId!)).toEqual(killedTask);
       expect(subagentRuns.get("gateway-run-2")).toMatchObject({
-        swarmRunId: results[1]!.runId,
+        swarmRunId: nextRunId,
         swarmLaunchPending: false,
       });
     });

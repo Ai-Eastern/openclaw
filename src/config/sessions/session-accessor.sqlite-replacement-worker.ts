@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   retainSqliteWorkerErrorCode,

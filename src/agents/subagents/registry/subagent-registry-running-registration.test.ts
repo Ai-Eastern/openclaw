@@ -84,7 +84,6 @@ beforeEach(() => {
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
   };
   mocks.prepare.mockReturnValue({ kind: "legacy", task: task(), finalizeRun: () => [] });
 });

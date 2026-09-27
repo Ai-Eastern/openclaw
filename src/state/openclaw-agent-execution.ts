@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -33,6 +34,7 @@ import {
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
+  runOutsideOpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -83,7 +85,6 @@ const executionState = resolveGlobalSingleton<{
   idle?: ExecutionOwner;
 }>(Symbol.for("openclaw.agentDatabaseExecutionOwners"), () => ({ owners: new Map() }));
 const executions = executionState.owners;
-const IDLE_EXECUTION_MS = 60_000;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
 
 function supportsAgentDatabaseExecutionScope(options: OpenClawAgentDatabaseOptions): boolean {
@@ -423,9 +424,7 @@ function createAgentDatabaseExecution(
         throw new Error("Agent creation cannot capture another pending native opener");
       }
       retainAlias(borrowedPath);
-      for (const unregister of aliases.values()) {
-        observeOpenClawDatabaseMaintenanceResource(unregister);
-      }
+      observeOpenClawDatabaseMaintenanceResource(aliases.get(pathname));
       borrowers += 1;
       clearIdleTimer();
       if (executionState.idle === owner && !nativeClosing && !cleanupFailure) {
@@ -560,7 +559,7 @@ function createAgentDatabaseExecution(
                     return;
                   }
                   void owner.closeIdle().catch(reportCleanupFailure);
-                }, IDLE_EXECUTION_MS),
+                }, SQLITE_IDLE_HANDLE_TTL_MS),
               );
               idleTimer = timer;
               timer.unref();
@@ -618,16 +617,20 @@ function createAgentDatabaseExecution(
       return;
     }
     // Cleanup keeps captured locators even if a symlink is later removed or retargeted.
-    const unregister = registerOpenClawAgentDatabaseAsyncResource({
-      agentId,
-      path: alias,
-      revoke() {
-        revoked = true;
-        retired = true;
-        clearIdleTimer();
-      },
-      close: () => owner.close(),
-    });
+    const register = () =>
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId,
+        path: alias,
+        revoke() {
+          revoked = true;
+          retired = true;
+          clearIdleTimer();
+        },
+        close: () => owner.close(),
+      });
+    // One claim owns the executor; later aliases only select that owner for cleanup.
+    const unregister =
+      aliases.size === 0 ? register() : runOutsideOpenClawDatabaseMaintenanceScope(register);
     aliases.set(alias, unregister);
     executions.set(alias, owner);
   };
