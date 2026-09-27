@@ -12,6 +12,9 @@ struct QuickChatCatalogPresentationTests {
     @Test func `rendered Quick Chat preserves catalog disclosure and shortcut behavior in order`() async throws {
         try await TestIsolation.withIsolatedState {
             try await AppKitTestSupport.startApplication()
+            try await MacGatewayChatTransportMappingTests().captureSessionDefaultsMenu()
+            try await MacGatewayChatTransportMappingTests()
+                .`session list preserves model scope and runtime while supplying the main key`()
             let application = AppKitTestSupport.application
             let previousAppearance = application.appearance
             defer { application.appearance = previousAppearance }
@@ -437,7 +440,9 @@ private actor QuickChatCatalogFixture {
                 }
             }
             if self.restrictedCatalog == .failed {
-                return Data(#"{"type":"res","id":"\#(id)","ok":false,"error":{"code":"UNAVAILABLE","message":"Fixture catalog unavailable"}}"#.utf8)
+                return Data(
+                    #"{"type":"res","id":"\#(id)","ok":false,"error":{"code":"UNAVAILABLE","message":"Fixture catalog unavailable"}}"#
+                        .utf8)
             }
             if let restrictedCatalog {
                 let models: String
@@ -487,7 +492,9 @@ private actor QuickChatCatalogFixture {
             } else if params["model"] is NSNull {
                 self.patches.append("model=null")
                 if let restrictedCatalog, restrictedCatalog != .permitted {
-                    return Data(#"{"type":"res","id":"\#(id)","ok":false,"error":{"code":"FORBIDDEN","message":"No permitted default"}}"#.utf8)
+                    return Data(
+                        #"{"type":"res","id":"\#(id)","ok":false,"error":{"code":"FORBIDDEN","message":"No permitted default"}}"#
+                            .utf8)
                 }
                 self.model = self.restrictedCatalog == nil ? "current" : "primary"
             } else {

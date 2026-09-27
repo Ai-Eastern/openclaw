@@ -390,6 +390,12 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
       "-only-testing:OpenClawTests/ChatTypingFocusTests",
       "-only-testing:OpenClawTests/ChatSendHydrationTests",
+      "-only-testing:OpenClawTests/ExecApprovalNotificationBridgeTests",
+      "-only-testing:OpenClawTests/PluginApprovalNotificationBridgeTests",
+      "-only-testing:OpenClawTests/GatewaySettingsStoreTests",
+      "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
+      "-only-testing:OpenClawTests/WatchApprovalTransportSourceGuardTests",
+      "-only-testing:OpenClawLogicTests/WatchChatStatusLocalizationTests",
     ]);
     for (const name of authClasses) {
       expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);

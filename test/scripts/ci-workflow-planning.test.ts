@@ -2207,6 +2207,7 @@ describe("ci workflow guards", () => {
                 "Build iOS app",
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
                 ...(historical ? [] : ["Run focused iOS lifecycle simulator tests"]),
+                ...(historical ? [] : ["Run focused Apple Watch operation simulator tests"]),
               ],
               release: ["Build iOS app (Release)"],
               tests: [

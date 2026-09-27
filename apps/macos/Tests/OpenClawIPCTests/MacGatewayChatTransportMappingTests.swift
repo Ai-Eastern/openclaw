@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
@@ -293,7 +294,7 @@ struct MacGatewayChatTransportMappingTests {
         #expect(unowned.params["agentId"] == nil)
     }
 
-    @Test func `session list preserves model scope and runtime while supplying the main key`() async throws {
+    func `session list preserves model scope and runtime while supplying the main key`() async throws {
         try await self.withSessionTransport(mainSessionKey: "agent:agent-a:main") { transport, _ in
             let response = try await transport.listSessions(limit: 50, search: nil, archived: false)
             let defaults = try #require(response.defaults)
@@ -302,7 +303,7 @@ struct MacGatewayChatTransportMappingTests {
             #expect(defaults.agentRuntime?.source == "agent")
             #expect(defaults.modelProvider == "example")
             #expect(defaults.model == "model-a")
-            #expect(defaults.contextTokens == 128000)
+            #expect(defaults.contextTokens == 128_000)
             #expect(defaults.thinkingOptions == ["low", "high"])
             #expect(defaults.thinkingDefault == "low")
             #expect(defaults.mainSessionKey == "agent:agent-a:main")
@@ -622,5 +623,69 @@ struct MacGatewayChatTransportMappingTests {
             }
             return false
         }())
+    }
+}
+
+extension MacGatewayChatTransportMappingTests {
+    @MainActor
+    func captureSessionDefaultsMenu() async throws {
+        try await self.withSessionTransport(mainSessionKey: "agent:agent-a:main") { transport, _ in
+            let controller = WebChatSwiftUIWindowController(
+                sessionKey: "agent:agent-a:main",
+                transport: SessionDefaultsRenderTransport(base: transport),
+                windowTitle: "Session model settings fixture",
+                windowAutosaveName: "SessionDefaultsRender-\(UUID().uuidString)")
+            defer { controller.close() }
+            controller.show()
+            let window = try #require(controller._testWindow)
+            window.appearance = NSAppearance(named: .aqua)
+            let button = try await AppKitTestSupport.waitForAccessibilityElement(
+                in: window, description: "loaded session model settings")
+            { elements in
+                elements.first {
+                    let value: Any? = $0.accessibilityValue?()
+                    return $0.accessibilityIdentifier?() == "chat-composer-inline-model" &&
+                        $0.accessibilityLabel?() == "Model" && value as? String == "model-a"
+                }
+            }
+            try await AppKitTestSupport.openMenu(button, in: window, requireCompositedPopup: true) { menu in
+                try AppKitTestSupport.record(menu: menu, content: window.contentView, name: "session-defaults")
+            }
+        }
+    }
+}
+
+private struct SessionDefaultsRenderTransport: OpenClawChatTransport {
+    let base: MacGatewayChatTransport
+
+    func listSessions(
+        limit: Int?, search: String?, archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        // The changed production boundary owns this projection on both before and after builds.
+        try await self.base.listSessions(limit: limit, search: search, archived: archived)
+    }
+
+    func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        .init(sessionKey: sessionKey, sessionId: "synthetic-session", messages: [], thinkingLevel: nil)
+    }
+
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
+        [.init(modelID: "model-a", name: "Model A", provider: "example", available: true, contextWindow: 128_000)]
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        true
+    }
+
+    func setActiveSessionKey(_: String) async throws {}
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
+    }
+
+    func sendMessage(
+        sessionKey _: String, message _: String, thinking _: String, idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        throw URLError(.unsupportedURL)
     }
 }

@@ -6559,6 +6559,16 @@ jobs:
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
           )
+          if [[ "$IOS_CI_PHASE" == "smoke" ]]; then
+            test_args+=(
+              -only-testing:OpenClawTests/ExecApprovalNotificationBridgeTests
+              -only-testing:OpenClawTests/PluginApprovalNotificationBridgeTests
+              -only-testing:OpenClawTests/GatewaySettingsStoreTests
+              -only-testing:OpenClawTests/NodeAppModelInvokeTests
+              -only-testing:OpenClawTests/WatchApprovalTransportSourceGuardTests
+              -only-testing:OpenClawLogicTests/WatchChatStatusLocalizationTests
+            )
+          fi
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(
               -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests
@@ -6603,7 +6613,7 @@ jobs:
           fi
 
       - name: Run focused Apple Watch operation simulator tests
-        if: matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.compatibility_target != 'true'
+        if: (matrix.phase == 'smoke' || (matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main')) && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
