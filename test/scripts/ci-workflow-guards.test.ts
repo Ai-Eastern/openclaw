@@ -3881,6 +3881,32 @@ setImmediate(() => {
         }
       }
     }
+    for (const jobName of [
+      "control-ui-performance",
+      "native-i18n",
+      "control-ui-i18n",
+      "checks-baseline-ratchets",
+      "checks-fast-plugin-contracts-shard",
+      "checks-fast-channel-contracts-shard",
+      "checks-node-compat",
+      "skills-python",
+    ]) {
+      const expression = workflow.jobs[jobName]["runs-on"];
+      for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson"] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, { ...context, runnerBackend }),
+          `${jobName}: PR/${runnerBackend}`,
+        ).toBe("ubuntu-24.04");
+        expect(
+          evaluateWorkflowExpression(expression, { ...context, runnerBackend, eventName: "push" }),
+          `${jobName}: push/${runnerBackend}`,
+        ).toBe(
+          runnerBackend === "" || runnerBackend === "blacksmith"
+            ? "blacksmith-4vcpu-ubuntu-2404"
+            : "ubuntu-24.04",
+        );
+      }
+    }
     for (const [jobName, task, expected] of [
       ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
@@ -11128,10 +11154,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         CRABBOX_COORDINATOR_TOKEN:
           "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
         GH_APP_TOKEN:
-          "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
+          "${{ steps.publish-app-token.outputs.token || steps.publish-app-token-fallback.outputs.token }}",
         GH_TOKEN: "${{ github.token }}",
       },
-      run: "node scripts/pr-crabbox-gate-publisher.mjs",
+      run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
     expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
     expect(job.steps[2].run).toContain(

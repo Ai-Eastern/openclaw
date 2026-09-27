@@ -1,4 +1,5 @@
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import { isRuntimeTestFileIncluded, type RuntimeTestSelection } from "./ci-node-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 
 export type WindowsTestShard = {
@@ -327,7 +328,7 @@ function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>
 
 export function createWindowsTestShards(
   scripts: Readonly<Record<string, string | undefined>>,
-  options: { hostedPullRequest?: boolean } = {},
+  options: RuntimeTestSelection & { hostedPullRequest?: boolean } = {},
 ): WindowsTestShard[] {
   // Hosted setup reached 112s and shared workers 49s; reserve the remaining
   // 39s for wrapper transitions and variation. Runtime build reached 116s.
@@ -342,7 +343,9 @@ export function createWindowsTestShards(
   const envelopes: { targets: string[]; seconds: number }[] = [];
   const projects = new Map<string, { targets: string[]; seconds: number }>();
   const runtime = { targets: [] as string[], seconds: timingProfile.runtimeBuildSeconds };
-  for (const file of readWindowsTargets(scripts).toSorted()) {
+  for (const file of readWindowsTargets(scripts)
+    .filter((target) => isRuntimeTestFileIncluded(target, options))
+    .toSorted()) {
     const seconds = timingProfile.fileSeconds[file] ?? fileSeconds[file] ?? fallbackFileSeconds;
     if (resolveVitestPretestBuildMode([{ includePatterns: [file] }]) !== undefined) {
       // test-projects prepares one runtime before all serial project borrowers.
