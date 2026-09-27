@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { installSessionTabRegistrySqliteHarness } from "./session-tab-registry.sqlite.test-harness.js";
 import { durableOwnership as ownership } from "./session-tab-registry.sqlite.test-helpers.js";
@@ -21,12 +20,9 @@ describe("session tab lifecycle cleanup", () => {
             : { route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" } as const }),
         });
       }
-      const started = createDeferred<void>();
-      const finish = createDeferred<void>();
       let current = true;
       const closeTab = vi.fn(async (_tab: { targetId: string }) => {
-        started.resolve();
-        await finish.promise;
+        current = false;
       });
       const closeDurableTab: NonNullable<
         Parameters<typeof registry.closeTrackedBrowserTabsForSessions>[0]["closeDurableTab"]
@@ -35,38 +31,21 @@ describe("session tab lifecycle cleanup", () => {
         expect(options.shouldClose()).toBe(true);
         return { status: "closed" };
       };
-      const cleanup = registry.closeTrackedBrowserTabsForSessions({
-        sessionKeys: [sessionKey],
-        isCurrent: () => current,
-        closeTab,
-        closeDurableTab,
-      });
-      try {
-        await started.promise;
-        current = false;
-        finish.resolve();
-        await expect(cleanup).resolves.toBe(1);
-        expect(closeTab).toHaveBeenCalledOnce();
-        if (kind === "durable") {
-          expect(openStore().entries()).toHaveLength(1);
-          expect(openStore().entries()[0]?.value).not.toHaveProperty("cleanupAttemptToken");
-        }
-        await expect(
-          registry.closeTrackedBrowserTabsForSessions({
-            sessionKeys: [sessionKey],
-            closeTab,
-            closeDurableTab,
-          }),
-        ).resolves.toBe(1);
-        expect(closeTab.mock.calls.map(([tab]) => tab.targetId).toSorted()).toEqual([
-          "tab-a",
-          "tab-b",
-        ]);
-        expect(openStore().entries()).toEqual([]);
-      } finally {
-        finish.resolve();
-        await cleanup;
+      const cleanupParams = { sessionKeys: [sessionKey], closeTab, closeDurableTab };
+      await expect(
+        registry.closeTrackedBrowserTabsForSessions({ ...cleanupParams, isCurrent: () => current }),
+      ).resolves.toBe(1);
+      expect(closeTab).toHaveBeenCalledOnce();
+      if (kind === "durable") {
+        expect(openStore().entries()).toHaveLength(1);
+        expect(openStore().entries()[0]?.value).not.toHaveProperty("cleanupAttemptToken");
       }
+      await expect(registry.closeTrackedBrowserTabsForSessions(cleanupParams)).resolves.toBe(1);
+      expect(closeTab.mock.calls.map(([tab]) => tab.targetId).toSorted()).toEqual([
+        "tab-a",
+        "tab-b",
+      ]);
+      expect(openStore().entries()).toEqual([]);
     },
   );
 
