@@ -93,6 +93,7 @@ function fixture(
       "record-shared.mjs",
       "update-compat-contract.mjs",
       "openclaw-e2e-instance.sh",
+      "docker-e2e-watchdog.mjs",
       "direct-run.mjs",
     ]) {
       copyFileSync(join(repo, "scripts/lib", file), join(toolingRoot, "scripts/lib", file));

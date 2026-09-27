@@ -6640,6 +6640,7 @@ export async function sha256File(file) {
       HELPER_PATH,
       "scripts/lib/docker-e2e-logs.sh",
       "scripts/lib/docker-e2e-container.sh",
+      "scripts/lib/docker-e2e-watchdog.mjs",
       "scripts/lib/docker-e2e-resource-diagnostics.sh",
       PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
     ]) {
