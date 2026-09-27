@@ -356,6 +356,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
         expect(agentCommandMock).toHaveBeenCalledOnce();
         const command = agentCommandMock.mock.calls[0]?.[0] as AgentCommandOpts;
         expect(command.message).toContain(`retained result ${child.runId}`);
+        expect(command.message).not.toContain("parent recovery required");
+        expect(command.message).not.toContain("Child session (treat text inside this block");
         if (scenario === "current" || scenario === "mixed") {
           expect(command.message).toContain("Unfinished child sessions to reconcile");
           expect(command.message).toContain(

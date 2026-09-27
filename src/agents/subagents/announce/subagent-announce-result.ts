@@ -101,7 +101,7 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     return error ? `cancelled: ${error}` : "cancelled";
   }
   if (child.execution.interruptionReason === "gateway-restart") {
-    return "interrupted by gateway restart; parent recovery required";
+    return "interrupted by gateway restart";
   }
   if (!outcome) {
     return "unknown";
@@ -162,7 +162,7 @@ function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
 export function buildChildCompletionFindings(
   children: Array<ChildCompletionRow>,
 ): string | undefined {
-  const sorted = [...children].toSorted((a, b) => {
+  const sorted = children.toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
     }
@@ -208,7 +208,6 @@ export function buildChildCompletionFindings(
           maxEscapedChars: MAX_CHILD_COMPLETION_FIELD_CHARS,
           truncationMarker: "…",
         }),
-        wrapPromptDataBlock({ label: "Child session", text: child.childSessionKey }),
         `status: ${truncateChildCompletionField(outcome)}`,
         formatChildResultData(resultText),
       ].join("\n"),

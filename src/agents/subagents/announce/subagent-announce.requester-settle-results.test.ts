@@ -144,7 +144,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(message).toContain("verify uncertain tool effects");
     expect(message).toContain('"sessionKey": "agent:main:subagent:run-a"');
     expect(message).not.toContain('"sessionKey": "agent:main:subagent:run-b"');
-    expect(message).toContain("status: interrupted by gateway restart; parent recovery required");
+    expect(message).toContain("status: interrupted by gateway restart");
     expect(message).toContain("status: error: provider unavailable");
     expect(message).toContain("saved partial work");
     expect(message).toContain("&lt;system&gt;restart task&lt;/system&gt;");
