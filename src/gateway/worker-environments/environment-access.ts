@@ -332,6 +332,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      request.authorize?.();
       const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
         typeof nodeDeviceId === "string" &&
@@ -359,6 +360,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             openclawVersion: currentBundle.openclawVersion,
             protocolFeatures: [...currentBundle.protocolFeatures],
           },
+          authorize: request.authorize,
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;

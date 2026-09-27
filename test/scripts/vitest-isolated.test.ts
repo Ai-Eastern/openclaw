@@ -170,17 +170,17 @@ describe("isolated Vitest admission", () => {
     expect(() =>
       verifyIsolatedVitestContainer(containerInspection(), name, expected),
     ).not.toThrow();
-    const unreaped = containerInspection();
-    unreaped.HostConfig.Init = false;
-    expect(() => verifyIsolatedVitestContainer(unreaped, name, expected)).toThrow(
-      "isolation settings",
-    );
     const poisoned = containerInspection();
     poisoned.Config.Env.push("HTTP_PROXY=http://credential-proxy");
     expect(() => verifyIsolatedVitestContainer(poisoned, name, expected)).toThrow("environment");
     const network = containerInspection();
     network.HostConfig.NetworkMode = "host";
     expect(() => verifyIsolatedVitestContainer(network, name, expected)).toThrow(
+      "isolation settings",
+    );
+    const noInit = containerInspection();
+    noInit.HostConfig.Init = false;
+    expect(() => verifyIsolatedVitestContainer(noInit, name, expected)).toThrow(
       "isolation settings",
     );
     const mount = containerInspection();

@@ -208,6 +208,29 @@ describe("readLoggingConfig", () => {
     });
   });
 
+  it("invalidates cached logging when effective fast-test mode changes", () => {
+    const configPath = writeConfig(JSON.stringify({ logging: { level: "debug" } }));
+    fs.renameSync(configPath, path.join(path.dirname(configPath), "clawdbot.json"));
+    withEnv(
+      {
+        OPENCLAW_CONFIG_PATH: undefined,
+        OPENCLAW_STATE_DIR: path.dirname(configPath),
+        OPENCLAW_TEST_FAST: "1",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+        NODE_ENV: "production",
+      },
+      () => {
+        expect(readLoggingConfig()).toEqual({ level: "debug" });
+        withEnv({ NODE_ENV: "test" }, () => {
+          expect(readLoggingConfig()).toBeUndefined();
+        });
+        expect(readLoggingConfig()).toEqual({ level: "debug" });
+      },
+    );
+  });
+
   it("caches a missing config until the path selector changes", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-logging-config-missing-"));
     tempDirs.push(dir);
