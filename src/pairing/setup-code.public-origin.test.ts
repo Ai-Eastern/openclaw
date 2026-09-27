@@ -15,7 +15,7 @@ describe("pairing public origin", () => {
   });
 
   it.each(["serve", "funnel"] as const)(
-    "prefers public ingress over automatic remote URLs and Tailscale %s",
+    "preserves Tailscale %s ahead of publicOrigin for device pairing",
     async (mode) => {
       const config = {
         gateway: {
@@ -25,11 +25,14 @@ describe("pairing public origin", () => {
           tailscale: { mode },
         },
       } satisfies Parameters<typeof resolvePairingGatewayUrl>[0];
-      const runCommandWithTimeout = vi.fn();
+      const runCommandWithTimeout = vi.fn(async () => ({
+        code: 0,
+        stdout: '{"Self":{"DNSName":"gateway.tailnet.ts.net"}}',
+      }));
       const resolveOptions = { ...options, runCommandWithTimeout };
       await expect(resolvePairingGatewayUrl(config, resolveOptions)).resolves.toEqual({
-        url: "wss://gateway.example.test",
-        source: "gateway.publicOrigin",
+        url: "wss://gateway.tailnet.ts.net",
+        source: `gateway.tailscale.mode=${mode}`,
       });
       await expect(
         resolvePairingGatewayUrl(config, {
@@ -41,15 +44,15 @@ describe("pairing public origin", () => {
         url: "wss://pairing.example.test",
         source: "plugins.entries.device-pair.config.publicUrl",
       });
-      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
     },
   );
 
   it.each([
     {
       preferRemoteUrl: undefined,
-      url: "wss://gateway.example.test",
-      source: "gateway.publicOrigin",
+      url: "wss://remote.example.test",
+      source: "gateway.remote.url",
     },
     {
       preferRemoteUrl: true,
@@ -73,13 +76,35 @@ describe("pairing public origin", () => {
     },
   );
 
-  it("rejects an invalid publicOrigin before bind fallback", async () => {
+  it("preserves the advertised LAN address when publicOrigin is configured", async () => {
+    await expect(
+      resolvePairingGatewayUrl(
+        { gateway: { bind: "lan", port: 19001, publicOrigin: "https://gateway.example.test" } },
+        {
+          ...options,
+          networkInterfaces: () => ({
+            en0: [
+              {
+                address: "192.168.1.20",
+                family: "IPv4",
+                internal: false,
+                netmask: "255.255.255.0",
+                mac: "00:00:00:00:00:00",
+                cidr: "192.168.1.20/24",
+              },
+            ],
+          }),
+        },
+      ),
+    ).resolves.toEqual({ url: "ws://192.168.1.20:19001", source: "gateway.bind=lan" });
+  });
+
+  it("rejects an invalid publicOrigin when the loopback fallback needs it", async () => {
     await expect(
       resolvePairingGatewayUrl(
         {
           gateway: {
-            bind: "custom",
-            customBindHost: "127.0.0.1",
+            bind: "loopback",
             publicOrigin: "https://gateway.example.test:notaport",
           },
         },

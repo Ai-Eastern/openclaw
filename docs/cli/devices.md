@@ -91,14 +91,17 @@ refuses to mint a link. For a loopback Gateway behind public HTTPS ingress, set
 `gateway.publicOrigin` to the proxy's bare HTTPS origin and include the proxy's
 source address in `gateway.trustedProxies`.
 
-Join codes, `/pair`, and cloud node enrollment share endpoint selection:
-`plugins.entries.device-pair.config.publicUrl` comes first, followed by an explicitly
-preferred `gateway.remote.url`, then `gateway.publicOrigin`. Remaining discovery
-tries Tailscale Serve/Funnel, the non-preferred remote URL, and bind-derived
-addresses. `publicOrigin` identifies this Gateway's own ingress, so it takes
-precedence over automatic discovery but does not override explicit remote
-selection. Callers targeting the local Gateway omit the remote URL. HTTP(S)
-URLs become matching `ws:`/`wss:` pairing endpoints.
+Join codes, `/pair`, and QR setup preserve existing endpoint selection:
+`plugins.entries.device-pair.config.publicUrl`, an explicitly preferred
+`gateway.remote.url`, Tailscale Serve/Funnel, the non-preferred remote URL,
+then bind-derived addresses. `gateway.publicOrigin` is used only as the final
+fallback before the loopback-only error; it does not replace an existing route.
+Callers targeting the local Gateway omit the remote URL. HTTP(S) URLs become
+matching `ws:`/`wss:` pairing endpoints.
+
+[Cloud node enrollment](/gateway/cloud-workers) uses the same resolver with an
+explicit public-ingress preference: the pairing-specific override still wins,
+then `gateway.publicOrigin` precedes discovery for freshly provisioned workers.
 
 For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
+import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -515,12 +516,16 @@ describe("worker node enrollment", () => {
   it.each(
     [
       {
-        name: "uses shared gateway.publicOrigin resolution when the plugin has no pairing override",
+        name: "prefers shared publicOrigin over Tailscale for cloud enrollment",
         modes: ["connect"],
         config: {
           ...createConfig(),
-          gateway: { ...createConfig().gateway, tls: { enabled: true } },
-        },
+          gateway: {
+            ...createConfig().gateway,
+            tls: { enabled: true },
+            tailscale: { mode: "serve" },
+          },
+        } satisfies OpenClawConfig,
         expectedUrl: "wss://gateway.example.test",
         expectedFingerprint: undefined,
       },
@@ -560,6 +565,9 @@ describe("worker node enrollment", () => {
       },
     ].flatMap(({ modes, ...testCase }) => modes.map((mode) => ({ mode, ...testCase }))),
   )("$name ($mode)", async ({ config, expectedUrl, expectedFingerprint, mode }) => {
+    const discover = vi
+      .spyOn(processExec, "runCommandWithTimeout")
+      .mockRejectedValue(new Error("Unexpected endpoint discovery"));
     const record = await createProvisioning(mode === "resume" ? "existing-node" : undefined);
     const manager = createManager({
       getConfig: () => config,
@@ -567,6 +575,7 @@ describe("worker node enrollment", () => {
     });
 
     const enrollment = await manager.begin(record);
+    expect(discover).not.toHaveBeenCalled();
 
     expect(enrollment.mode).toBe(mode);
     if (enrollment.mode === "connect") {

@@ -63,9 +63,12 @@ type PairingSetupCommandRunner = (
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<PairingSetupCommandResult>;
 
+type PairingPublicOriginPreference = "fallback" | "prefer";
+
 type ResolvePairingSetupOptions = {
   env?: NodeJS.ProcessEnv;
   publicUrl?: string;
+  publicOriginPreference?: PairingPublicOriginPreference;
   preferRemoteUrl?: boolean;
   useLocalGateway?: boolean;
   forceSecure?: boolean;
@@ -303,6 +306,7 @@ export async function resolvePairingGatewayUrl(
   opts: {
     env: NodeJS.ProcessEnv;
     publicUrl?: string;
+    publicOriginPreference?: PairingPublicOriginPreference;
     preferRemoteUrl?: boolean;
     useLocalGateway?: boolean;
     forceSecure?: boolean;
@@ -321,27 +325,25 @@ export async function resolvePairingGatewayUrl(
     return { error: "Configured publicUrl is invalid." };
   }
 
+  const publicOrigin = cfg.gateway?.publicOrigin?.trim();
+  const publicOriginUrl = publicOrigin ? normalizeUrl(publicOrigin, scheme) : null;
+  const publicOriginResult = publicOrigin
+    ? publicOriginUrl
+      ? { url: publicOriginUrl, source: "gateway.publicOrigin" }
+      : { error: "Configured gateway.publicOrigin is invalid." }
+    : undefined;
+  if (opts.publicOriginPreference === "prefer" && publicOriginResult) {
+    return publicOriginResult;
+  }
+
   const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
   const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
   const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
-  const remoteResult = hasRemoteUrl
-    ? remoteUrl
-      ? { url: remoteUrl, source: "gateway.remote.url" }
-      : { error: "Configured gateway.remote.url is invalid." }
-    : undefined;
-  if (opts.preferRemoteUrl && remoteResult) {
-    return remoteResult;
+  if (hasRemoteUrl && !remoteUrl) {
+    return { error: "Configured gateway.remote.url is invalid." };
   }
-
-  const publicOrigin = cfg.gateway?.publicOrigin?.trim();
-  if (publicOrigin) {
-    const url = normalizeUrl(publicOrigin, scheme);
-    return url
-      ? { url, source: "gateway.publicOrigin" }
-      : { error: "Configured gateway.publicOrigin is invalid." };
-  }
-  if (remoteResult?.error) {
-    return remoteResult;
+  if (opts.preferRemoteUrl && remoteUrl) {
+    return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -357,8 +359,8 @@ export async function resolvePairingGatewayUrl(
     return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
-  if (remoteResult) {
-    return remoteResult;
+  if (remoteUrl) {
+    return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
   const advertisedLanHost =
@@ -384,7 +386,7 @@ export async function resolvePairingGatewayUrl(
     return bindResult;
   }
 
-  return { error: PAIRING_GATEWAY_LOOPBACK_ERROR };
+  return publicOriginResult ?? { error: PAIRING_GATEWAY_LOOPBACK_ERROR };
 }
 
 export function encodePairingSetupCode(payload: PairingSetupPayload): string {
@@ -489,6 +491,7 @@ export async function resolvePairingSetupFromConfig(
   const urlResult = await resolvePairingGatewayUrl(cfgForAuth, {
     env,
     publicUrl: options.publicUrl,
+    publicOriginPreference: options.publicOriginPreference,
     preferRemoteUrl: options.preferRemoteUrl,
     useLocalGateway: options.useLocalGateway,
     forceSecure: options.forceSecure,

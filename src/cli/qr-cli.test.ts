@@ -88,6 +88,7 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
 function createTailscaleRemoteRefConfig() {
   return {
     gateway: {
+      publicOrigin: "https://gateway.example.test",
       tailscale: { mode: "serve" },
       remote: {
         token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
@@ -611,11 +612,12 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("supports --remote with tailscale serve when remote token ref resolves", async () => {
+  it("preserves --remote Tailscale Serve with publicOrigin and no remote URL", async () => {
     loadConfig.mockReturnValue(createTailscaleRemoteRefConfig());
     resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
       resolvedConfig: {
         gateway: {
+          publicOrigin: "https://gateway.example.test",
           tailscale: { mode: "serve" },
           remote: {
             token: "tailscale-remote-token",

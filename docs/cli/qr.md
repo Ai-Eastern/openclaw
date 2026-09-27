@@ -33,7 +33,7 @@ openclaw devices approve <requestId>
 
 ## Options
 
-- `--remote`: use `gateway.remote.url` ahead of this Gateway's `gateway.publicOrigin`, keeping the endpoint aligned with remote credentials. Ignores `device-pair` plugin `publicUrl`; explicit `--url` or `--public-url` still takes precedence.
+- `--remote`: prefer `gateway.remote.url` and remote credentials; fall back to Tailscale Serve/Funnel when the remote URL is unset. Ignores `device-pair` plugin `publicUrl`; explicit `--url` or `--public-url` still takes precedence.
 - `--url <url>`: override the gateway URL used in the payload
 - `--public-url <url>`: override the public URL used in the payload
 - `--token <token>`: override the gateway token the bootstrap flow authenticates against
@@ -78,12 +78,13 @@ same manual cleanup; Doctor prints the relevant guidance.
 
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
 
-URL selection uses an explicit pairing override first, then an explicitly
-preferred remote URL, then `gateway.publicOrigin`, Tailscale Serve/Funnel, a
-non-preferred remote URL, and bind-derived addresses. Without `--remote`, the
-configured `plugins.entries.device-pair.config.publicUrl` supplies the pairing
-override. `gateway.publicOrigin` identifies this Gateway's own ingress; it
-precedes automatic discovery but never replaces an explicitly selected remote URL.
+URL selection preserves existing routes: an explicit pairing override, a
+preferred remote URL, Tailscale Serve/Funnel, a non-preferred remote URL, then
+bind-derived addresses. `gateway.publicOrigin` is only the final fallback before
+the loopback-only error, with or without `--remote`. Without `--remote`, the
+configured `plugins.entries.device-pair.config.publicUrl` supplies the override.
+Unlike QR setup, [cloud enrollment](/gateway/cloud-workers) explicitly asks the
+same resolver to prefer public ingress over discovery for fresh cloud workers.
 
 ## Auth resolution (no `--remote`)
 
