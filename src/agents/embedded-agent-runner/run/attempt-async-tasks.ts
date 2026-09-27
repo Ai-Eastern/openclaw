@@ -1,6 +1,3 @@
-/**
- * Waits for completion-required async tasks before finalizing an attempt.
- */
 import {
   createAbortError as createNamedAbortError,
   racePromiseWithAbortSignal,
@@ -23,7 +20,6 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
-/** Summary of completion-required async task waits performed before a cron run can finish. */
 export type CompletionRequiredAsyncTaskWaitResult = {
   waitedRunIds: string[];
   timedOutRunIds: string[];
@@ -43,7 +39,7 @@ function resolveAsyncTaskPollIntervalMs(): number {
 
 function createAbortError(signal: AbortSignal): Error {
   return createNamedAbortError("aborted", {
-    cause: "reason" in signal ? (signal as { reason?: unknown }).reason : undefined,
+    cause: signal.reason,
   });
 }
 
@@ -108,12 +104,6 @@ function collectAsyncTaskRunIds(
   // Registry lookup catches completion-required tasks started before their
   // tool metadata reached the current attempt result.
   for (const task of listCompletionTasks(read, normalizedSessionKey)) {
-    if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
-      continue;
-    }
-    if (isTerminalTaskStatus(task.status)) {
-      continue;
-    }
     addRunId(task.runId);
   }
   return runIds;
@@ -122,7 +112,12 @@ function collectAsyncTaskRunIds(
 function listCompletionTasks(read: TaskRegistryRead, sessionKey: string): TaskRecord[] {
   return read
     .listTasksForRelatedSessionKey(sessionKey)
-    .filter((task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey);
+    .filter(
+      (task) =>
+        (task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey) &&
+        COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
+        !isTerminalTaskStatus(task.status),
+    );
 }
 
 async function prepareCompletionTaskRead(signal?: AbortSignal): Promise<TaskRegistryRead> {
@@ -160,7 +155,6 @@ async function findTerminalTasks(
   return { pendingRunIds, terminalTasks };
 }
 
-/** Returns whether a cron run has non-terminal generated-media tasks that must settle first. */
 export async function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -178,15 +172,9 @@ export async function requiresCompletionRequiredAsyncTaskWait(params: {
     return true;
   }
   const read = await prepareCompletionTaskRead(params.abortSignal);
-  return listCompletionTasks(read, sessionKey).some(
-    (task) =>
-      COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
-      !isTerminalTaskStatus(task.status) &&
-      Boolean(task.runId?.trim()),
-  );
+  return listCompletionTasks(read, sessionKey).some((task) => Boolean(task.runId?.trim()));
 }
 
-/** Returns whether the current attempt should synchronously wait for media tasks. */
 export async function shouldWaitForCompletionRequiredAsyncTasks(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
