@@ -17,8 +17,10 @@ export type ChatTypingActorView = Omit<ChatTypingActorState, "retireAt"> & {
 };
 
 export type ChatTypingOverflow = {
-  // Anonymous copy only distinguishes zero, one, two, and several active peers.
-  activity: "idle" | "single" | "pair" | "several";
+  // Large cohorts retain their avatar sample; only the sentence is summarized.
+  several: boolean;
+  // At most two actual active overflow names when "several" would be untrue.
+  names: string[];
   exitDurationMs?: number;
 };
 

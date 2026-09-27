@@ -39,7 +39,7 @@ const TYPING_PREVIEW_INTERVAL_MS = 250;
 export abstract class ChatPaneSharing extends ChatPaneSharingActions {
   // The existing actor/timer owner also owns this bounded presentation cache.
   // Every mutation below refreshes it; reconnect, route, and teardown clear it.
-  private typingActiveCount = 0;
+  private readonly typingActiveIds = new Set<string>();
   private typingExitingCount = 0;
   private typingViews: ChatTypingActorView[] = [];
   protected typingOverflow?: ChatTypingOverflow;
@@ -393,7 +393,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     }
     this.typingTimers.clear();
     this.typingActors.clear();
-    this.typingActiveCount = 0;
+    this.typingActiveIds.clear();
     this.typingExitingCount = 0;
     this.refreshTypingPresentation();
   }
@@ -468,9 +468,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       ...(event.preview ? { preview: event.preview } : {}),
     };
     const previous = this.typingActors.get(event.actor.id);
-    if (!previous || previous.paused) {
-      this.typingActiveCount += 1;
-    }
+    this.typingActiveIds.add(event.actor.id);
     if (previous?.exitDurationMs !== undefined) {
       this.typingExitingCount -= 1;
     }
@@ -499,7 +497,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
         // animation finishes inside the idle limit, even after a delayed timer.
         if (!actor.paused) {
           actor.paused = true;
-          this.typingActiveCount -= 1;
+          this.typingActiveIds.delete(event.actor.id);
         }
         const untilExit = remaining - TYPING_DRAFT_EXIT_MS;
         if (untilExit <= 0) {
@@ -539,7 +537,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     if (!actor) {
       return false;
     }
-    this.typingActiveCount -= Number(!actor.paused);
+    this.typingActiveIds.delete(id);
     this.typingExitingCount -= Number(actor.exitDurationMs !== undefined);
     window.clearTimeout(this.typingTimers.get(id));
     this.typingTimers.delete(id);
@@ -549,7 +547,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
   private refreshTypingPresentation(exitDurationMs?: number): void {
     const generic = this.typingActors.size > 7;
     const views: ChatTypingActorView[] = [];
-    let overflowActive = this.typingActiveCount;
+    let overflowActive = this.typingActiveIds.size;
     let overflowExiting = this.typingExitingCount;
     // No roster sort, full preview projection, or offscreen avatar construction.
     // First arrivals keep their slots until removed, including while idle.
@@ -566,21 +564,25 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
         overflowActive -= Number(!actor.paused);
         overflowExiting -= Number(actor.exitDurationMs !== undefined);
       }
-      if (views.length === (generic ? 2 : 7)) {
+      if (views.length === 7) {
         break;
       }
     }
-    const overflowCount = this.typingActors.size - views.length;
+    const overflowCount = this.typingActors.size - 2;
+    const names: string[] = [];
+    if (generic && overflowActive < 3) {
+      // The active index contains at most these two overflow peers plus two
+      // previews here. Sparse activity never scans the retained idle roster.
+      for (const id of this.typingActiveIds) {
+        if (id !== views[0]?.id && id !== views[1]?.id) {
+          names.push(this.typingActors.get(id)?.label ?? id);
+        }
+      }
+    }
     const overflow: ChatTypingOverflow | undefined = generic
       ? {
-          activity:
-            overflowActive === 0
-              ? "idle"
-              : overflowActive === 1
-                ? "single"
-                : overflowActive === 2
-                  ? "pair"
-                  : "several",
+          several: overflowActive >= 3,
+          names,
           ...(overflowExiting === overflowCount
             ? { exitDurationMs: exitDurationMs ?? this.typingOverflow?.exitDurationMs }
             : {}),
@@ -598,7 +600,10 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
           previous.exitDurationMs === view.exitDurationMs
         );
       }) &&
-      overflow?.activity === this.typingOverflow?.activity &&
+      overflow?.several === this.typingOverflow?.several &&
+      overflow?.names.length === this.typingOverflow?.names.length &&
+      (overflow?.names.every((name, index) => name === this.typingOverflow?.names[index]) ??
+        true) &&
       overflow?.exitDurationMs === this.typingOverflow?.exitDurationMs
     ) {
       return;

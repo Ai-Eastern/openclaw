@@ -3238,7 +3238,7 @@ export const en: TranslationMap & {
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
       typingSeveral: "Several people are typing…",
-      typingCount: "{count} typing",
+      typingOthers: "{count} others",
       otherCollaborators: "Other collaborators",
       draftsGroup: "Drafts",
       typingDraftState: "is typing...",
