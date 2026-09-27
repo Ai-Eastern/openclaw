@@ -775,7 +775,6 @@ extensions/openai/realtime-voice-bridge.ts	3
 extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
 extensions/openai/tts.ts	2
-extensions/openai/video-generation-provider.ts	3
 extensions/opencode-go/reasoning-sanitizer.ts	2
 extensions/opencode-go/stream-termination.ts	8
 extensions/opencode/provider-catalog.ts	2
