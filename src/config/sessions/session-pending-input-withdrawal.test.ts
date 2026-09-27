@@ -110,7 +110,7 @@ it.each(["default", "shared"] as const)(
           request_hash: `request:${requestFingerprint}`,
         });
 
-        const hostSql = observeHostDataSql(state.env);
+        const hostSql = observeHostDataSql();
         try {
           expect(await discardSessionPendingInput(scope, "removed", assertCurrent)).toBe(true);
           expect(hostSql.queries).toEqual([]);
@@ -251,7 +251,6 @@ it("recovers the committed withdrawal when delivery of the worker result fails",
           stateContext?: Parameters<typeof original>[2],
           assertOperationCurrent?: Parameters<typeof original>[3],
           createAdmission?: Parameters<typeof original>[4],
-          requireStateLifecycle?: Parameters<typeof original>[5],
         ) => {
           let withdrawing = false;
           let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
@@ -297,7 +296,6 @@ it("recovers the committed withdrawal when delivery of the worker result fails",
                 }
                 return owned;
               }),
-            requireStateLifecycle,
           );
         },
       );
