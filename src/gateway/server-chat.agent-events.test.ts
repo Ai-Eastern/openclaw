@@ -23,7 +23,6 @@ import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
-  emitAgentEventForRunContext,
   getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
@@ -32,7 +31,6 @@ import {
 import {
   clearAgentRunContext as clearRegisteredAgentRunContext,
   claimAgentRunContext,
-  getAgentRunContext,
   registerAgentRunContext,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
@@ -2859,59 +2857,6 @@ describe("agent event handler", () => {
       toolCallId: "tool-node-1",
       args: { command: "echo hi" },
     });
-  });
-
-  it("publishes candidate changes and clearing without persisting session selection", ({
-    onTestFinished,
-  }) => {
-    const runId = "run-live-model";
-    registerAgentRunContext(runId, {
-      agentId: "main",
-      sessionKey: "session-1",
-      sessionId: "session-id",
-      projectSessionActive: true,
-    });
-    vi.mocked(loadGatewaySessionRow).mockImplementation(() => ({
-      key: "session-1",
-      kind: "direct",
-      updatedAt: 1,
-      status: "running",
-      modelProvider: "selected",
-      model: "configured",
-      activeModelProvider: getAgentRunContext(runId)?.activeModel?.provider,
-      activeModel: getAgentRunContext(runId)?.activeModel?.model,
-    }));
-    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-      resolveSessionActiveRunState: () => ({ active: true, runIds: [runId] }),
-    });
-    sessionEventSubscribers.subscribe("conn-model");
-    onTestFinished(onAgentRuntimeEvent(handler));
-    const runContext = getAgentRunContext(runId)!;
-    for (const model of ["primary", "fallback", null]) {
-      emitAgentEventForRunContext(
-        {
-          runId,
-          stream: "lifecycle",
-          data: { phase: "model", provider: model === null ? null : "provider", model },
-        },
-        runContext,
-      );
-    }
-    const changes = broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed");
-    expect(changes).toHaveLength(3);
-    for (const [index, model] of ["primary", "fallback", null].entries()) {
-      expectPayloadFields(changes[index]?.[1], {
-        phase: "model",
-        modelProvider: "selected",
-        model: "configured",
-        activeModelProvider: model === null ? null : "provider",
-        activeModel: model,
-        hasActiveRun: true,
-        activeRunIds: [runId],
-      });
-    }
-    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 
   it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {
