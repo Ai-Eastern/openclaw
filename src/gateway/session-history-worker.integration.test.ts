@@ -22,6 +22,7 @@ import {
 } from "../config/sessions/session-cold-storage.test-support.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import * as transcriptReconcile from "../config/sessions/session-transcript-reconcile.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
@@ -415,20 +416,51 @@ it("waits for a missing projection and serves the original history request", asy
       )
       .run(target.sessionId);
 
-    const page = await readChatHistoryPage({
-      entry,
-      provider: undefined,
-      sessionId: target.sessionId,
-      storePath: target.storePath,
-      sessionAgentId: target.agentId,
-      canonicalKey: target.sessionKey,
-      max: 10,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 8000,
-      offset: undefined,
-      messageId: undefined,
-    });
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+    const projectionWaits: Array<{
+      durationMs: number;
+      outcome: "returned" | "threw";
+      signalAborted: boolean | undefined;
+      abortReasonName: string | undefined;
+    }> = [];
+    const waitForProjection = transcriptReconcile.waitForSessionTranscriptProjection;
+    const projectionWait = vi
+      .spyOn(transcriptReconcile, "waitForSessionTranscriptProjection")
+      .mockImplementation(async (scope, signal) => {
+        const startedAt = performance.now();
+        let outcome: "returned" | "threw" = "threw";
+        try {
+          await waitForProjection(scope, signal);
+          outcome = "returned";
+        } finally {
+          projectionWaits.push({
+            durationMs: Math.round(performance.now() - startedAt),
+            outcome,
+            signalAborted: signal?.aborted,
+            abortReasonName: signal?.reason instanceof Error ? signal.reason.name : undefined,
+          });
+        }
+      });
+    try {
+      const page = await readChatHistoryPage({
+        entry,
+        provider: undefined,
+        sessionId: target.sessionId,
+        storePath: target.storePath,
+        sessionAgentId: target.agentId,
+        canonicalKey: target.sessionKey,
+        max: 10,
+        maxHistoryBytes: 100_000,
+        effectiveMaxChars: 8000,
+        offset: undefined,
+        messageId: undefined,
+      });
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+    } catch (error) {
+      console.error("History projection recovery failed", { pid: process.pid, projectionWaits });
+      throw error;
+    } finally {
+      projectionWait.mockRestore();
+    }
   });
 });
 
