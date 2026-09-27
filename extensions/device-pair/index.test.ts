@@ -739,6 +739,34 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Gateway: wss://gateway.example.test");
   });
 
+  it.each(["publicUrl", "remote"] as const)(
+    "keeps /pair setup codes origin-only for a path-qualified %s",
+    async (source) => {
+      const text = requireText(
+        await runDefaultSetup({
+          config: {
+            gateway: {
+              auth: { mode: "token", token: "gateway-token" },
+              ...(source === "remote" ? { remote: { url: "https://pair.example/extra" } } : {}),
+            },
+          },
+          pluginConfig: {
+            publicUrl: source === "publicUrl" ? "https://pair.example/extra" : undefined,
+          },
+        }),
+      );
+      const code = text.match(/Setup code:\n([A-Za-z0-9_-]+)/u)?.[1];
+      if (!code) {
+        throw new Error("Missing setup code in /pair reply");
+      }
+      expect(JSON.parse(Buffer.from(code, "base64url").toString("utf8"))).toMatchObject({
+        url: "wss://pair.example",
+        bootstrapToken: "boot-token",
+      });
+      expect(text.split("\n")).toContain("Gateway: wss://pair.example");
+    },
+  );
+
   it("keeps secure setup limited for non-admin gateway callers", async () => {
     const text = requireText(await runDefaultSetup());
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(LIMITED_SETUP_REQUEST);

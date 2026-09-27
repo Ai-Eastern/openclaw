@@ -530,10 +530,10 @@ describe("worker node enrollment", () => {
         expectedFingerprint: undefined,
       },
       {
-        name: "prefers the device-pair plugin publicUrl over gateway.publicOrigin",
+        name: "preserves the cloud pairing publicUrl path ahead of gateway.publicOrigin",
         modes: ["connect"],
-        config: createConfig(PLUGIN_PUBLIC_URL),
-        expectedUrl: PLUGIN_PUBLIC_URL,
+        config: createConfig(`${PLUGIN_PUBLIC_URL}/extra`),
+        expectedUrl: `${PLUGIN_PUBLIC_URL}/extra`,
         expectedFingerprint: undefined,
       },
       {
@@ -586,7 +586,7 @@ describe("worker node enrollment", () => {
       expect(enrollment.deviceId).toBe("existing-node");
     }
     expect(enrollment.nodeBootstrap).toMatchObject({
-      url: `${expectedUrl.replace(/^wss:/u, "https:")}/__openclaw__/worker-bootstrap/artifacts/${artifact().tarballSha256}`,
+      url: `${new URL(expectedUrl.replace(/^wss:/u, "https:")).origin}/__openclaw__/worker-bootstrap/artifacts/${artifact().tarballSha256}`,
       sha256: artifact().tarballSha256,
       bytes: 1,
       openclawVersion: "2026.8.1",

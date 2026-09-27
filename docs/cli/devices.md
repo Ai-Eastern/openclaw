@@ -99,6 +99,11 @@ fallback before the loopback-only error; it does not replace an existing route.
 Callers targeting the local Gateway omit the remote URL. HTTP(S) URLs become
 matching `ws:`/`wss:` pairing endpoints.
 
+Join codes preserve the context path of a fully qualified `publicUrl`: for
+`https://pair.example/extra`, the join URL begins with
+`https://pair.example/extra/j/`. The device-pair plugin's `/pair` command instead
+retains its historical origin-only WebSocket endpoint, `wss://pair.example`.
+
 [Cloud node enrollment](/gateway/cloud-workers) uses the same resolver with an
 explicit public-ingress preference: the pairing-specific override still wins,
 then `gateway.publicOrigin` precedes discovery for freshly provisioned workers.

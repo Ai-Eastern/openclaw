@@ -206,6 +206,7 @@ async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi): Promise<R
   const result = await resolvePairingGatewayUrl(api.config, {
     env: process.env,
     publicUrl: pluginCfg.publicUrl,
+    urlPathMode: "origin-only",
     networkInterfaces: os.networkInterfaces,
     runCommandWithTimeout: (argv, opts) =>
       runPluginCommandWithTimeout({ argv, timeoutMs: opts.timeoutMs }),
