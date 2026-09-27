@@ -9,7 +9,6 @@ registerCommandPaletteEnglish();
 export {
   formatKeyboardShortcutCombo,
   formatKeyboardShortcutParts,
-  isApplePlatform,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "./keyboard-shortcut-contract.ts";

@@ -7,11 +7,11 @@ import { t } from "../i18n/index.ts";
 import {
   formatKeyboardShortcutCombo,
   formatKeyboardShortcutParts,
-  isApplePlatform,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
   resolveKeyboardShortcutSections,
 } from "./keyboard-shortcut-catalog.ts";
+import { isApplePlatform } from "./keyboard-shortcut-contract.ts";
 
 describe("keyboard shortcut catalog matching", () => {
   afterEach(() => vi.restoreAllMocks());
