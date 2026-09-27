@@ -234,6 +234,10 @@ function forbiddenPath(path: string): boolean {
 }
 const FORBIDDEN_ADDITION =
   /(?:\.\s*(?:skip|only|todo|fails)\b|\[\s*["'](?:skip|only|todo|fails)["']\s*\]|\bretr(?:y|ies)\b|\b(?:testTimeout|hookTimeout)\b|\bvi\s*\.\s*setConfig\b|@ts-(?:nocheck|ignore|expect-error)\b|\b(?:eslint|oxlint)-disable)/u;
+const TEST_LIKE_PATH = /(?:\.test\.|test-support|test-utils|\.test-harness\.|(?:^|\/)test\/)/u;
+// Added fragments may omit the surrounding test call; reject controls conservatively in test code.
+const FORBIDDEN_TEST_ADDITION =
+  /(?:\.\s*(?:skip|run)If\b|\[\s*["'](?:skip|run)If["']\s*\]|\b(?:skip|only|todo|fails|timeout|retry|repeats)\s*:|,\s*[+-]?(?:0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?)\s*,?\s*\))/u;
 const assertionCount = (text: string) =>
   [...text.matchAll(/\b(?:expect\s*\(|assert(?:\s*\.\s*\w+)?\s*\()/gu)].length;
 export const patchSha256 = (patch: string) => createHash("sha256").update(patch).digest("hex");
@@ -354,7 +358,10 @@ export function guardPatch(patch: string, result: Result, expectedSha256?: strin
     if (!hunks) {
       reasons.push(`No text hunks: ${path}`);
     }
-    if (FORBIDDEN_ADDITION.test(added)) {
+    if (
+      FORBIDDEN_ADDITION.test(added) ||
+      (TEST_LIKE_PATH.test(path) && FORBIDDEN_TEST_ADDITION.test(added))
+    ) {
       reasons.push(`Forbidden added pattern: ${path}`);
     }
     if (assertionCount(added) < assertionCount(removed)) {

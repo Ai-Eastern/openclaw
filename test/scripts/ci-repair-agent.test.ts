@@ -165,6 +165,64 @@ describe("patch-only publication guard", () => {
       "Forbidden added pattern: src/example.test.ts",
     );
   });
+  it.each([
+    "test.skipIf(flag)('case', fn);",
+    "test.runIf(flag)('case', fn);",
+    "it.skipIf(flag)('case', fn);",
+    "it.runIf(flag)('case', fn);",
+    "describe.skipIf(flag)('suite', fn);",
+    "describe.runIf(flag)('suite', fn);",
+    "bench.skipIf(flag)('case', fn);",
+    "bench.runIf(flag)('case', fn);",
+    "it['skipIf'](flag)('case', fn);",
+    "test . runIf (flag)('case', fn);",
+    "it('case', { skip: true }, fn);",
+    "test('case', fn, { only: true });",
+    "describe('suite', { todo: true }, fn);",
+    "it('case', { fails: true }, fn);",
+    "test('case', { timeout: 30_000 }, fn);",
+    "test('case', { retry: 2 }, fn);",
+    "describe('suite', { repeats: 2 }, fn);",
+    "  timeout: 30_000,",
+    "it('case', fn, 30000);",
+    "test('case', fn, 30_000);",
+    "describe('suite', fn, 3e4);",
+    "}, 30000)",
+    ", 30_000)",
+    "it('case', fn, 30_000,);",
+    "test('case', fn, 0x7530);",
+    "describe('suite', fn, 30_000.0);",
+  ])("rejects added Vitest controls in test files: %s", (line) => {
+    expect(guardPatch(patch("src/example.test.ts", "const value = 1;", line), result).passed).toBe(
+      false,
+    );
+  });
+  it.each([
+    "src/example.test.ts",
+    "ui/src/e2e/example.e2e.test.ts",
+    "src/example.test-support.ts",
+    "src/test-utils/fixture.ts",
+    "src/example.test-harness.ts",
+    "test/helpers/fixture.ts",
+    "extensions/example/test/fixture.ts",
+  ])("applies test-control rules to %s", (path) => {
+    expect(
+      guardPatch(patch(path, "const options = {};", "const options = { timeout: 30000 };"), result)
+        .passed,
+    ).toBe(false);
+  });
+  it("keeps ordinary timeout options allowed in product code", () => {
+    expect(
+      guardPatch(
+        patch("src/client.ts", "const options = {};", "const options = { timeout: 30000 };"),
+        result,
+      ).passed,
+    ).toBe(true);
+    expect(
+      guardPatch(patch("src/client.ts", "const value = 1;", "test.skip('case', fn);"), result)
+        .passed,
+    ).toBe(false);
+  });
   it("enforces file and changed-line budgets at their boundaries", () => {
     expect(
       guardPatch([1, 2, 3, 4].map((i) => patch(`src/file${i}.ts`)).join(""), result).passed,

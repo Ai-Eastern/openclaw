@@ -106,8 +106,11 @@ package, lockfile, snapshot, baseline, ratchet, inventory, generated, changelog,
 TypeScript/Vitest configuration, workspace/package-manager settings, Git attributes,
 submodules, ignore files, and controller changes; skip/only/todo/expected-failure
 markers, retries, timeout changes, type suppressions, and lint disables; and any
-per-file loss of assertion calls. These syntactic checks do not prove unchanged
-coverage. Human review remains required, particularly for flakes.
+per-file loss of assertion calls. Test files and helpers additionally reject
+conditional test controls, test-control option keys, and trailing numeric timeout
+arguments. Product files retain the global rules, which allow ordinary `timeout:`
+options. Conservative matches request diagnosis instead of a repair PR. These
+syntactic checks do not prove unchanged coverage. Human review remains required, particularly for flakes.
 
 A permitted repair is committed locally with hooks disabled, rebased onto freshly
 fetched public `main`, and tested again. Conflicts stop publication. Previously
