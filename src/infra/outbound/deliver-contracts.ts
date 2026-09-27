@@ -217,6 +217,8 @@ export type DeliverOutboundPayloadsCoreParams = {
   completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Producer-specific durable recovery attempt budget. */
   maxRetries?: number;
+  /** @internal Recovery may reconcile a previous send, but cannot publish a new draft. */
+  recoveryMode?: "reconcile-only";
   /** @internal Retry this producer's pending intent only when no platform send began. */
   reusePendingDeliveryIntent?: boolean;
   /** @internal Serializable owner state finalized after live or recovered delivery. */

@@ -52,6 +52,8 @@ import {
 } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import { recordGroupParticipationInput } from "./group-participation-inputs.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
@@ -316,6 +318,7 @@ export async function runReplyAgent(
   });
 
   if (messageInjectionDisposition === "accepted") {
+    recordGroupParticipationInput(activeReplyOperation, followupRun, "steer");
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "accepted", mode: "steer" };
     }
@@ -406,6 +409,7 @@ export async function runReplyAgent(
     // The queue must stay dormant while the active owner can still collect
     // messages. Registering after enqueue closes the owner-clear race.
     const queuedOperationOwner = replyRunRegistry.get(queueKey) ?? activeReplyOperation;
+    recordGroupParticipationInput(queuedOperationOwner, followupRun);
     if (queuedOperationOwner) {
       scheduleFollowupDrainAfterReplyOperationClear({
         operation: queuedOperationOwner,
@@ -426,6 +430,7 @@ export async function runReplyAgent(
     return undefined;
   }
 
+  recordGroupParticipationInput(providedReplyOperation, followupRun, "initial");
   followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
     originatingChannel: sessionCtx.OriginatingChannel,
     messageProvider: followupRun.run.messageProvider,
@@ -664,6 +669,12 @@ export async function runReplyAgent(
       followupRun.replyOperationRunStates,
       replyOperation,
     );
+    if (readGroupParticipationRun(replyOperation)?.isPrivate) {
+      if (!replyOperation.result) {
+        replyOperation.fail("run_failed", error);
+      }
+      return returnWithQueuedFollowupDrain(undefined);
+    }
     return await handleReplyAgentRunError(error, {
       resolveVisibleReplyDelivery,
       isHeartbeat,

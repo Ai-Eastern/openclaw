@@ -73,6 +73,7 @@ import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
@@ -228,7 +229,9 @@ async function executeAgentTurnInternalLoop(
     if (params.replyOperation) {
       markReplyOperationExecutionStarted(params.replyOperation);
     }
-    params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
+    if (!readGroupParticipationRun(params.replyOperation)?.isPrivate) {
+      params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
+    }
   };
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
@@ -242,7 +245,9 @@ async function executeAgentTurnInternalLoop(
     const startupPhase = resolveRunStartupPhase(info.phase);
     if (startupPhase && startupPhase !== lastRunStartupPhase) {
       lastRunStartupPhase = startupPhase;
-      emitAgentRunStatusEvent({ runId, phase: startupPhase });
+      if (!readGroupParticipationRun(params.replyOperation)?.isPrivate) {
+        emitAgentRunStatusEvent({ runId, phase: startupPhase });
+      }
     }
     if (info.phase === "model_call_started" || info.phase === "process_spawned") {
       commitMcpAppModelContext();
@@ -257,6 +262,9 @@ async function executeAgentTurnInternalLoop(
       return;
     }
     notifyAgentRunStart();
+    if (readGroupParticipationRun(params.replyOperation)?.isPrivate) {
+      return;
+    }
     void (
       params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
     ).catch((err: unknown) => {
@@ -681,6 +689,35 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
+    if (readGroupParticipationRun(params.replyOperation)?.mode === "observe") {
+      const recorder = params.followupRun.userTurnTranscriptRecorder;
+      if (recorder && !recorder.hasPersisted()) {
+        const persisted = await recorder.persistApproved({
+          expectedSessionId: params.followupRun.run.sessionId,
+          ...(params.sessionKey
+            ? {
+                target: {
+                  agentId: params.followupRun.run.agentId,
+                  sessionId: params.followupRun.run.sessionId,
+                  sessionKey: params.sessionKey,
+                  storePath: params.storePath,
+                  sessionEntry: params.getActiveSessionEntry(),
+                  sessionStore: params.activeSessionStore,
+                  config: params.followupRun.run.config,
+                  cwd: params.followupRun.run.workspaceDir,
+                },
+              }
+            : {}),
+        });
+        if (!persisted) {
+          throw new Error("The group source could not be committed to its session");
+        }
+      }
+      params.replyOperation?.abortSignal.throwIfAborted();
+      const result: AgentTurnExecutionResult = { runId, outcome: { kind: "observed" } };
+      recordAgentTurnExecutionOutcome(executionParams, result);
+      return result;
+    }
     const result = await executeAgentTurnOutcome(executionParams);
     recordAgentTurnExecutionOutcome(executionParams, result);
     return result;

@@ -77,7 +77,7 @@ import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
+import { createEmbeddedLogicalTurnContinuation } from "./logical-turn-continuation.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -247,7 +247,7 @@ async function runEmbeddedAgentInternal(
     throwIfAborted();
     return enqueueGlobal(async () => {
       const started = Date.now();
-      const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
+      const refresh = createEmbeddedLogicalTurnContinuation(params);
       const usage = createUsageAccumulator();
       let refreshed = false;
       let generationCleanup = Promise.resolve();

@@ -19,6 +19,7 @@ import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.
 import type { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -60,13 +61,14 @@ export async function completeReplyAgentRun(input: {
   const { autoCompactionCount, runResult, verboseEnabled } = accounting;
   const { completedSourceReplyDelivery, guardedReplyPayloads, responseUsageLine } = prepared;
   let { activeSessionEntry } = prepared;
+  const privateContribution = readGroupParticipationRun(context.replyOperation)?.isPrivate === true;
 
   // Prepend verbose operational notices. Model fallback notices are prepared
   // earlier so they pass through normal reply threading and stream-dedupe.
   let finalPayloads = guardedReplyPayloads;
   const prefixNotices: ReplyPayload[] = [];
 
-  if (verboseEnabled && activeIsNewSession) {
+  if (!privateContribution && verboseEnabled && activeIsNewSession) {
     prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
   }
 
@@ -99,22 +101,24 @@ export async function completeReplyAgentRun(input: {
       }
     }
 
-    if (verboseEnabled) {
+    if (!privateContribution && verboseEnabled) {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
   }
-  const trailingPluginStatusPayload = await buildReplyDiagnosticsPayload({
-    activeSessionEntry,
-    followupRun,
-    accounting,
-    cfg,
-    storePath,
-    userText: sessionCtx.commandText || sessionCtx.agentText,
-    resolvedVerboseLevel,
-    resolvedBlockStreamingBreak,
-    preflightCompactionApplied,
-  });
+  const trailingPluginStatusPayload = privateContribution
+    ? undefined
+    : await buildReplyDiagnosticsPayload({
+        activeSessionEntry,
+        followupRun,
+        accounting,
+        cfg,
+        storePath,
+        userText: sessionCtx.commandText || sessionCtx.agentText,
+        resolvedVerboseLevel,
+        resolvedBlockStreamingBreak,
+        preflightCompactionApplied,
+      });
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
   const rawAssistantText = isHookBlockedRun
     ? undefined
@@ -155,16 +159,18 @@ export async function completeReplyAgentRun(input: {
     );
     // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
     // recovering here would duplicate that message.
-    const recovery = resolveStrandedReplyRecovery({
-      base: followupRun,
-      payloads: finalPayloads,
-      finalText: assistantFinalText,
-      sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-      sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-      successfulSourceReplyDelivery: completedSourceReplyDelivery,
-      isHeartbeat,
-      isRoomEvent: sessionCtx.InboundEventKind === "room_event",
-    });
+    const recovery = privateContribution
+      ? { kind: "none" as const }
+      : resolveStrandedReplyRecovery({
+          base: followupRun,
+          payloads: finalPayloads,
+          finalText: assistantFinalText,
+          sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+          sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+          successfulSourceReplyDelivery: completedSourceReplyDelivery,
+          isHeartbeat,
+          isRoomEvent: sessionCtx.InboundEventKind === "room_event",
+        });
     if (recovery.kind === "retry" || (recovery.kind === "diagnostic" && recovery.warn)) {
       warnPrivateMessageToolFinal({
         sessionKey,
@@ -254,7 +260,9 @@ export async function completeReplyAgentRun(input: {
           entry.sessionId === expectedSessionId
             ? {
                 pendingFinalDelivery: {
-                  ...(resolvedPendingText && commandOwnerReference === undefined
+                  ...(resolvedPendingText &&
+                  commandOwnerReference === undefined &&
+                  !privateContribution
                     ? { kind: "replayable" as const, text: resolvedPendingText }
                     : { kind: "transport-only" as const }),
                   intentId: pendingFinalDeliveryIntentId,

@@ -8,6 +8,7 @@ import type { CompactionRequestBudget } from "../../sessions/compaction/request-
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedSettledDraftReviewer } from "./turn-continuation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type CompactionAccountingTarget = Readonly<
@@ -63,7 +64,11 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Re-admit from the committed transcript without persisting the original prompt again. */
   pluginRuntimeRefreshContinuation?: true;
+  /** An internal prompt continues the admitted task instead of submitting another user input. */
+  turnContinuation?: true;
+  continuationMessages?: EmbeddedRunAttemptParams["continuationMessages"];
   pluginRuntimeRefreshMessages?: EmbeddedRunAttemptParams["pluginRuntimeRefreshMessages"];
+  reviewSettledDraft?: EmbeddedSettledDraftReviewer;
   /** Host-only transfer of attempt terminal resources to the logical turn. */
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   /** Aborts the logical turn when its retained embedded handle is cancelled. */

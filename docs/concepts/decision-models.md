@@ -32,11 +32,28 @@ page for its host requirements.
 Decision models have a separate **Decision** picker in the Control UI. Selection
 chooses the provider for explicit evaluation and supported consumers. The core
 `decision_evaluate` tool follows that selection plus ordinary tool policy.
-Selection does not start background work or replace the chat model.
-Automatic experimental consumers additionally require explicit
-[Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
-That Labs entry currently provides the gate foundation only, with no automatic
-consumers connected; explicit `decision_evaluate` remains independent of Labs.
+Selection also enables group participation decisions for embedded harnesses
+when mention gating is disabled. The primary model still writes replies and
+uses tools. Experimental Decision assistance has its own
+[opt-in](/concepts/experimental-features#decision-assistance).
+
+## Group participation
+
+In groups and channels with mention gating disabled, a configured `decisionModel`
+helps the agent distinguish invitations from opportunities to contribute.
+This behavior uses embedded harnesses, including the Codex harness. Generic CLI
+backends keep their existing reply behavior.
+
+Invited requests use the existing permissions, tools, streaming, and delivery
+policy. For an unsolicited contribution, the agent investigates privately with
+permitted read tools. It sends only a supported, useful contribution after the
+Decision Model reviews the actual draft. Clarification-only replies, empty lookup
+reports, and promises to investigate stay silent. New accepted messages require
+the agent to update its draft before another review.
+
+No additional participation setting is needed. If the Decision Model is
+unavailable, the turn resumes its ordinary behavior with the original permissions
+and delivery policy, using the work already completed. Cancellation ends the turn.
 
 ## Choose a provider and model
 

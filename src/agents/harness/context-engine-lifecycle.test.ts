@@ -1,5 +1,5 @@
 // Covers context-engine message filtering, assemble validation, and turn finalization.
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { estimateTokens, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildMemorySystemPromptAddition } from "../../context-engine/delegate.js";
 import {
@@ -87,6 +87,32 @@ function uniqueConfiguredProofEngineId() {
 }
 
 describe("harness context engine lifecycle", () => {
+  it("windows old history to keep completed current-turn work within the prompt budget", async () => {
+    const history = textMessage("user", "Old conversation. ".repeat(300), 1);
+    const evidence = textMessage("assistant", "Completed lookup evidence. ".repeat(300), 2);
+    const tokenBudget = Math.max(estimateTokens(history), estimateTokens(evidence)) + 100;
+    const contextEngine = createContextEngine({
+      assemble: async ({ messages, tokenBudget: assemblyBudget }) => {
+        const selected = messages.filter((message) => estimateTokens(message) <= assemblyBudget!);
+        return {
+          messages: selected,
+          estimatedTokens: selected.reduce((sum, message) => sum + estimateTokens(message), 0),
+        };
+      },
+    });
+    const result = await assembleHarnessContextEngine({
+      ...sessionParams,
+      contextEngine,
+      modelId: "test-model",
+      messages: [history],
+      currentTurnMessages: [evidence],
+      tokenBudget,
+    });
+    expect(result?.messages).toEqual([evidence]);
+    expect(result?.estimatedTokens).toBeGreaterThan(0);
+    expect(result?.estimatedTokens).toBeLessThanOrEqual(tokenBudget);
+  });
+
   it("forwards session keys across bootstrap, assemble, and afterTurn hooks", async () => {
     const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
     const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({

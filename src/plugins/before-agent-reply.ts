@@ -14,8 +14,10 @@ import { isPluginHookAgentTrigger } from "./hook-types.js";
 const BEFORE_AGENT_REPLY_OBSERVER_KEY = Symbol.for("openclaw.beforeAgentReply.observer");
 
 type BeforeAgentReplyObserver = {
-  beforeDispatch: () => Promise<boolean | void>;
-  afterDispatch: (
+  /** Deferred preparation must not consume the once-per-turn hook admission. */
+  shouldDispatch?: () => boolean;
+  beforeDispatch?: () => Promise<boolean | void>;
+  afterDispatch?: (
     result: PluginHookBeforeAgentReplyResult | undefined,
   ) => Promise<PluginHookBeforeAgentReplyResult | undefined>;
 };
@@ -52,6 +54,13 @@ export function runBeforeAgentReplyForTurn(params: {
   if (!isPluginHookAgentTrigger(trigger)) {
     return Promise.resolve(undefined);
   }
+  const scope = beforeAgentReplyObserver.getStore();
+  if (scope?.shouldDispatch && (!scope.runId || scope.runId === params.runId)) {
+    scope.runId ??= params.runId;
+    if (!scope.shouldDispatch()) {
+      return Promise.resolve(undefined);
+    }
+  }
   const context = { ...params.context, trigger };
   return runOncePerAgentRun(params.runId, "before_agent_reply", async () => {
     const hookRunner = getGlobalHookRunner();
@@ -68,7 +77,7 @@ export function runBeforeAgentReplyForTurn(params: {
     if (observer && !observer.runId) {
       observer.runId = params.runId;
     }
-    if ((await observer?.beforeDispatch()) === false) {
+    if ((await observer?.beforeDispatch?.()) === false) {
       return undefined;
     }
     params.onDispatch?.();
@@ -76,7 +85,7 @@ export function runBeforeAgentReplyForTurn(params: {
     if (!result?.handled) {
       params.onDeclined?.();
     }
-    if (observer) {
+    if (observer?.afterDispatch) {
       result = await observer.afterDispatch(result);
     }
     return result;

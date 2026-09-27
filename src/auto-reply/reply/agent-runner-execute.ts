@@ -23,6 +23,10 @@ import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
+  prepareGroupParticipationRun,
+  readGroupParticipationRun,
+} from "./group-participation-run.js";
+import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
 } from "./pending-final-delivery.js";
@@ -129,12 +133,30 @@ export async function executePreparedReplyAgentRun(
     return result;
   };
 
-  await typingSignals.signalRunStart();
+  const participation = await prepareGroupParticipationRun({
+    run: () => followupRun,
+    operation: replyOperation,
+    sessionKey,
+    storePath,
+    sessionEntry: activeSessionEntry,
+    onOrdinaryBehavior: async () => {
+      const admission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+      if (admission === "duplicate-source") {
+        throw new Error("The group source no longer owns its reply");
+      }
+    },
+  });
+  if (!participation?.isPrivate) {
+    await typingSignals.signalRunStart();
+  }
 
   const preflightAdmission = readPendingUserTurnTranscriptAdmission(
     followupRun.userTurnTranscriptRecorder,
   );
   const checkpointMemory = async (entry: SessionEntry) => {
+    if (participation?.isPrivate) {
+      return entry;
+    }
     const flushed = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         ...context,
@@ -153,20 +175,22 @@ export async function executePreparedReplyAgentRun(
   };
 
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-    runSessionCompactionIfNeeded({
-      ...context,
-      pendingUserEntryId: preflightAdmission?.entryId,
-      promptForEstimate: followupRun.prompt,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
-      abortSignal: replyOperation.abortSignal,
-      beforeCompaction: checkpointMemory,
-      onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
-      onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
-      onCompactionNotice: sendDirectCompactionNotice,
-    }),
-  );
+  if (participation?.mode !== "observe") {
+    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+      runSessionCompactionIfNeeded({
+        ...context,
+        pendingUserEntryId: preflightAdmission?.entryId,
+        promptForEstimate: followupRun.prompt,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        abortSignal: replyOperation.abortSignal,
+        beforeCompaction: checkpointMemory,
+        onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
+        onCompactionNotice: participation?.isPrivate ? undefined : sendDirectCompactionNotice,
+      }),
+    );
+  }
   setActiveSessionEntry(activeSessionEntry);
   const preflightCompactionApplied =
     (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
@@ -197,6 +221,7 @@ export async function executePreparedReplyAgentRun(
   await turnAdoptionLifecycle?.onAdopted();
   const runOutcome = await withBeforeAgentReplyObserver(
     {
+      shouldDispatch: () => !participation?.isPrivate,
       beforeDispatch: async () => {
         return await beginBeforeAgentReply();
       },
@@ -295,7 +320,7 @@ export async function executePreparedReplyAgentRun(
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
     }
     return returnWithQueuedFollowupDrain(
-      runOutcome.outcome.kind === "rejected"
+      runOutcome.outcome.kind === "rejected" && !participation?.isPrivate
         ? markPostCompactionModelFailurePayload(
             runOutcome.outcome.postCompactionModelFailure,
             runOutcome.outcome.payload,
@@ -373,7 +398,7 @@ export function createReplyAgentRestartRecoveryController(
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
     resolveDeliveryContext: (entry) =>
-      sessionKey
+      sessionKey && !readGroupParticipationRun(replyOperation)?.isPrivate
         ? resolveReplyRunDeliveryContext({
             cfg,
             sessionCtx,

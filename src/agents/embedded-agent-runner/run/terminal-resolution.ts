@@ -27,7 +27,6 @@ import type {
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import {
   hasAttemptTerminalState,
-  resolveCurrentAttemptAssistant,
   shouldContinueInteractiveAcceptedSessionSpawns,
 } from "./attempt-terminal-evidence.js";
 import {
@@ -36,12 +35,10 @@ import {
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
-import { countSettledTurnDeliveryPayloads } from "./incomplete-turn-classification.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveSettledToolBatchEvidence,
-  resolveSettledToolTerminalContinuationInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import {
@@ -65,6 +62,8 @@ import {
   type EmbeddedRunTerminalRetryState,
 } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
+
+export { resolveSettledTurnFinalizationRequest } from "./settled-turn-finalization-request.js";
 
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
@@ -98,70 +97,6 @@ type TerminalResolution =
   | { action: "retry" }
   | { action: "complete"; result: EmbeddedAgentRunResult };
 
-export function resolveSettledTurnFinalizationRequest(input: {
-  runParams: TerminalRunParams;
-  attempt: EmbeddedRunAttemptResult;
-  activeErrorContext: { provider: string; model: string };
-  modelApi: Parameters<typeof resolveReasoningOnlyRetryInstruction>[0]["modelApi"];
-  executionContract: Parameters<
-    typeof resolveReasoningOnlyRetryInstruction
-  >[0]["executionContract"];
-  payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
-  recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
-  hasTerminalToolPresentation: boolean;
-  terminalState: EmbeddedRunTerminalState;
-  settledTurnFinalizationAvailable: boolean;
-  replyDeliveryState?: ReplyDeliveryState;
-}): string | null {
-  const terminalAssistant = resolveCurrentAttemptAssistant(input.attempt);
-  if (
-    !input.settledTurnFinalizationAvailable ||
-    isTerminalAssistantError(terminalAssistant) ||
-    resolveSourceReplyDelivery(input.attempt, input.replyDeliveryState) !== "missing"
-  ) {
-    return null;
-  }
-  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
-  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  // Generated errors and pre-tool commentary are fallback surfaces, not authored answers.
-  const preparedPayloadCount = countSettledTurnDeliveryPayloads({
-    payloads: input.payloadsWithToolMedia,
-    attempt: input.attempt,
-  });
-  const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
-    isCronTrigger: input.runParams.trigger === "cron",
-    payloadCount: preparedPayloadCount,
-    aborted: terminalAborted,
-    timedOut: terminalTimedOut,
-    attempt: input.attempt,
-  });
-  const payloadCount = input.recoveredFinalAssistantPayloadsAfterPromptTimeout
-    ? input.recoveredFinalAssistantPayloadsAfterPromptTimeout.length
-    : preparedPayloadCount || (silentToolResultReplyPayload ? 1 : 0);
-  const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    terminalReplyExpectation: resolveReplyExpectation(input.runParams),
-    payloadCount,
-    aborted: terminalAborted,
-    timedOut: terminalTimedOut,
-    attempt: input.attempt,
-  });
-  if (emptyAssistantReplyIsSilent) {
-    return null;
-  }
-  return resolveSettledToolTerminalContinuationInstruction({
-    provider: input.activeErrorContext.provider,
-    modelId: input.activeErrorContext.model,
-    modelApi: input.modelApi,
-    executionContract: input.executionContract,
-    allowEmptyStopContinuation: resolveReplyExpectation(input.runParams) === "required",
-    payloadCount,
-    hasTerminalToolPresentation: input.hasTerminalToolPresentation,
-    aborted: terminalAborted,
-    timedOut: terminalTimedOut,
-    attempt: input.attempt,
-  });
-}
-
 export async function resolveEmbeddedRunTerminal(input: {
   runParams: TerminalRunParams;
   retryState: EmbeddedRunTerminalRetryState;
@@ -174,6 +109,8 @@ export async function resolveEmbeddedRunTerminal(input: {
   >[0]["executionContract"];
   terminalState: EmbeddedRunTerminalState;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
+  /** A host policy intentionally keeps this settled draft private. */
+  terminalReplyDisposition?: "withhold";
   replyDeliveryState?: ReplyDeliveryState;
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   finalAssistantVisibleText?: string;
@@ -234,6 +171,23 @@ export async function resolveEmbeddedRunTerminal(input: {
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
   const { signalOwnedInterruption } = input.terminalState;
+  if (
+    input.terminalReplyDisposition === "withhold" &&
+    classifyAgentRunTerminalOutcome(input.terminalState.outcome) !== "failure" &&
+    !terminalInterrupted
+  ) {
+    if (resolveReplyExpectation(runParams) !== "optional") {
+      throw new Error("A host policy cannot withhold a required reply");
+    }
+    return completeEmbeddedRun({
+      ...input,
+      payloadCount: 0,
+      payloadsForTerminalPath: [],
+      finalAssistantVisibleText: undefined,
+      finalAssistantRawText: undefined,
+      emptyAssistantReplyIsSilent: true,
+    });
+  }
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: runParams.trigger === "cron",
     payloadCount: input.payloadsWithToolMedia?.length ?? 0,

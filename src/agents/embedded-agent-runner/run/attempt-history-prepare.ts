@@ -17,6 +17,7 @@ import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-r
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
+import { readEmbeddedContinuationPrefix } from "./attempt-continuation.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
@@ -29,6 +30,7 @@ import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compactio
 type PreparedEmbeddedAttemptHistory = {
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextEngineAssemblySucceeded: boolean;
+  retainedCurrentTurnMessageCount?: number;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
 };
 
@@ -50,6 +52,7 @@ export async function prepareEmbeddedAttemptHistory(
   const { effectiveWorkspace, sessionAgentId } = input.setup;
   const sandboxed = input.setup.sandbox?.enabled === true;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
+  const continuation = await readEmbeddedContinuationPrefix(attempt);
   let systemPromptText = input.prepared.sessionRuntime.state.systemPromptText;
   const setSystemPrompt = (nextSystemPrompt: string) => {
     systemPromptText = nextSystemPrompt;
@@ -60,7 +63,7 @@ export async function prepareEmbeddedAttemptHistory(
     activeSession.agent.reset();
     setSystemPrompt("");
     cacheTrace?.recordStage("session:raw-model-run", {
-      messages: activeSession.messages,
+      messages: continuation?.prefix ?? activeSession.messages,
       system: systemPromptText,
     });
   } else {
@@ -77,7 +80,7 @@ export async function prepareEmbeddedAttemptHistory(
     });
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
-      messages: activeSession.messages,
+      messages: continuation?.prefix ?? activeSession.messages,
       allowedToolNames: replayAllowedToolNames,
       sessionManager,
     });
@@ -169,7 +172,7 @@ export async function prepareEmbeddedAttemptHistory(
         : truncated;
     })();
     cacheTrace?.recordStage("session:limited", { messages: limited });
-    if (limited.length > 0 || prior.length > 0) {
+    if (continuation || limited.length > 0 || prior.length > 0) {
       activeSession.agent.state.messages = limited;
     }
   }
@@ -181,7 +184,10 @@ export async function prepareEmbeddedAttemptHistory(
     try {
       // Assemble may window the input in place. Preserve the original history for
       // the overflow precheck when the engine says preassembly can still overflow.
-      const preassemblyMessages = activeSession.messages.slice();
+      const preassemblyMessages = [
+        ...activeSession.messages,
+        ...(continuation?.currentTurnMessages ?? []),
+      ];
       const reserveTokens = Math.max(0, Math.floor(settingsManager.getCompactionReserveTokens()));
       const contextTokenBudget = Math.max(
         1,
@@ -207,6 +213,7 @@ export async function prepareEmbeddedAttemptHistory(
         agentId: sessionAgentId,
         appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
         messages: activeSession.messages,
+        currentTurnMessages: continuation?.currentTurnMessages,
         tokenBudget: messageBudget,
         availableTools: new Set(capabilityToolNames),
         citationsMode: attempt.config?.memory?.citations,
@@ -247,13 +254,24 @@ export async function prepareEmbeddedAttemptHistory(
         );
       }
     } catch (error) {
+      if (continuation) {
+        throw error;
+      }
       log.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
     }
+  }
+
+  if (!activeContextEngine && continuation) {
+    activeSession.agent.state.messages = [
+      ...activeSession.messages,
+      ...continuation.currentTurnMessages,
+    ];
   }
 
   return {
     contextEnginePromptAuthority,
     contextEngineAssemblySucceeded,
+    retainedCurrentTurnMessageCount: continuation?.currentTurnMessages.length ?? 0,
     ...(unwindowedContextEngineMessagesForPrecheck
       ? { unwindowedContextEngineMessagesForPrecheck }
       : {}),

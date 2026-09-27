@@ -18,7 +18,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
-import type { AgentMessage } from "../runtime/index.js";
+import { estimateTokens, type AgentMessage } from "../runtime/index.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -137,6 +137,8 @@ export async function assembleHarnessContextEngine(
     agentId?: string;
     appendOnlyRuntimeContext?: boolean;
     messages: AgentMessage[];
+    /** Settled evidence from the still-active logical turn, outside the history fence. */
+    currentTurnMessages?: readonly AgentMessage[];
     tokenBudget?: number;
     availableTools?: Set<string>;
     citationsMode?: MemoryCitationsMode;
@@ -160,12 +162,19 @@ export async function assembleHarnessContextEngine(
   ).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+  const retainedTokens =
+    params.currentTurnMessages?.reduce((sum, message) => sum + estimateTokens(message), 0) ?? 0;
+  const historyBudget =
+    params.tokenBudget === undefined ? undefined : params.tokenBudget - retainedTokens;
+  if (historyBudget !== undefined && historyBudget <= 0) {
+    throw new Error("Context overflow: retained logical-turn evidence exceeds the token budget");
+  }
   const assemble = () =>
     contextEngine.assemble({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       messages,
-      tokenBudget: params.tokenBudget,
+      tokenBudget: historyBudget,
       ...(params.availableTools ? { availableTools: params.availableTools } : {}),
       ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
       model: params.modelId,
@@ -187,7 +196,19 @@ export async function assembleHarnessContextEngine(
           assemble,
         ),
   );
-  return ensureAssembleResultShape(result, contextEngine.info.id);
+  const assembled = ensureAssembleResultShape(result, contextEngine.info.id);
+  if (!params.currentTurnMessages?.length) {
+    return assembled;
+  }
+  const estimatedTokens = assembled.estimatedTokens + retainedTokens;
+  return {
+    ...assembled,
+    messages: [...assembled.messages, ...params.currentTurnMessages],
+    estimatedTokens,
+    ...(params.tokenBudget !== undefined && estimatedTokens > params.tokenBudget
+      ? { promptAuthority: "preassembly_may_overflow" as const }
+      : {}),
+  };
 }
 
 /** Invalid plugin results must fail here so the runner can fall back without poisoning state. */

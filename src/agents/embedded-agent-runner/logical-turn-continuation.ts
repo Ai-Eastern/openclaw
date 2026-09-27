@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
@@ -9,20 +10,22 @@ import {
 } from "./run/attempt-delivery-state.js";
 import type { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./run/internal-params.js";
+import { createRunRetryBudget, type RunRetryBudget } from "./run/retry-budget.js";
 import {
   normalizeEmbeddedRunAttemptResult,
   resolveSuccessfulToolNames,
 } from "./run/run-attempt-result.js";
 import { createPendingToolMediaCarry } from "./run/tool-media-payloads.js";
+import type { EmbeddedTurnContinuationRequest } from "./run/turn-continuation.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import { toNormalizedUsage } from "./usage-accumulator.js";
 
-export type EmbeddedPluginRuntimeRefresh = ReturnType<
-  typeof createEmbeddedAgentPluginRuntimeRefresh
+export type EmbeddedLogicalTurnContinuation = ReturnType<
+  typeof createEmbeddedLogicalTurnContinuation
 >;
 
 /** The embedded runner owns continuation data; tool controls never import its graph. */
-export function createEmbeddedAgentPluginRuntimeRefresh(
+export function createEmbeddedLogicalTurnContinuation(
   callbacks: RunEmbeddedAgentParamsWithSessionFile,
 ) {
   const refresh = createAgentPluginRuntimeRefresh();
@@ -30,6 +33,8 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
   const successfulToolNames = new Set<string>();
   let delivered: AttemptDeliveryState | undefined;
   let continuation: RunEmbeddedAgentParamsWithSessionFile | undefined;
+  let deliveryCallbacks = callbacks;
+  let retryBudget: RunRetryBudget | undefined;
   const closeGeneration = () => {
     continuation = undefined;
     refresh.close();
@@ -40,10 +45,11 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
     input: Parameters<typeof normalizeEmbeddedRunAttempt>[0],
     assertActive: () => void,
     isTurnTainted: () => boolean,
+    request?: EmbeddedTurnContinuationRequest,
   ): EmbeddedAgentRunResult | undefined {
     if (
       input.dispatchedAttempt.rawAttempt.terminal.kind !== "ok" ||
-      !captureAgentPluginRuntimeRefresh().isPending()
+      (!request && !captureAgentPluginRuntimeRefresh().isPending())
     ) {
       return undefined;
     }
@@ -57,9 +63,15 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
     pendingToolMedia.capture(attempt);
     const { runInput, sessionPromptState: session, usageAccumulator: usage } = input;
     const params = runInput.runParams;
-    const messages = attempt.pluginRuntimeRefreshMessages;
+    const messages = attempt.continuationMessages ?? attempt.pluginRuntimeRefreshMessages;
+    const previousMessages =
+      params.continuationMessages ?? params.pluginRuntimeRefreshMessages ?? [];
+    if (request?.policy) {
+      deliveryCallbacks = { ...deliveryCallbacks, ...request.policy };
+    }
     continuation = {
       ...params,
+      ...request?.policy,
       sessionId: session.sessionId,
       sessionFile: session.sessionFile,
       sessionTarget: {
@@ -70,16 +82,15 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
       initialTurnTainted: isTurnTainted(),
       preparedRunAdmission: undefined,
       pluginGeneration: undefined,
-      pluginRuntimeRefreshContinuation: true,
-      pluginRuntimeRefreshMessages: messages
-        ? [...(params.pluginRuntimeRefreshMessages ?? []), ...messages]
-        : (params.pluginRuntimeRefreshMessages ?? []),
+      turnContinuation: true,
+      continuationMessages: messages ? [...previousMessages, ...messages] : previousMessages,
       contextEngineLogicalTurnLease: undefined,
       modelHasVision: undefined,
       modelThinkingCapability: undefined,
       modelFallbackAvailability: undefined,
       suppressNextUserMessagePersistence: true,
       prompt:
+        request?.prompt ??
         "The plugin runtime has been refreshed. Continue the current task from the transcript using the updated tools. Verify the requested change; do not repeat completed actions or the original user request.",
     };
     return {
@@ -98,6 +109,54 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
   }
 
   return {
+    reviewSettledDraft: async (
+      input: Parameters<typeof normalizeEmbeddedRunAttempt>[0],
+      payloads: EmbeddedAgentRunResult["payloads"],
+      signal: AbortSignal,
+      assertActive: () => void,
+      isTurnTainted: () => boolean,
+    ): Promise<{
+      continued?: EmbeddedAgentRunResult;
+      terminalReplyDisposition?: "withhold";
+    }> => {
+      const params = input.runInput.runParams;
+      if (!params.reviewSettledDraft) {
+        return {};
+      }
+      const attempt = input.dispatchedAttempt.rawAttempt;
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        assertActive();
+      };
+      assertCurrent();
+      const disposition = await racePromiseWithAbortSignal(
+        params.reviewSettledDraft({
+          attempt,
+          payloads: payloads ?? [],
+          completedMessages: [
+            ...(params.continuationMessages ?? params.pluginRuntimeRefreshMessages ?? []),
+            ...(attempt.continuationMessages ?? attempt.pluginRuntimeRefreshMessages ?? []),
+          ],
+          signal,
+        }),
+        signal,
+      ).catch((error: unknown) => {
+        assertCurrent();
+        throw error;
+      });
+      assertCurrent();
+      if (disposition.action === "continue") {
+        const continued = continueAfterAttempt(input, assertActive, isTurnTainted, disposition);
+        if (!continued) {
+          throw new Error("A settled draft continuation requires a successful attempt");
+        }
+        return { continued };
+      }
+      return {
+        terminalReplyDisposition: disposition.action === "withhold" ? "withhold" : undefined,
+      };
+    },
+    retryBudget: (maxAttempts: number) => (retryBudget ??= createRunRetryBudget(maxAttempts)),
     run: <T>(run: () => T): T => {
       closeGeneration();
       return refresh.run(run);
@@ -115,7 +174,7 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
         : attempt,
     withDeliveryCallbacks: (params: RunEmbeddedAgentParamsWithSessionFile) =>
       delivered
-        ? { ...params, ...createInheritedDeliveryCallbacks(params, callbacks, delivered) }
+        ? { ...params, ...createInheritedDeliveryCallbacks(params, deliveryCallbacks, delivered) }
         : params,
     mergeTerminalReceipt: (result: EmbeddedAgentRunResult) => {
       const receipt = result.meta.agentMeta?.terminalReceipt;

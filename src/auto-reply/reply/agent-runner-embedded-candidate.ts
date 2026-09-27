@@ -4,6 +4,7 @@ import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
 } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
@@ -26,6 +27,12 @@ import {
 import type { CompletedAgentAuthSelection } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
+import { createGroupParticipationPolicy } from "./group-participation-policy.js";
+import {
+  createGroupParticipationReviewer,
+  groupParticipationPrompt,
+} from "./group-participation-review.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
@@ -360,6 +367,26 @@ export async function runEmbeddedFallbackCandidate(
             : undefined,
         };
       };
+      const participation = readGroupParticipationRun(turn.replyOperation);
+      if (participation?.isPrivate) {
+        const continuationPolicy = createGroupParticipationPolicy(embeddedRunParams, participation);
+        Object.assign(embeddedRunParams, continuationPolicy());
+        embeddedRunParams.reviewSettledDraft = createGroupParticipationReviewer({
+          owner: participation,
+          continuationPolicy,
+        });
+        if (participation.snapshot) {
+          embeddedRunParams.currentInboundContext = appendCurrentInboundContext(
+            embeddedRunParams.currentInboundContext,
+            [
+              {
+                kind: "runtime-instruction",
+                text: groupParticipationPrompt(participation.snapshot),
+              },
+            ],
+          );
+        }
+      }
       return runEmbeddedAgent(embeddedRunParams);
     });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);

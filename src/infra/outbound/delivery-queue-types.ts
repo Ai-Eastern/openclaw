@@ -51,6 +51,8 @@ export type QueuedDeliveryPayload = {
   to: string;
   accountId?: string;
   queuePolicy?: "required" | "best_effort";
+  /** Recovery may reconcile a previous send but cannot start a new send. */
+  recoveryMode?: "reconcile-only";
   requireUnknownSendReconciliation?: boolean;
   requiresProducerClaim?: boolean;
   preparedBatch?: PreparedOutboundBatch;

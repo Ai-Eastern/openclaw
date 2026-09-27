@@ -188,6 +188,8 @@ export async function runEmbeddedAttemptPromptPhase(
     leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
 
     const promptContext = await prepareEmbeddedAttemptPromptContext({
+      retainedCurrentTurnMessageCount:
+        input.preparedStreamRuntime.history.retainedCurrentTurnMessageCount,
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,

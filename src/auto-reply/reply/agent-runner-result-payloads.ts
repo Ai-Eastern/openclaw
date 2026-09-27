@@ -55,6 +55,7 @@ import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
@@ -297,6 +298,23 @@ export async function prepareReplyAgentPayloads(state: {
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
+  if (readGroupParticipationRun(replyOperation)?.isPrivate) {
+    const approved = payloadArray.filter(
+      (payload) => getReplyPayloadMetadata(payload)?.publicationAuthority !== undefined,
+    );
+    const result = await buildFinalPayloads(approved);
+    if (result.replyPayloads.length === 0) {
+      opts?.onDeliberateSilentTerminalReply?.();
+      return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
+    }
+    return {
+      kind: "continue" as const,
+      activeSessionEntry,
+      completedSourceReplyDelivery,
+      guardedReplyPayloads: result.replyPayloads,
+      responseUsageLine: undefined,
+    };
+  }
   const returnPreparedFallbackPayload = async (
     payload: ReplyPayload,
   ): Promise<ReplyPayload | undefined> => {

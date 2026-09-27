@@ -118,6 +118,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldInjectGroupIntro,
     typingMode,
     terminalReplyExpectation,
+    groupParticipation,
   } = context;
   const runParams = { ...params };
   const {
@@ -386,6 +387,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     InputProvenance: inputProvenance,
   });
   const followupRun = {
+    ...(groupParticipation ? { groupParticipation } : {}),
     prompt: queuedBody,
     sourceTurnId: resolveReplySourceTurnId({
       sourceTurnId,

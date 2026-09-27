@@ -390,6 +390,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   isRawModelRun: boolean;
   messages: AgentMessage[];
   preparedUserTurnMessage?: AgentMessage;
+  retainedCurrentTurnMessageCount?: number;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -420,7 +421,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       input.toolResultPromptProjectionState,
     );
   }
-  const prePromptMessageCount = sessionMessages.length;
+  const prePromptMessageCount =
+    sessionMessages.length - (input.retainedCurrentTurnMessageCount ?? 0);
+  if (prePromptMessageCount < 0) {
+    throw new Error("Prompt preparation removed retained current-turn evidence");
+  }
   const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
   const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
