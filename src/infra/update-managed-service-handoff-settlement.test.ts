@@ -5,12 +5,15 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { waitForDead } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as systemdScope from "../daemon/systemd-scope.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
-import * as tmpOwner from "./tmp-openclaw-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => {
+beforeEach(async () => {
+  // resetModules gives each outcome a fresh owner; install spies on that same module instance.
+  const [tmpOwner, systemdScope] = await Promise.all([
+    import("./tmp-openclaw-dir.js"),
+    import("../daemon/systemd-scope.js"),
+  ]);
   vi.spyOn(tmpOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
     roots.make("openclaw-settlement-coordinator-"),
   );

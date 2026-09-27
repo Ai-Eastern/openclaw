@@ -8,7 +8,7 @@
 // Bot API calls (sendMessage / editMessageText / sendChatAction /
 // deleteMessage) observed at a recording API mock with scripted message ids.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
-import type { Bot } from "grammy";
+import { Api, type Bot } from "grammy";
 import {
   deliveryTraceScenarios,
   expectDeliveryTraceMatchesGolden,
@@ -23,14 +23,19 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, it, vi } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   baseTelegramMessageContextConfig,
   buildTelegramMessageContextForTest,
 } from "./bot-message-context.test-harness.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+import { asTelegramClientFetch } from "./client-fetch.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
-import { resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests } from "./runtime.test-support.js";
+import {
+  resetTelegramAccountThrottlersForTest,
+  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
+} from "./runtime.test-support.js";
 import {
   createTelegramSendChatActionHandler,
   type TelegramSendChatActionHandler,
@@ -60,90 +65,47 @@ type TelegramTraceWireState = {
   wireFaults: Array<{ retryAfterMs: number }>;
 };
 
-function compactParams(params: unknown): Record<string, unknown> {
-  if (!params || typeof params !== "object") {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(params as Record<string, unknown>).filter(([, value]) => value !== undefined),
-  );
-}
-
 function createRecordingTelegramApi(state: TelegramTraceWireState): Bot["api"] {
   let messageCount = 1000;
-  const nextMessageId = () => {
-    messageCount += 1;
-    return messageCount;
-  };
-  const api = {
-    sendMessage: (chatId: number | string, text: string, params?: Record<string, unknown>) => {
-      const message_id = nextMessageId();
-      state.recordWireCall({
-        method: "sendMessage",
-        target: String(chatId),
-        payload: { text, ...compactParams(params) },
-        result: { message_id },
-      });
-      return Promise.resolve({ message_id });
-    },
-    editMessageText: (
-      chatId: number | string,
-      messageId: number,
-      text: string,
-      params?: Record<string, unknown>,
-    ) => {
-      const fault = state.wireFaults.shift();
+  const api = new Api("trace-token", {
+    buildUrl: (_root, _token, method) => "https://telegram-trace.invalid/" + method,
+    fetch: asTelegramClientFetch(async (input: unknown, init?: { body?: unknown }) => {
+      if (typeof input !== "string" || typeof init?.body !== "string") {
+        throw new Error("Expected a JSON Telegram trace request");
+      }
+      const method = input.slice(input.lastIndexOf("/") + 1);
+      const { chat_id, ...payload } = JSON.parse(init.body) as Record<string, unknown>;
+      if (method === "setMessageReaction") {
+        return new Response(JSON.stringify({ ok: true, result: true }));
+      }
+      if (!["sendMessage", "editMessageText", "sendChatAction", "deleteMessage"].includes(method)) {
+        throw new Error(`Unexpected Telegram trace method: ${method}`);
+      }
+      const fault = method === "editMessageText" ? state.wireFaults.shift() : undefined;
       if (fault) {
-        const retryAfterS = Math.ceil(fault.retryAfterMs / 1000);
-        state.recordWireCall({
-          method: "editMessageText",
-          target: String(chatId),
-          payload: { message_id: messageId, text, ...compactParams(params) },
-          result: { error_code: 429, parameters: { retry_after: retryAfterS } },
-        });
-        // Mirrors grammY's GrammyError surface for a Bot API flood wait: the
-        // structured error_code/parameters fields drive isTelegramRateLimitError
-        // and readTelegramRetryAfterMs in the preview suspension path.
-        return Promise.reject(
-          Object.assign(new Error(`429: Too Many Requests: retry after ${retryAfterS}`), {
-            error_code: 429,
-            parameters: { retry_after: retryAfterS },
-          }),
+        const result = {
+          error_code: 429,
+          parameters: { retry_after: Math.ceil(fault.retryAfterMs / 1000) },
+        };
+        state.recordWireCall({ method, target: String(chat_id), payload, result });
+        return new Response(
+          JSON.stringify({ ok: false, description: "Too Many Requests", ...result }),
         );
       }
-      state.recordWireCall({
-        method: "editMessageText",
-        target: String(chatId),
-        payload: { message_id: messageId, text, ...compactParams(params) },
-        result: true,
-      });
-      return Promise.resolve(true);
-    },
-    sendChatAction: (
-      chatId: number | string,
-      action: string,
-      params?: Record<string, unknown>,
-    ): Promise<true> => {
-      state.recordWireCall({
-        method: "sendChatAction",
-        target: String(chatId),
-        payload: { action, ...compactParams(params) },
-        result: true,
-      });
-      return Promise.resolve(true);
-    },
-    deleteMessage: (chatId: number | string, messageId: number) => {
-      state.recordWireCall({
-        method: "deleteMessage",
-        target: String(chatId),
-        payload: { message_id: messageId },
-        result: true,
-      });
-      return Promise.resolve(true);
-    },
-    setMessageReaction: () => Promise.resolve(true),
-  };
-  return api as unknown as Bot["api"];
+      const result = method === "sendMessage" ? { message_id: ++messageCount } : true;
+      state.recordWireCall({ method, target: String(chat_id), payload, result });
+      return new Response(JSON.stringify({ ok: true, result }));
+    }),
+  });
+  // Record below the real flood owner, as production bot-core does. The trace
+  // clock scripts ordinary pacing; only grammY's unrelated scheduler is inert.
+  api.config.use(
+    getOrCreateAccountThrottler(
+      "trace-token",
+      () => (prev, method, payload, signal) => prev(method, payload, signal),
+    ).transformer,
+  );
+  return api;
 }
 
 function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
@@ -203,6 +165,7 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
 
 async function setupTelegramTrace(recorder: WireRecorder) {
   resetTelegramReplyFenceForTests();
+  resetTelegramAccountThrottlersForTest();
   const state: TelegramTraceWireState = {
     recordWireCall: recorder.recordWireCall,
     wireFaults: [],
@@ -296,9 +259,9 @@ async function setupTelegramTrace(recorder: WireRecorder) {
           ...(step.mediaUrls ? { mediaUrls: step.mediaUrls } : {}),
           ...(step.isError ? { isError: true } : {}),
         };
-        // Not awaited inline: a flood-suspended final parks inside the draft
-        // stream's retry_after wait, so the idle step advances the clock past
-        // the suspension and settles it there instead of deadlocking here.
+        // Not awaited inline: a flood-suspended final parks inside the account
+        // limiter's retry_after wait. Idle advances past the suspension and
+        // settles it there instead of deadlocking here.
         const delivery = deliverPayload(payload, { kind: "final" });
         delivery.catch(() => {});
         pendingFinals.push(delivery);
@@ -317,7 +280,7 @@ async function setupTelegramTrace(recorder: WireRecorder) {
       case "idle": {
         await vi.advanceTimersByTimeAsync(0);
         if (armedRetryAfterMs > 0) {
-          // Drain the flood suspension: the preview engine holds the newest
+          // Drain the flood suspension: the account limiter holds the final
           // snapshot until retry_after expires, then flushes it in one edit.
           await vi.advanceTimersByTimeAsync(armedRetryAfterMs);
         }
@@ -336,6 +299,7 @@ async function setupTelegramTrace(recorder: WireRecorder) {
 }
 
 afterEach(() => {
+  resetTelegramAccountThrottlersForTest();
   vi.restoreAllMocks();
 });
 

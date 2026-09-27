@@ -42,7 +42,6 @@ import {
 } from "./update-candidate-state.inspection.js";
 import { finishStateInspection } from "./update-candidate-state.process.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
-export { readUpdateDatabaseGenerationsIsolated } from "./update-database-inspection.js";
 
 const UpdateStateSchemaVersionsSchema = z.array(
   z.object({

@@ -48,7 +48,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state
 import * as sqliteWorker from "./sqlite-readonly-worker.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "./sqlite-worker-contract.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
-import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
+import { readUpdateDatabaseGenerationsIsolated } from "./update-database-inspection.js";
 
 const PROVIDER = "auth-runtime-fixture";
 const PROFILE_ID = `${PROVIDER}:default`;
