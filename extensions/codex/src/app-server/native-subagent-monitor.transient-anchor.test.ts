@@ -147,7 +147,7 @@ async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStor
       releaseHistory();
       await owner.unregister();
       connected = false;
-      monitor.dispose();
+      await monitor.dispose();
     },
   };
 }

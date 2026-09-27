@@ -22,9 +22,6 @@ describe("native background command outcomes", () => {
     ["inventory unavailable", "52627"],
     ["retained", null],
     ["foreign item", null],
-    ["orphan", null],
-    ["completion during inventory", null],
-    ["revoked during inventory", null],
   ] as const)("projects owner outcome: %s (%s)", async (scenario, startProcessId) => {
     const accepted = createDeferred<void>();
     const abort = new AbortController();

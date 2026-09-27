@@ -33,6 +33,7 @@ type NativeSubagentCloseCallbacks = {
   isParentRetired: (state: ParentState) => boolean;
   knownChild: (threadId: string) => KnownChild | undefined;
   currentChild: (threadId: string) => ChildState | undefined;
+  isRegisteredChild: (child: ChildState) => boolean;
   captureForget?: MonitorOptions["captureChildThreadForget"];
   releaseDirectChild: (child: ChildState) => void;
   clearRecoveryTimers: (child: ChildState) => void;
@@ -54,7 +55,9 @@ export class CodexNativeSubagentCloseOwner {
     this.prune(state);
     for (const [key, call] of this.calls.get(state) ?? []) {
       if (call.completionObserved && call.turnId === turnId) {
-        void this.completeChildClose(state, key, call);
+        void this.completeChildClose(state, key, call).catch((error: unknown) =>
+          logRecoveryFailure(state.parentThreadId, error),
+        );
       }
     }
   }
@@ -158,7 +161,23 @@ export class CodexNativeSubagentCloseOwner {
     }
   }
 
-  retireChild(state: ParentState, childState: ChildState, releaseSubscription?: () => void): void {
+  async retireChild(
+    state: ParentState,
+    childState: ChildState,
+    releaseSubscription?: () => void,
+  ): Promise<void> {
+    const known = this.callbacks.knownChild(childState.childThreadId);
+    if (
+      !this.callbacks.isRegisteredChild(childState) ||
+      childState.parentThreadId !== state.parentThreadId ||
+      (!this.callbacks.isParentRetired(state) &&
+        (!this.callbacks.isParentCurrent(state) ||
+          this.callbacks.currentChild(childState.childThreadId) !== childState ||
+          known?.parent !== state ||
+          known.assignment.runId !== childState.runId))
+    ) {
+      return;
+    }
     if (childState.pendingCompletion && !this.callbacks.isParentRetired(state)) {
       // Closing the native child does not discard its already accepted result.
       // Keep its delivery owner, but never warm the closed subscription later.
@@ -171,8 +190,7 @@ export class CodexNativeSubagentCloseOwner {
     }
     if (!childState.terminal) {
       childState.terminal = true;
-      const known = this.callbacks.knownChild(childState.childThreadId);
-      if (known?.assignment.runId === childState.runId) {
+      if (known?.parent === state && known.assignment.runId === childState.runId) {
         known.assignment.terminal = true;
         known.assignment.nativeTurnId = childState.nativeTurnId;
       }
@@ -193,7 +211,7 @@ export class CodexNativeSubagentCloseOwner {
       this.callbacks.knownChild(threadId) === receiver &&
       !this.callbacks.currentChild(threadId)
     ) {
-      // Parent pruning has settled accepted writes and removed task owners.
+      // Parent pruning has settled accepted writes and removed child owners.
       // The captured receiver must still own the subscription being released.
       releaseSubscription();
     }
@@ -240,6 +258,8 @@ export class CodexNativeSubagentCloseOwner {
     // A matching native completion admits local confirmation. Ordinary parent
     // detachment lets it settle; explicit retirement still invalidates this call.
     call.completing = true;
+    let settled = false;
+    let retiring = false;
     try {
       const forgetters = await Promise.all(
         call.targets.map((target) => Promise.resolve(target.forget)),
@@ -259,6 +279,7 @@ export class CodexNativeSubagentCloseOwner {
         !Array.isArray(loaded.data) ||
         !loaded.data.every((id) => typeof id === "string" && id.trim() !== "")
       ) {
+        settled = true;
         return;
       }
       for (const [index, target] of call.targets.entries()) {
@@ -270,19 +291,33 @@ export class CodexNativeSubagentCloseOwner {
         // stop a resumed runtime whose start notification has not arrived yet.
         const forget = forgetters[index];
         if (childState) {
-          this.retireChild(state, childState, forget);
+          retiring = true;
+          await this.retireChild(state, childState, forget);
+          if (!isCurrent()) {
+            return;
+          }
         } else {
           forget?.();
         }
       }
+      settled = true;
     } catch (error) {
       embeddedAgentLog.warn("Failed to confirm Codex native subagent close", {
         parentThreadId: state.parentThreadId,
         error: formatErrorMessage(error),
       });
+      if (retiring) {
+        throw error;
+      }
+      settled = true;
     } finally {
-      call.settled = true;
-      if (this.calls.get(state)?.get(key) === call) {
+      if (settled || !isCurrent()) {
+        call.settled = true;
+      } else {
+        call.completing = undefined;
+        call.settlement = undefined;
+      }
+      if (call.settled && this.calls.get(state)?.get(key) === call) {
         // Keep the call identity until its parent owner ends, so duplicate
         // starts cannot select a later assignment. Drop captured handles now.
         call.targets = [];

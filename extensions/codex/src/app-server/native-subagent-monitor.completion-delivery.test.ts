@@ -17,11 +17,13 @@ import {
   notifyChildStarted,
   successfulSendInputOutput,
   nativeCompletionNotification,
+  nativeHistoryOwner,
   deliveredNativeCompletion,
   childTurnCompletedNotification,
   turnStartedNotification,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
+import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 
 function contextualNativeCompletion(agentPath = "child-thread", result = "The build passed.") {
@@ -111,7 +113,7 @@ describe("CodexNativeSubagentMonitor", () => {
         }
         await parent.unregister();
         expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-        monitor.dispose();
+        await monitor.dispose();
       },
     );
 
@@ -224,6 +226,7 @@ describe("CodexNativeSubagentMonitor", () => {
         agentId: "main",
         runtime,
       });
+      let retirement: Promise<void> | undefined;
       try {
         await notifyChildStarted(client);
         await client.notify(completedChild());
@@ -236,11 +239,15 @@ describe("CodexNativeSubagentMonitor", () => {
         const canAdmit =
           runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0].isSourceSessionAdmissionAllowed;
         expect(canAdmit?.()).toBe(true);
-        codexNativeSubagentMonitorRuntime.retireParent(client as never, "parent-thread");
+        retirement = codexNativeSubagentMonitorRuntime.retireParent(
+          client as never,
+          "parent-thread",
+        );
         expect(canAdmit?.()).toBe(false);
       } finally {
         delivery.resolve({ delivered: true, path: "direct" });
         await delivery.promise;
+        await retirement;
         await owner.unregister();
         client.close();
       }
@@ -263,6 +270,99 @@ describe("CodexNativeSubagentMonitor", () => {
       } finally {
         await owner.unregister();
         client.close();
+      }
+    });
+
+    it("retains a rotated parent's child subscription until its receipt write settles", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const writeStarted = createDeferred<void>();
+      const releaseWrite = createDeferred<void>();
+      const assignmentStore: CodexNativeSubagentAssignmentStore = {
+        assertCurrent() {},
+        read: () => [],
+        record: async () => true,
+        consume: async () => {
+          writeStarted.resolve();
+          await releaseWrite.promise;
+          return true;
+        },
+      };
+      const claimChildThread = vi.fn(async () => {});
+      const releaseChildThread = vi.fn(async (threadId: string) => {
+        await client.client.request("thread/unsubscribe", { threadId });
+      });
+      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
+        recoveryPollDelaysMs: [],
+        claimChildThread,
+        releaseChildThread,
+      });
+      const parent = await monitor.registerParent({
+        parentThreadId: "parent-thread",
+        agentId: "main",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        completionScope: createCompletionScope(),
+        historyOwner: nativeHistoryOwner(),
+        assignmentStore,
+      });
+      const observer = await registerParent(
+        monitor,
+        "rotated-parent",
+        undefined,
+        nativeHistoryOwner("rotated-parent"),
+      );
+      let receipt: Promise<void> | undefined;
+      let retirement: Promise<void> | undefined;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        parent.bindTurn("parent-turn");
+        observer.bindTurn("observer-turn");
+        await notifyChildStarted(client);
+        await client.notify(turnStartedNotification("child-turn"));
+        await client.notify(completedChild());
+        expect(claimChildThread).toHaveBeenCalledExactlyOnceWith("child-thread");
+        receipt = client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: {
+              id: "rotated-wait-receipt",
+              type: "collabAgentToolCall",
+              tool: "wait",
+              status: "completed",
+              senderThreadId: "parent-thread",
+              receiverThreadIds: ["child-thread"],
+              agentsStates: {
+                "child-thread": { status: "completed", message: "The build passed." },
+              },
+            },
+          },
+        });
+        await writeStarted.promise;
+        let retired = false;
+        retirement = monitor.retireParent("rotated-parent").then(() => {
+          retired = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(retired).toBe(false);
+        expect(releaseChildThread).not.toHaveBeenCalled();
+        expect(client.request).not.toHaveBeenCalledWith("thread/unsubscribe", expect.anything());
+        releaseWrite.resolve();
+        await Promise.all([receipt, retirement]);
+        expect(releaseChildThread).toHaveBeenCalledExactlyOnceWith("child-thread");
+        expect(client.request).toHaveBeenCalledExactlyOnceWith("thread/unsubscribe", {
+          threadId: "child-thread",
+        });
+        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+      } finally {
+        releaseWrite.resolve();
+        await Promise.allSettled([receipt, retirement]);
+        await parent.unregister();
+        await observer.unregister();
+        await monitor.dispose();
+        client.close();
+        vi.useRealTimers();
       }
     });
 

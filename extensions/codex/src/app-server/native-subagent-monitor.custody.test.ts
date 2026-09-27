@@ -141,9 +141,9 @@ describe("native assignment completion custody", () => {
         } else if (ending === "caller-revoked") {
           current = false;
         } else if (ending === "dispose") {
-          monitor.dispose();
+          await monitor.dispose();
         } else if (ending === "retire" || ending === "replace") {
-          monitor.retireParent("parent-thread");
+          await monitor.retireParent("parent-thread");
           if (ending === "replace") {
             successor = await registerParent(monitor, "parent-thread", "agent:main:replacement");
           }
@@ -206,7 +206,7 @@ describe("native assignment completion custody", () => {
           }
         }
       } finally {
-        monitor.dispose();
+        await monitor.dispose();
         capture.resolve(source.root);
         nextCapture.resolve(replacement.root);
         await pending.catch(() => {});
@@ -270,7 +270,7 @@ describe("native assignment completion custody", () => {
         );
         expect(first.executions.size).toBe(0);
         if (ending === "closed") {
-          monitor.dispose();
+          await monitor.dispose();
           expect(first.live()).toHaveLength(1);
           runtime.deliverAgentHarnessCompletion.mockResolvedValue({
             delivered: true,
@@ -289,8 +289,8 @@ describe("native assignment completion custody", () => {
         }
         expect(first.live()).toHaveLength(0);
       } finally {
-        monitor.retireParent("parent-thread");
-        monitor.dispose();
+        await monitor.retireParent("parent-thread");
+        await monitor.dispose();
         first.root.release();
         second.root.release();
       }
@@ -328,7 +328,7 @@ describe("native assignment completion custody", () => {
     emit.mockImplementation(() => {
       throw new Error("requester lifecycle replaced");
     });
-    expect(() => monitor.dispose()).not.toThrow();
+    await expect(monitor.dispose()).resolves.toBeUndefined();
     expect(source.live()).toHaveLength(0);
     expect(source.executions.size).toBe(0);
   });
@@ -372,7 +372,7 @@ describe("native assignment completion custody", () => {
     );
     await parent.unregister();
     expect(source.live()).toHaveLength(2);
-    monitor.dispose();
+    await monitor.dispose();
     expect(source.live()).toHaveLength(0);
   });
 });

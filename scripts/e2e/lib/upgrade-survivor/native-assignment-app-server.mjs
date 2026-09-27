@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
   createFakeInitializeResponse,
   createFakeThreadStartResponse,
@@ -39,6 +39,8 @@ const phases = new Set([
 ]);
 const threads = new Map();
 const injectedItemsByThread = new Map();
+const threadConfigurations = new Map();
+const subscriptions = new Map();
 const loaded = new Set();
 const closeTurns = new Map();
 let turnSequence = 0;
@@ -133,9 +135,90 @@ function startThread(params, id = parentId) {
     }
     threads.set(id, response.thread);
     injectedItemsByThread.set(id, []);
+    threadConfigurations.set(id, { params: structuredClone(params), response });
   }
   loaded.add(id);
-  return { ...response, thread: thread(id) };
+  return { ...threadConfigurations.get(id).response, thread: thread(id) };
+}
+
+function subscribe(socket, threadId) {
+  subscriptions.get(socket).add(threadId);
+}
+
+function resumeChangesConfiguration(params, configured) {
+  if (
+    ["config", "baseInstructions", "developerInstructions", "permissions"].some(
+      (key) => params[key] != null,
+    )
+  ) {
+    return true;
+  }
+  return [
+    "model",
+    "modelProvider",
+    "serviceTier",
+    "cwd",
+    "runtimeWorkspaceRoots",
+    "approvalPolicy",
+    "approvalsReviewer",
+    "sandbox",
+    "personality",
+  ].some((key) => {
+    const requested = params[key];
+    if (requested == null && !(key === "serviceTier" && Object.hasOwn(params, key))) {
+      return false;
+    }
+    const current =
+      configured.params[key] ??
+      (key === "sandbox" ? "danger-full-access" : configured.response[key]);
+    return !isDeepStrictEqual(requested, current);
+  });
+}
+
+function resumeThread(socket, phase, params) {
+  const selected = thread(params.threadId);
+  const configured = threadConfigurations.get(params.threadId);
+  const hasSubscribers = [...subscriptions.values()].some((ids) => ids.has(params.threadId));
+  const reload =
+    !loaded.has(params.threadId) ||
+    (resumeChangesConfiguration(params, configured) &&
+      selected.status.type === "idle" &&
+      !hasSubscribers);
+  if (reload) {
+    const overrides = Object.fromEntries(
+      Object.entries(params).filter(([key, value]) => value != null || key === "serviceTier"),
+    );
+    const nextParams = { ...configured.params, ...overrides };
+    if (nextParams.sandbox != null && nextParams.sandbox !== "danger-full-access") {
+      throw new Error("Native upgrade fixture only supports the configured full-access sandbox");
+    }
+    const response = createFakeThreadStartResponse({
+      params: nextParams,
+      threadId: params.threadId,
+      sessionId: "native-upgrade-provider-session",
+      version,
+    });
+    response.modelProvider = nextParams.modelProvider ?? response.modelProvider;
+    response.serviceTier = nextParams.serviceTier ?? null;
+    response.runtimeWorkspaceRoots =
+      nextParams.runtimeWorkspaceRoots ?? response.runtimeWorkspaceRoots;
+    if (loaded.delete(params.threadId)) {
+      selected.status = { type: "notLoaded" };
+      notify(socket, phase, "thread/status/changed", {
+        threadId: params.threadId,
+        status: selected.status,
+      });
+    }
+    // This v1 fixture's status is its execution state. Reconfigure only an idle,
+    // unsubscribed cache entry; retain its history and injected model context.
+    selected.cwd = response.cwd;
+    selected.modelProvider = response.modelProvider;
+    selected.status = { type: "idle" };
+    threadConfigurations.set(params.threadId, { params: structuredClone(nextParams), response });
+    loaded.add(params.threadId);
+  }
+  subscribe(socket, params.threadId);
+  return { ...threadConfigurations.get(params.threadId).response, thread: selected };
 }
 
 function startTurn(socket, phase, threadId, turnId) {
@@ -150,7 +233,7 @@ function startTurn(socket, phase, threadId, turnId) {
     durationMs: null,
   };
   thread(threadId).turns.push(turn);
-  thread(threadId).status = { type: "active" };
+  thread(threadId).status = { type: "active", activeFlags: [] };
   notify(socket, phase, "turn/started", { threadId, turn });
   return turn;
 }
@@ -304,11 +387,13 @@ function handle(socket, phase, message) {
       });
     case "mcpServerStatus/list":
       return result({ data: [], nextCursor: null });
-    case "thread/start":
-      return result(startThread(params));
+    case "thread/start": {
+      const response = startThread(params);
+      subscribe(socket, response.thread.id);
+      return result(response);
+    }
     case "thread/resume":
-      thread(params.threadId);
-      return result(startThread(params, params.threadId));
+      return result(resumeThread(socket, phase, params));
     case "thread/inject_items": {
       thread(params.threadId);
       if (
@@ -355,10 +440,15 @@ function handle(socket, phase, message) {
     case "thread/subscribe":
       thread(params.threadId);
       loaded.add(params.threadId);
+      subscribe(socket, params.threadId);
       return result({});
-    case "thread/unsubscribe":
-      thread(params.threadId);
-      return result({});
+    case "thread/unsubscribe": {
+      if (!loaded.has(params.threadId)) {
+        return result({ status: "notLoaded" });
+      }
+      const removed = subscriptions.get(socket).delete(params.threadId);
+      return result({ status: removed ? "unsubscribed" : "notSubscribed" });
+    }
     case "turn/start": {
       if (params.threadId !== parentId) {
         throw new Error("Only parent turns may be started through this fixture");
@@ -392,6 +482,9 @@ function handle(socket, phase, message) {
       const closing = closeTurns.get(socket);
       if (closing?.phase === "close-gone") {
         loaded.delete(runningId);
+        for (const ids of subscriptions.values()) {
+          ids.delete(runningId);
+        }
         thread(runningId).status = { type: "notLoaded" };
       }
       // Closing proof uses one complete snapshot; the already-finished child is irrelevant.
@@ -422,7 +515,11 @@ function handle(socket, phase, message) {
 fs.mkdirSync(path.dirname(values["log-file"]), { recursive: true });
 const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
 server.on("connection", (socket) => {
-  socket.on("close", () => closeTurns.delete(socket));
+  subscriptions.set(socket, new Set());
+  socket.on("close", () => {
+    closeTurns.delete(socket);
+    subscriptions.delete(socket);
+  });
   socket.on("message", (bytes) => {
     let message;
     let phase;

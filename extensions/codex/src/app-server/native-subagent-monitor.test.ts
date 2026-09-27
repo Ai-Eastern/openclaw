@@ -49,7 +49,7 @@ describe("CodexNativeSubagentMonitor", () => {
     await client.notify(nativeCompletionNotification({ agentPath: "child-b" }));
 
     expect(releaseParentThread).toHaveBeenCalledOnce();
-    monitor.dispose();
+    await monitor.dispose();
     expect(releaseParentThread).toHaveBeenCalledOnce();
   });
 
@@ -95,7 +95,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(retainChildThread).toHaveBeenCalledExactlyOnceWith("child-thread");
     expect(forgetChildThread).toHaveBeenCalledOnce();
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("cancels running children and releases their parent pin when closeAgent completes", async () => {
@@ -117,7 +117,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(releaseParentThread).toHaveBeenCalledOnce();
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("retires parent generations idempotently and fences late child completions", async () => {
@@ -130,14 +130,16 @@ describe("CodexNativeSubagentMonitor", () => {
     const parent = await registerParent(monitor);
     await notifyChildStarted(client);
 
-    monitor.retireParent("parent-thread");
-    monitor.retireParent("parent-thread");
+    await Promise.all([
+      monitor.retireParent("parent-thread"),
+      monitor.retireParent("parent-thread"),
+    ]);
     await parent.unregister();
     await client.notify(nativeCompletionNotification());
 
     expect(releaseParentThread).toHaveBeenCalledOnce();
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("selects the exact bound parent turn and preserves the remaining owner on unregister", async () => {
@@ -177,7 +179,7 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     });
     expect(firstClaim).toHaveBeenCalledWith("child-first");
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("leaves wait snapshots to receipts until the child turn authoritatively completes", async () => {
@@ -223,7 +225,7 @@ describe("CodexNativeSubagentMonitor", () => {
     );
     // The native wait receipt consumes the matching result without a duplicate fallback.
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("publishes parent-owned child activity without projecting it into the parent session", async () => {
@@ -310,10 +312,10 @@ describe("CodexNativeSubagentMonitor", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
     const events: Parameters<Parameters<typeof onAgentEvent>[0]>[0][] = [];
     const unsubscribe = onAgentEvent((event) => events.push(event));
-    onTestFinished(() => {
+    onTestFinished(async () => {
       unsubscribe();
-      monitor.retireParent("parent-thread");
-      monitor.dispose();
+      await monitor.retireParent("parent-thread");
+      await monitor.dispose();
     });
     (await registerParent(monitor)).bindTurn("parent-turn");
     await notifyChildStarted(client, "parent-thread", "receiver-thread", "receiver-thread");
@@ -415,6 +417,7 @@ describe("CodexNativeSubagentMonitor", () => {
         ].map((observation) => Object.assign(observation, { sourceId })),
       );
       client.close();
+      await monitor.dispose();
       expect(events.at(-1)?.data).toEqual({ state: "unknown", sourceId, invalidate: true });
 
       expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
@@ -1648,7 +1651,7 @@ describe("CodexNativeSubagentMonitor", () => {
       await vi.advanceTimersByTimeAsync(30);
 
       expect(client.request).not.toHaveBeenCalled();
-      monitor.dispose();
+      await monitor.dispose();
     } finally {
       vi.useRealTimers();
     }

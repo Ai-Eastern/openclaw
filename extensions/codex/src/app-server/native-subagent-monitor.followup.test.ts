@@ -174,7 +174,7 @@ describe("CodexNativeSubagentMonitor", () => {
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledWith(
         expect.objectContaining({ childSessionId: "child-thread", result: "second result" }),
       );
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -186,9 +186,9 @@ describe("CodexNativeSubagentMonitor", () => {
     const oldClaim = vi.fn(() => oldRelease);
     const newClaim = vi.fn(() => newRelease);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    onTestFinished(() => {
-      monitor.retireParent("parent-thread");
-      monitor.dispose();
+    onTestFinished(async () => {
+      await monitor.retireParent("parent-thread");
+      await monitor.dispose();
     });
     const register = (claimDirectChild: typeof oldClaim) =>
       monitor.registerParent({

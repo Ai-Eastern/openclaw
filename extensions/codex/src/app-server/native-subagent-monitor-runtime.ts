@@ -26,7 +26,7 @@ import type { NativeParentRegistration } from "./native-subagent-parent-owner.js
 
 type NativeMonitor = {
   registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle>;
-  retireParent(parentThreadId: string): void;
+  retireParent(parentThreadId: string): Promise<void>;
   captureModelSource(
     request: NativeModelSourceRequest,
   ): Promise<NativeModelSourceCapture | undefined>;
@@ -173,8 +173,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
       }
       return monitor.prepareModelInput(request);
     },
-    retireParent: (client: CodexAppServerClient, parentThreadId: string): void => {
-      monitors.get(client)?.retireParent(parentThreadId);
-    },
+    retireParent: (client: CodexAppServerClient, parentThreadId: string): Promise<void> =>
+      monitors.get(client)?.retireParent(parentThreadId) ?? Promise.resolve(),
   };
 }

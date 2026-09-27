@@ -13,9 +13,6 @@ import {
   codexNativeSubagentRunId,
   normalizeIdentifier,
   readCodexNativeSubagentRunId,
-  readNativeSubagentThreadIds,
-  readThreadParentThreadId,
-  readThreadSpawnSource,
   type NativeSubagentAssignment,
 } from "./native-subagent-assignment.js";
 import {
@@ -32,7 +29,6 @@ import {
 } from "./native-subagent-delivery-receipts.js";
 import {
   CodexNativeSubagentHistoryRecovery,
-  isNoFinalCompletion,
   readNativeTurnEnd,
   readTurnCompletion,
   systemErrorFallbackCompletion,
@@ -77,10 +73,12 @@ import type {
   ParentState,
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
+import { createCodexNativeSubagentNotificationRouter } from "./native-subagent-notification-routing.js";
 import {
   NATIVE_SUBAGENT_NOTIFICATION_METHODS,
   RECOVERY_REVISION_NOTIFICATION_METHODS,
   codexNativeSubagentNotifications as nativeSubagentNotifications,
+  isNoFinalCompletion,
   type CodexNativeSubagentCompletion,
 } from "./native-subagent-notification.js";
 import {
@@ -99,6 +97,9 @@ import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 class Monitor {
+  private readonly resolveNotificationState: ReturnType<
+    typeof createCodexNativeSubagentNotificationRouter
+  >;
   private readonly assignments: CodexNativeSubagentAssignmentInventory;
   private readonly submissions: CodexNativeSubagentSubmissionOwner;
   private readonly historyRecovery: CodexNativeSubagentHistoryRecovery;
@@ -125,6 +126,7 @@ class Monitor {
   private readonly parentThreadRetentions = new Map<string, () => void>();
   private releaseClientRetention?: () => void;
   private disposed = false;
+  private disposal?: Promise<void>;
 
   constructor(
     private readonly client: NativeSubagentMonitorClient,
@@ -149,6 +151,7 @@ class Monitor {
       isParentRetired: (state) => this.retiredParentStates.has(state),
       knownChild: (id) => this.knownChildren.get(id),
       currentChild: (id) => this.currentChild(id),
+      isRegisteredChild: (child) => this.childStates.get(child.runId) === child,
       captureForget: options.captureChildThreadForget,
       releaseDirectChild: (child) => releaseNativeDirectChild(child),
       clearRecoveryTimers: (child) => this.recovery.clearRecoveryTimers(child),
@@ -214,8 +217,11 @@ class Monitor {
       if (!NATIVE_SUBAGENT_NOTIFICATION_METHODS.has(notification.method)) {
         return;
       }
+      const handled = this.handleNotification(notification);
+      // Resident model authority stays visible while native persistence waits.
+      notifyNativeModelSourceChange(notification.method, this.parentStates.values());
       try {
-        await this.handleNotification(notification);
+        await handled;
       } finally {
         notifyNativeModelSourceChange(notification.method, this.parentStates.values());
       }
@@ -369,15 +375,34 @@ class Monitor {
       },
       onSettled: (state) => this.pruneParentIfUnused(state),
     });
-    this.removeCloseHandler = client.addCloseHandler(() => this.dispose());
+    this.resolveNotificationState = createCodexNativeSubagentNotificationRouter({
+      resolveNativeParentState: this.resolveNativeParentState.bind(this),
+      parentState: (id) => this.parentStates.get(id),
+      currentChild: this.currentChild.bind(this),
+      resolveParentOwner: this.resolveParentOwner.bind(this),
+      registerChildThread: this.registerChildThread.bind(this),
+      registerDirectSpawnChild: this.registerDirectSpawnChild.bind(this),
+      observeParentInteraction: this.observeParentInteraction.bind(this),
+      acceptInteraction: this.submissions.acceptInteraction.bind(this.submissions),
+      observeCall: this.submissions.observeCall.bind(this.submissions),
+    });
+    this.removeCloseHandler = client.addCloseHandler(() => {
+      void this.dispose().catch((error: unknown) => {
+        embeddedAgentLog.warn("Failed to settle Codex native assignments after client closure", {
+          error: formatErrorMessage(error),
+        });
+      });
+    });
   }
 
-  dispose(): void {
+  dispose(): Promise<void> {
+    if (this.disposal) {
+      return this.disposal;
+    }
     if (this.disposed) {
-      return;
+      return Promise.resolve();
     }
     this.disposed = true;
-    this.submissions.dispose();
     this.removeNotificationHandler();
     this.removeCloseHandler();
     for (const childState of this.childStates.values()) {
@@ -389,6 +414,35 @@ class Monitor {
           error: formatErrorMessage(error),
         });
       }
+      this.recovery.clearRecoveryTimers(childState);
+    }
+    const parents = [...this.parentStates.values()];
+    for (const state of parents) {
+      notifyNativeModelSourceWaiters(state);
+    }
+    const pending = parents.some(
+      (state) => this.assignments.hasWrites(state) || this.submissions.hasCustody(state),
+    );
+    if (!pending) {
+      this.finishDisposal();
+      return (this.disposal = Promise.resolve());
+    }
+    this.disposal = (async () => {
+      await Promise.allSettled(
+        parents.flatMap((state) => [this.submissions.drain(state), this.assignments.drain(state)]),
+      );
+      this.finishDisposal();
+      // Releasing acknowledged children can enqueue their final receipt consumption.
+      await Promise.allSettled(
+        parents.flatMap((state) => [this.submissions.drain(state), this.assignments.drain(state)]),
+      );
+    })();
+    return this.disposal;
+  }
+
+  private finishDisposal(): void {
+    this.submissions.dispose();
+    for (const childState of this.childStates.values()) {
       releaseNativeDirectChild(childState);
       releaseNativeModelExecution(childState);
       // Terminal delivery no longer needs app-server. Keep its bounded retry
@@ -592,13 +646,14 @@ class Monitor {
     notifyNativeModelSourceChange("thread/closed", this.parentStates.values());
   }
 
-  retireParent(parentThreadIdInput: string): void {
+  retireParent(parentThreadIdInput: string): Promise<void> {
     const current = this.parentStates.get(parentThreadIdInput.trim());
     const states = current ? this.requesterParents(current) : [];
     // Revoke the whole captured lineage before cleanup can admit another completion.
     for (const state of states) {
       this.retiredParentStates.add(state);
     }
+    const settlements: Promise<void>[] = [];
     for (const state of states) {
       const parentThreadId = state.parentThreadId;
       this.submissions.retire(state);
@@ -609,14 +664,35 @@ class Monitor {
       state.owners.clear();
       this.childCloses.clear(state);
       this.admissionCustody.retainOnly((evidence) => evidence.parentThreadId !== parentThreadId);
-      for (const childState of Array.from(this.childStates.values())) {
-        if (childState.parentThreadId === parentThreadId) {
-          this.childCloses.retireChild(state, childState);
-        }
-      }
+      settlements.push(
+        (async () => {
+          // Revoke first, then keep child subscriptions until admitted writes settle.
+          await Promise.allSettled([this.submissions.drain(state), this.assignments.drain(state)]);
+          await Promise.all(
+            [...this.childStates.values()]
+              .filter((child) => child.parentThreadId === parentThreadId)
+              .map((child) => this.childCloses.retireChild(state, child)),
+          );
+          await this.assignments.drain(state);
+          this.pruneParentIfUnused(state);
+        })(),
+      );
       this.pruneParentIfUnused(state);
       notifyNativeModelSourceWaiters(state);
     }
+    return Promise.allSettled(settlements).then((results) => {
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Codex native parent retirement did not settle.", {
+          cause: errors[0],
+        });
+      }
+    });
   }
 
   private async handleNotification(notification: CodexServerNotification): Promise<void> {
@@ -678,9 +754,13 @@ class Monitor {
       const parent = this.resolveNativeParentState(readString(params, "threadId") ?? "");
       if (parent) {
         this.submissions.observeOutput(parent, readString(params, "turnId"), params.item);
+        await this.submissions.settleWrites(parent);
+        if (!this.isCurrentParent(parent)) {
+          return;
+        }
       }
     }
-    const mirrorState = this.resolveMirrorState(notification);
+    const notificationState = this.resolveNotificationState(notification);
     const startedThread = isJsonObject(params?.thread) ? params.thread : undefined;
     const threadId =
       readString(params, "threadId")?.trim() ?? readString(startedThread, "id")?.trim();
@@ -697,7 +777,7 @@ class Monitor {
     }
     const tracksRecoveryRevision = Boolean(threadId && this.recovery.hasRevision(threadId));
     if (
-      !mirrorState &&
+      !notificationState &&
       (!threadId ||
         (!this.parentStates.has(threadId) &&
           !this.currentChild(threadId) &&
@@ -722,14 +802,13 @@ class Monitor {
       }
     }
     const isChildClose = isCodexNativeSubagentCloseNotification(notification);
-    if (mirrorState && isChildClose) {
-      await this.childCloses.observe(notification, mirrorState);
+    if (notificationState && isChildClose) {
+      await this.childCloses.observe(notification, notificationState);
+    }
+    if (this.disposed || (notificationState && !this.isCurrentParent(notificationState))) {
+      return;
     }
     const childState = threadId && !pendingNativeTurn ? this.currentChild(threadId) : undefined;
-    if (notification.method === "turn/started" && childState) {
-      childState.nativeCompletionDelivered = false;
-      this.resumeChild(childState);
-    }
     if (parent && parent.turnIds.has(readString(params, "turnId") ?? "")) {
       observeCodexNativeSubagentDeliveryReceipts({
         state: parent,
@@ -877,165 +956,6 @@ class Monitor {
     return childState ? this.recovery.reconcileRegisteredChild(childState) : false;
   }
 
-  private resolveMirrorState(notification: CodexServerNotification): ParentState | undefined {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params) {
-      return undefined;
-    }
-    if (notification.method === "thread/started") {
-      const thread = isJsonObject(params.thread) ? params.thread : undefined;
-      const parentThreadId = readThreadParentThreadId(thread);
-      const childThreadId = thread ? readString(thread, "id")?.trim() : undefined;
-      const agentPath = readString(readThreadSpawnSource(thread), "agent_path")?.trim();
-      const state = parentThreadId ? this.resolveNativeParentState(parentThreadId) : undefined;
-      if (state?.preparing) {
-        return undefined;
-      }
-      if (state && childThreadId && parentThreadId) {
-        return this.registerChildThread(state, childThreadId, {
-          ...(agentPath === undefined ? {} : { agentPath }),
-          nativeParentThreadId: parentThreadId,
-        })
-          ? state
-          : undefined;
-      }
-      return state;
-    }
-    if (
-      notification.method === "thread/status/changed" ||
-      notification.method === "turn/started" ||
-      notification.method === "turn/completed" ||
-      notification.method === "item/agentMessage/delta"
-    ) {
-      const childThreadId = readString(params, "threadId")?.trim();
-      const parentThreadId = childThreadId
-        ? this.currentChild(childThreadId)?.parentThreadId
-        : undefined;
-      return parentThreadId ? this.parentStates.get(parentThreadId) : undefined;
-    }
-    if (notification.method === "item/started" || notification.method === "item/completed") {
-      const item = isJsonObject(params.item) ? params.item : undefined;
-      const parentThreadId = item
-        ? (readString(item, "senderThreadId") ?? readString(params, "threadId"))?.trim()
-        : undefined;
-      const state = parentThreadId ? this.resolveNativeParentState(parentThreadId) : undefined;
-      if (state?.preparing) {
-        return undefined;
-      }
-      if (state && parentThreadId) {
-        const turnId = readString(params, "turnId");
-        const owner = this.resolveParentOwner(state, turnId, parentThreadId);
-        if (notification.method === "item/completed") {
-          if (
-            readString(item, "type") === "subAgentActivity" &&
-            readString(item, "kind") === "interacted"
-          ) {
-            const childThreadId = readString(item, "agentThreadId");
-            if (childThreadId) {
-              const accept = (admittedOwner: ParentOwner | undefined) =>
-                this.observeParentInteraction(
-                  state,
-                  owner,
-                  childThreadId,
-                  readString(item, "agentPath"),
-                  {
-                    parentTurnId: turnId,
-                    itemId: readString(item, "id"),
-                    modelOwner: admittedOwner,
-                  },
-                );
-              if (
-                !this.submissions.acceptInteraction(
-                  state,
-                  turnId,
-                  readString(item, "id"),
-                  childThreadId,
-                  accept,
-                )
-              ) {
-                accept(owner);
-              }
-            }
-            return state;
-          }
-          if (
-            readString(item, "type") === "collabAgentToolCall" &&
-            readString(item, "tool") === "sendInput" &&
-            readString(item, "status") === "completed"
-          ) {
-            this.submissions.observeCall(state, turnId, item!);
-            return undefined;
-          }
-        }
-        // Codex multi-agent V2 exposes the child only through this parent-scoped
-        // activity item; its later wait item has no receiver thread ids.
-        if (
-          notification.method === "item/completed" &&
-          readString(item, "type") === "subAgentActivity" &&
-          normalizeIdentifier(readString(item, "kind")) === "started"
-        ) {
-          const childThreadId = readString(item, "agentThreadId")?.trim();
-          const agentPath = readString(item, "agentPath");
-          if (childThreadId) {
-            this.registerDirectSpawnChild(
-              state,
-              turnId,
-              {
-                parentThreadId: state.parentThreadId,
-                nativeParentThreadId: parentThreadId,
-                childThreadId,
-                ...(agentPath === undefined ? {} : { agentPath }),
-              },
-              owner,
-            );
-          }
-          return state;
-        }
-        const isCompletedSpawnAgentTool =
-          notification.method === "item/completed" &&
-          readString(item, "type") === "collabAgentToolCall" &&
-          normalizeIdentifier(readString(item, "tool")) === "spawnagent" &&
-          normalizeIdentifier(readString(item, "status")) === "completed";
-        if (normalizeIdentifier(readString(item, "tool")) === "closeagent") {
-          // closeAgent names an existing child before shutdown; treating its
-          // receiver as discovery resurrects completed tasks and repins parents.
-          return state;
-        }
-        if (parentThreadId !== state.parentThreadId && !isCompletedSpawnAgentTool) {
-          // Nested waits observe receivers; only accepted spawn/input paths claim them.
-          return state;
-        }
-        // Pinned Codex derives both fields from the spawn ID, but agentsStates is
-        // observational status metadata. Only receiverThreadIds is authoritative
-        // direct-spawn evidence and may mint retained child authority.
-        const childThreadIds = new Set(readNativeSubagentThreadIds(item?.receiverThreadIds));
-        let accepted = true;
-        for (const childThreadId of childThreadIds) {
-          accepted =
-            Boolean(
-              isCompletedSpawnAgentTool
-                ? this.registerDirectSpawnChild(
-                    state,
-                    turnId,
-                    {
-                      parentThreadId: state.parentThreadId,
-                      nativeParentThreadId: parentThreadId,
-                      childThreadId,
-                    },
-                    owner,
-                  )
-                : this.registerChildThread(state, childThreadId),
-            ) && accepted;
-        }
-        if (!accepted) {
-          return undefined;
-        }
-      }
-      return state;
-    }
-    return undefined;
-  }
-
   private async handleCompletionNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     const parentThreadId = params ? readString(params, "threadId")?.trim() : undefined;
@@ -1105,7 +1025,11 @@ class Monitor {
       });
       // Notification handlers run concurrently. A later status transition wins
       // over this read so stale history cannot complete or re-arm the child.
-      if (!statusRead.isCurrent() || this.childStates.get(childState.runId) !== childState) {
+      if (
+        !statusRead.isCurrent() ||
+        this.childStates.get(childState.runId) !== childState ||
+        !this.isCurrentParent(state)
+      ) {
         return false;
       }
       if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
@@ -1601,6 +1525,12 @@ class Monitor {
       this.associatePendingChildInteraction(known, threadId, turnId);
     }
     this.admitFollowupChild(known, threadId);
+    const startedChild = this.currentChild(threadId);
+    if (startedChild && !known.pendingTurns.some((candidate) => candidate.turnId === turnId)) {
+      // Reserve the new turn before persistence yields to a later completion receipt.
+      startedChild.nativeCompletionDelivered = false;
+      this.resumeChild(startedChild);
+    }
     return true;
   }
 

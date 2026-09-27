@@ -99,6 +99,7 @@ describe("native completion settlement", () => {
       const parent = await registerParent(monitor);
       let observer: Awaited<ReturnType<typeof registerParent>> | undefined;
       let completion: Promise<void> | undefined;
+      let retirement: Promise<void> | undefined;
       try {
         parent.bindTurn("parent-turn");
         await notifyChildStarted(client);
@@ -110,9 +111,8 @@ describe("native completion settlement", () => {
           runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0].isSourceSessionAdmissionAllowed;
         expect(canAdmit?.()).toBe(true);
         if (change === "retirement") {
-          monitor.retireParent("parent-thread");
+          retirement = monitor.retireParent("parent-thread");
           expect(canAdmit?.()).toBe(false);
-          expect(releasePin).toHaveBeenCalledOnce();
         } else {
           observer = await registerParent(monitor);
           observer.bindTurn("observer-turn");
@@ -127,6 +127,7 @@ describe("native completion settlement", () => {
         }
         delivery.resolve({ delivered: false, path: "none" });
         await completion;
+        await retirement;
         expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
         if (change === "retired-turn-receipt") {
           expect(releasePin).not.toHaveBeenCalled();
@@ -140,10 +141,10 @@ describe("native completion settlement", () => {
       } finally {
         delivery.resolve({ delivered: false, path: "none" });
         await completion;
-        monitor.retireParent("parent-thread");
+        await monitor.retireParent("parent-thread");
         await observer?.unregister();
         await parent.unregister();
-        monitor.dispose();
+        await monitor.dispose();
         client.close();
         vi.useRealTimers();
       }

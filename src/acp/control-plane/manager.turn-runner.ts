@@ -134,9 +134,7 @@ export async function runManagerTurn(params: {
   });
   const backendAttempts: BackendAttempt[] = [];
   const recordBackendFailure = async (error: AcpRuntimeError) => {
-    if (!params.isCurrentActor()) {
-      throw createSupersededActorError(sessionKey);
-    }
+    assertActorCurrent();
     const failedBackends = backendAttempts
       .map((attempt) => `${attempt.backend}: ${attempt.error}`)
       .join(" | ");
@@ -230,9 +228,7 @@ export async function runManagerTurn(params: {
             selectedBackend: currentBackend,
             isCurrentActor: params.isCurrentActor,
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
@@ -297,9 +293,7 @@ export async function runManagerTurn(params: {
             });
           }
 
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           activeTurnStarted = true;
           const turnToCancel = activeTurn;
           const eventGate = { open: true };
@@ -395,9 +389,7 @@ export async function runManagerTurn(params: {
               });
             },
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           modelExecution?.assertCurrent();
           if (!turnOutcome.terminalStatus) {
             throw new AcpRuntimeError(
@@ -437,9 +429,7 @@ export async function runManagerTurn(params: {
               ? "ACP turn failed before completion."
               : "Could not initialize ACP session runtime.",
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           retryFreshHandle = await prepareFreshManagerRuntimeHandleRetry({
             attempt,
             cfg: input.cfg,
@@ -454,9 +444,7 @@ export async function runManagerTurn(params: {
             writeSessionMeta: params.writeSessionMeta,
             isCurrentActor: params.isCurrentActor,
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           if (retryFreshHandle) {
             continue;
           }

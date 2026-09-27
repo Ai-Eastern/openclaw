@@ -3,7 +3,6 @@ import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   codexNativeSubagentRunId,
-  readThreadParentThreadId,
   type NativeSubagentAssignment,
 } from "./native-subagent-assignment.js";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
@@ -38,6 +37,7 @@ import {
   pruneSubmissionCalls,
   type NativeSubagentSubmissionCall as SubmissionCall,
 } from "./native-subagent-submission-call.js";
+import { readCodexNativeSubmissionTurn } from "./native-subagent-submission-history.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
 import { isJsonObject, type JsonObject, type CodexServerNotification } from "./protocol.js";
 
@@ -273,15 +273,19 @@ export class CodexNativeSubagentSubmissionOwner {
     );
   }
 
+  async settleWrites(state: ParentState): Promise<void> {
+    while (this.writes.get(state)?.size) {
+      await Promise.allSettled(this.writes.get(state)!);
+    }
+  }
+
   async drain(state: ParentState): Promise<void> {
     const calls = this.calls.get(state);
     pruneSubmissionCalls(state, calls, this.dependencies);
     if (!calls?.size) {
       this.calls.delete(state);
     }
-    while (this.writes.get(state)?.size) {
-      await Promise.allSettled(this.writes.get(state)!);
-    }
+    await this.settleWrites(state);
     if (state.owners.size === 0) {
       for (const custody of this.pending.get(state)?.values() ?? []) {
         if (custody.phase === "captured") {
@@ -512,56 +516,19 @@ export class CodexNativeSubagentSubmissionOwner {
     custody.timer.unref();
   }
 
-  private async readTurn(
+  private readTurn(
     state: ParentState,
     custody: SubmissionCustody,
   ): Promise<JsonObject | undefined> {
-    const { receipt } = custody;
-    if (!this.dependencies.prepareReceiver(state, receipt.childThreadId)) {
-      return undefined;
-    }
-    const revision = this.dependencies.recovery.retainThreadStatusRevision(receipt.childThreadId);
-    try {
-      const response = await this.dependencies.client.request(
-        "thread/read",
-        { threadId: receipt.childThreadId, includeTurns: true },
-        { timeoutMs: 30_000 },
-      );
-      if (!revision.isCurrent() || !this.isObserving(state, custody)) {
-        return undefined;
-      }
-      const thread = isJsonObject(response.thread) ? response.thread : undefined;
-      if (
-        readString(thread, "id") !== receipt.childThreadId ||
-        readThreadParentThreadId(thread) !== this.nativeParentThreadId(state, receipt.childThreadId)
-      ) {
-        return undefined;
-      }
-      const turns: JsonObject[] = [];
-      for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
-        if (isJsonObject(turn)) {
-          turns.push(turn);
-        }
-      }
-      const predecessorIndex = turns.findIndex(
-        (turn) => readString(turn, "id") === receipt.predecessorNativeTurnId,
-      );
-      const turnIndex = turns.findIndex((turn) => readString(turn, "id") === receipt.submissionId);
-      if (
-        predecessorIndex < 0 ||
-        turnIndex <= predecessorIndex ||
-        !["completed", "failed"].includes(readString(turns[predecessorIndex], "status") ?? "")
-      ) {
-        return undefined;
-      }
-      const previous = this.dependencies.currentChild(receipt.childThreadId);
-      if (previous && !previous.terminal && previous.nativeTurnId !== receipt.submissionId) {
-        await this.dependencies.recovery.reconcileRegisteredChild(previous);
-      }
-      return this.isObserving(state, custody) ? turns[turnIndex] : undefined;
-    } finally {
-      revision.release();
-    }
+    const childThreadId = custody.receipt.childThreadId;
+    return readCodexNativeSubmissionTurn(custody.receipt, {
+      client: this.dependencies.client,
+      recovery: this.dependencies.recovery,
+      prepareReceiver: () => this.dependencies.prepareReceiver(state, childThreadId),
+      isCurrent: () => this.isObserving(state, custody),
+      parentThreadId: () => this.nativeParentThreadId(state, childThreadId),
+      currentChild: () => this.dependencies.currentChild(childThreadId),
+    });
   }
 
   private finishCustody(state: ParentState, custody: SubmissionCustody): void {

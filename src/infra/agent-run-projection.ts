@@ -40,6 +40,60 @@ function mergeProjectedAgentRunStates(
     : next;
 }
 
+export function resolveAgentRunProjectionProgressState(
+  params: {
+    sessionKeys: readonly string[];
+    sessionId?: string;
+    agentId?: string;
+    defaultAgentId?: string;
+  },
+  index: ProjectedAgentRunIndex,
+): ProjectedAgentRunState | undefined {
+  let agentId = params.agentId;
+  if (agentId === undefined) {
+    for (const key of params.sessionKeys) {
+      agentId = parseAgentSessionKey(key)?.agentId;
+      if (agentId !== undefined) {
+        break;
+      }
+    }
+    agentId ??= params.defaultAgentId;
+  }
+  if (!agentId) {
+    return undefined;
+  }
+  const agentPrefix = projectedRunIdentity(agentId, "");
+  const mayAdoptOwnerless =
+    params.defaultAgentId !== undefined &&
+    agentPrefix === projectedRunIdentity(params.defaultAgentId, "");
+  let status: ProjectedAgentRunState | undefined;
+  for (const sessionKey of params.sessionKeys) {
+    status = mergeProjectedAgentRunStates(status, index.sessionKeys.get(agentPrefix + sessionKey));
+    if (status === "running") {
+      return status;
+    }
+    if (mayAdoptOwnerless) {
+      status = mergeProjectedAgentRunStates(status, index.ownerlessSessionKeys.get(sessionKey));
+      if (status === "running") {
+        return status;
+      }
+    }
+  }
+  if (params.sessionId !== undefined) {
+    status = mergeProjectedAgentRunStates(
+      status,
+      index.sessionIds.get(agentPrefix + params.sessionId),
+    );
+    if (mayAdoptOwnerless) {
+      status = mergeProjectedAgentRunStates(
+        status,
+        index.ownerlessSessionIds.get(params.sessionId),
+      );
+    }
+  }
+  return status;
+}
+
 /** Canonicalizes every run-context field consumed by the session projection. */
 export function projectedAgentRunInputKey(context: Readonly<AgentRunContext>): string {
   const agentId = context.agentId ?? parseAgentSessionKey(context.sessionKey)?.agentId;
@@ -132,35 +186,4 @@ export function buildAgentRunProjectionIndex(params: {
     }
   }
   return { modelsBySessionId, sessionKeys, sessionIds, ownerlessSessionKeys, ownerlessSessionIds };
-}
-
-export function resolveAgentRunProjectionProgressState(params: {
-  sessionKeys: readonly string[];
-  sessionId?: string;
-  agentId?: string;
-  defaultAgentId?: string;
-  index: ProjectedAgentRunIndex;
-}): ProjectedAgentRunState | undefined {
-  const { index } = params;
-  const agentId =
-    params.agentId ??
-    params.sessionKeys.flatMap((key) => parseAgentSessionKey(key)?.agentId ?? [])[0] ??
-    params.defaultAgentId;
-  if (!agentId) {
-    return undefined;
-  }
-  const mayAdoptOwnerless =
-    params.defaultAgentId !== undefined &&
-    normalizeAgentId(agentId) === normalizeAgentId(params.defaultAgentId);
-  const statuses = params.sessionKeys.flatMap((sessionKey) => [
-    index.sessionKeys.get(projectedRunIdentity(agentId, sessionKey)),
-    ...(mayAdoptOwnerless ? [index.ownerlessSessionKeys.get(sessionKey)] : []),
-  ]);
-  if (params.sessionId !== undefined) {
-    statuses.push(index.sessionIds.get(projectedRunIdentity(agentId, params.sessionId)));
-    if (mayAdoptOwnerless) {
-      statuses.push(index.ownerlessSessionIds.get(params.sessionId));
-    }
-  }
-  return statuses.reduce(mergeProjectedAgentRunStates, undefined);
 }

@@ -150,8 +150,9 @@ describe("CodexNativeSubagentMonitor", () => {
     next.release();
     expect(monitor.resolveModelThreadId("child-b")).toBeUndefined();
     expect(b.release).toHaveBeenCalledOnce();
-    monitor.dispose();
+    const disposal = monitor.dispose();
     expect(a.release).toHaveBeenCalledOnce();
+    await disposal;
   });
 
   it("retains nested admitted work and fences only the cancelled execution across regrant", async () => {
@@ -235,9 +236,10 @@ describe("CodexNativeSubagentMonitor", () => {
     first.release();
     sibling.release();
     nested.release();
-    monitor.dispose();
+    const disposal = monitor.dispose();
     expect(monitor.resolveModelThreadId("grandchild-turn")).toBeUndefined();
     expect(source.release).toHaveBeenCalledOnce();
+    await disposal;
   });
 
   it("does not accept parent commentary as a native child result or delivery receipt", async () => {
@@ -310,7 +312,7 @@ describe("CodexNativeSubagentMonitor", () => {
     owner.bindTurn("turn-1");
 
     expect(claimDirectChild).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["v1", "v2"] as const)(
@@ -359,7 +361,7 @@ describe("CodexNativeSubagentMonitor", () => {
         params: { threadId: "parent-first", turnId: "wrong-parent-turn", item: secondItem },
       } as unknown as CodexServerNotification);
       expect(secondClaim).toHaveBeenCalledTimes(1);
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -382,7 +384,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
       owner.bindTurn("turn-1");
       expect(claimDirectChild).not.toHaveBeenCalled();
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -421,7 +423,7 @@ describe("CodexNativeSubagentMonitor", () => {
       nativeCompletionNotification({ agentPath: "child-thread", result: "direct result" }),
     );
     expect(release).toHaveBeenCalledTimes(1);
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("does not retain authority for a failed V1 spawn", async () => {
@@ -450,7 +452,7 @@ describe("CodexNativeSubagentMonitor", () => {
     });
 
     expect(claimDirectChild).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["v1", "v2"] as const)(
@@ -482,7 +484,7 @@ describe("CodexNativeSubagentMonitor", () => {
       } as unknown as CodexServerNotification);
 
       expect(claimDirectChild).toHaveBeenCalledTimes(1);
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -507,7 +509,7 @@ describe("CodexNativeSubagentMonitor", () => {
     });
 
     expect(claimDirectChild).toHaveBeenCalledTimes(1);
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("does not reclaim a completed child while its final result is still unresolved", async () => {
@@ -533,7 +535,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(claimDirectChild).toHaveBeenCalledTimes(1);
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["completed", "failed", "interrupted"] as const)(
@@ -565,7 +567,7 @@ describe("CodexNativeSubagentMonitor", () => {
         expect.stringContaining("Codex child turn"),
       );
       expect(claimDirectChild).not.toHaveBeenCalled();
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -603,7 +605,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(firstClaim).not.toHaveBeenCalled();
     expect(nextClaim).toHaveBeenCalledWith("terminal-child-1");
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("collects a terminal revision after its last held reader releases", async () => {
@@ -644,6 +646,6 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(firstClaim).not.toHaveBeenCalled();
     expect(nextClaim).toHaveBeenCalledWith("child-thread");
-    monitor.dispose();
+    await monitor.dispose();
   });
 });

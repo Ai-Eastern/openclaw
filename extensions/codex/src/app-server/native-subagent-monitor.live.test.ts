@@ -247,7 +247,7 @@ describeLive("codex native subagent monitor live", () => {
         expect(claims).toEqual({ first: 1, second: 1, third: 1 });
         expect(releases).toEqual({ first: 1, second: 1, third: 1 });
         expect(recorder.deliveries).toEqual([]);
-        monitor.dispose();
+        await monitor.dispose();
       } finally {
         await client.closeAndWait();
       }
@@ -426,7 +426,7 @@ describeLive("codex native subagent monitor live", () => {
         const latestTurn = isJsonObject(pageTurns[0]) ? pageTurns[0] : undefined;
         expect(latestTurn?.status).toBe("completed");
 
-        monitor.dispose();
+        await monitor.dispose();
       } finally {
         await client?.closeAndWait();
         await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });

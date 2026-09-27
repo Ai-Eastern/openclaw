@@ -961,7 +961,6 @@ enum class GatewayMethod(
   ThemesImport("themes.import"),
   ControlUiGithubDetail("controlUi.githubDetail"),
   ProgressCardRefresh("progressCard.refresh"),
-  CronHistory("cron.history"),
   WebSearchStatus("webSearch.status"),
   WebSearchTest("webSearch.test"),
   SessionsProviderReviewContinue("sessions.providerReview.continue"),
@@ -973,6 +972,8 @@ enum class GatewayMethod(
   PortalSessionList("portal.session.list"),
   PortalSessionOpen("portal.session.open"),
   PortalSessionClose("portal.session.close"),
+  CronHistory("cron.history"),
+  PresenceActivity("presence.activity"),
 }
 
 enum class GatewayEvent(

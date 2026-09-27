@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-completion";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
@@ -70,6 +71,34 @@ export function successfulSendInputOutput(params: {
 export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 export const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
+
+export function observeCompletionAttempts() {
+  const attempts = new Map<Promise<void>, string>();
+  const prototype = CodexNativeSubagentCompletionDelivery.prototype;
+  const observer = vi.spyOn(prototype, "deliverPending");
+  prototype.deliverPending = function (this: CodexNativeSubagentCompletionDelivery, state, child) {
+    const attempt = observer.call(this, state, child);
+    attempts.set(attempt, child.runId);
+    return attempt;
+  };
+  onTestFinished(() => observer.mockRestore());
+  return {
+    async settle(runId?: string) {
+      // Join real attempts, including delivery admitted by completion callbacks.
+      while (true) {
+        const batch = [...attempts].filter(([, id]) => runId === undefined || id === runId);
+        if (batch.length === 0) {
+          return;
+        }
+        for (const [attempt] of batch) {
+          attempts.delete(attempt);
+        }
+        await Promise.all(batch.map(([attempt]) => attempt));
+      }
+    },
+    restore: () => observer.mockRestore(),
+  };
+}
 
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };

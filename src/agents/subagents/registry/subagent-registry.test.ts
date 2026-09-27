@@ -61,6 +61,10 @@ import {
 } from "./subagent-registry.native-settlement.test-support.js";
 import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
 import {
+  registerRestoredRollbackPublicationTest,
+  registerRestoredRunningSettlementTest,
+} from "./subagent-registry.restored-settlement.test-support.js";
+import {
   makeCompletedCollectorRun,
   makeKilledRun,
   makeQueuedRun,
@@ -952,59 +956,11 @@ describe("subagent registry seam flow", () => {
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["done"] as const)(
-    "settles and announces a retired running row whose saved session completed as %s",
-    async (status) => {
-      {
-        const startedAt = Date.now() - 2_000;
-        const endedAt = Date.now() - 1_000;
-        const runId = "run-restored-completed-session";
-        const childSessionKey = "agent:main:subagent:restored-completed-session";
-        mocks.entries = {
-          [childSessionKey]: createSessionEntry({
-            status,
-            startedAt,
-            endedAt,
-            updatedAt: endedAt,
-            lifecycleRevision: "revision-child",
-            lifecycleRunId: runId,
-            abortedLastRun: false,
-          }),
-        };
-        const restored = createSubagentRunRecord({
-          runId,
-          childSessionKey,
-          task: "saved completion",
-          createdAt: startedAt,
-          execution: { status: "running", startedAt, lifecycleGeneration: "retired-generation" },
-        });
-        mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-          runs: Map<string, SubagentRunRecord>;
-        }) => {
-          params.runs.set(runId, restored);
-          return 1;
-        }) as never);
-        mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "timeout" } });
-
-        hydrateAndActivateRegistry();
-
-        await waitForFast(() => {
-          expect(findRequesterRun(runId)).toMatchObject({
-            execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-            delivery: { status: "delivered" },
-          });
-        });
-        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            childRunId: runId,
-            outcome: expect.objectContaining({ status: "ok" }),
-          }),
-        );
-        expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
-      }
-    },
-  );
+  registerRestoredRunningSettlementTest({
+    getRegistry: () => mod,
+    mocks,
+    hydrateAndActivateRegistry,
+  });
 
   it.each([
     { name: "exact retired orphan", retired: true, sameRun: true, aborted: false, waits: false },
@@ -1418,74 +1374,11 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("gateway-terminal-stale")).toBeUndefined();
   });
 
-  it("holds a restored FIFO slot until an accepted collector is confirmed stopped", async () => {
-    vi.useRealTimers();
-    const now = Date.now();
-    mockSingleCollectorConcurrency();
-    mockRestoredRuns(() => [
-      makeQueuedRun({ runId: "run-restored-stop-one", groupId: "restore-stop", createdAt: now }),
-      makeQueuedRun({
-        runId: "run-restored-stop-two",
-        groupId: "restore-stop",
-        createdAt: now + 1,
-      }),
-    ]);
-    mocks.entries = {
-      "agent:main:subagent:run-restored-stop-one": {
-        sessionId: "one",
-        lifecycleRevision: "revision-one",
-        updatedAt: now,
-      },
-      "agent:main:subagent:run-restored-stop-two": { sessionId: "two", updatedAt: now },
-    };
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
-      throw new Error("sqlite unavailable after Gateway acceptance");
-    });
-    let agentCalls = 0;
-    let releaseAbort: (() => void) | undefined;
-    const deleteReleases: Array<() => void> = [];
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        return { runId: `gateway-restored-${agentCalls}` };
-      }
-      if (request.method === "chat.abort") {
-        return await new Promise<Record<string, unknown>>((resolve) => {
-          releaseAbort = () => resolve({});
-        });
-      }
-      if (request.method === "sessions.delete") {
-        return await new Promise<Record<string, unknown>>((resolve) => {
-          deleteReleases.push(() => resolve({}));
-        });
-      }
-      return request.method === "agent.wait" ? { status: "pending" } : {};
-    });
-
-    hydrateAndActivateRegistry();
-    await waitForFast(() => expect(releaseAbort).toBeTypeOf("function"));
-    expect(agentCalls).toBe(1);
-
-    releaseAbort?.();
-    await waitForFast(() => expect(deleteReleases).toHaveLength(1));
-    expect(agentCalls).toBe(1);
-    await waitForFast(() =>
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "sessions.delete",
-          params: expect.objectContaining({
-            key: "agent:main:subagent:run-restored-stop-one",
-            expectedSessionId: "one",
-            expectedLifecycleRevision: "revision-one",
-          }),
-        }),
-      ),
-    );
-    deleteReleases[0]?.();
-    await waitForFast(() => expect(deleteReleases).toHaveLength(2));
-    expect(agentCalls).toBe(1);
-    deleteReleases[1]?.();
-    await waitForFast(() => expect(agentCalls).toBe(2));
+  registerRestoredRollbackPublicationTest({
+    mocks,
+    hydrateAndActivateRegistry,
+    mockSingleCollectorConcurrency,
+    mockRestoredRuns,
   });
 
   it("holds a restored FIFO slot while an indeterminate launch session is deleted", async () => {

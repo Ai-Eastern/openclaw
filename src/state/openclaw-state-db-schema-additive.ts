@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
@@ -174,13 +175,8 @@ function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;
   }
-  let record: unknown;
-  try {
-    record = JSON.parse(recordJson) as unknown;
-  } catch {
-    return null;
-  }
-  if (!isRecord(record) || !isRecord(record.original)) {
+  const record = safeParseJsonRecord(recordJson);
+  if (!record || !isRecord(record.original)) {
     return null;
   }
   const mediaRoot = record.original.mediaRoot;

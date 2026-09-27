@@ -449,13 +449,11 @@ checks; missing or unreadable session state does not override live execution,
 recovery, or completion-delivery ownership. These checks do not recreate Task
 projections or change the database schema.
 
-Cron task reconciliation reads durable outcomes and applies recovery or loss in
-the shared-state worker. The final recovery check and lost-task write share one
-transaction, including after a recovery hook yields. The host rechecks the
-selected task and live cron job at transaction and commit admission; committed
-rows use the existing task and linked-flow publication owners. Synchronous
-operator inspection and the deprecated external task SDK retain their existing
-contracts. This changes no schema, retention policy, or update step.
+Cron history maintenance reads durable run records and native receipts through
+the shared-state worker. It applies reconciliation and pruning in one transaction,
+retaining rows protected by current job or receipt ownership. Reconciled legacy
+rows remain history; they do not recreate a task runtime or linked-flow publication
+owner. This changes no schema, retention policy, or update step.
 
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
@@ -518,8 +516,12 @@ or delivery authority.
 Slow main-thread coordinator warnings include the caller stack as well as the
 operation label, captured only after a wait exceeds 100 ms.
 
-Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
-through the shared-state worker. Failed deletions yield between bounded retries,
+Worktree run-lease admission and cleanup use the shared-state worker. Admission
+rechecks removal, exclusivity, and process liveness inside the insertion transaction,
+retaining the requesting process's PID and start time. Cleanup deletes the exact
+token and reads the Git unlock target. A failed result delivery permits compensation
+only after native settlement; unknown outcomes retain the original database custody
+for stale-process recovery. Failed deletions yield between bounded retries,
 retaining the original database admission and Git guard until deletion settles.
 Process exit retains its best-effort synchronous deletion because it cannot await
 a worker. Git-guard admission reads its registry target through the same retained
@@ -529,9 +531,9 @@ accepted work and resource cleanup before releasing its engine and process owner
 Cold worker startup belongs to admission; normal idle retirement and memory-pressure
 eviction remain in effect. Detached worker opening evaluates live admission
 guards in their captured caller context, then releases that capture after native
-opening settles. Worktree run admission writes and the remaining native Cron
-transitions still need migration. This cutover preserves schemas, stored bytes,
-retention, configuration, and update behavior.
+opening settles. The remaining native Cron transitions still need migration.
+This cutover preserves schemas, stored bytes, retention, configuration, and update
+behavior.
 
 Native cron receipt guards read deletion authority through their transaction's
 admitted connection. Other synchronous current-authority readers may reuse that

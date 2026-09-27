@@ -17,7 +17,6 @@ import type {
   RecoveredCompletion,
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
-import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
 import type { JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -415,11 +414,4 @@ function readLastAgentMessage(turn: JsonObject): string | undefined {
     }
   }
   return legacyResult;
-}
-
-export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): boolean {
-  return (
-    completion.status === "succeeded" &&
-    completion.statusLabel === "completed_without_final_message"
-  );
 }

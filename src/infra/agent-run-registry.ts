@@ -615,17 +615,15 @@ export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
   return buildAgentRunProjectionIndex({ contexts: contexts.values(), lifecycleGeneration });
 }
 
-export function resolveProjectedAgentRunProgressState(params: {
-  sessionKeys: readonly string[];
-  sessionId?: string;
-  agentId?: string;
-  defaultAgentId?: string;
-  index?: ProjectedAgentRunIndex;
-}): ProjectedAgentRunState | undefined {
-  return resolveAgentRunProjectionProgressState({
-    ...params,
-    index: params.index ?? buildProjectedAgentRunIndex(),
-  });
+export function resolveProjectedAgentRunProgressState(
+  params: Parameters<typeof resolveAgentRunProjectionProgressState>[0] & {
+    index?: ProjectedAgentRunIndex;
+  },
+): ProjectedAgentRunState | undefined {
+  return resolveAgentRunProjectionProgressState(
+    params,
+    params.index ?? buildProjectedAgentRunIndex(),
+  );
 }
 
 /** Clears context state for a run that has ended or been discarded. */
