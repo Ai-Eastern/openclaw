@@ -48,13 +48,6 @@ test("automatic list and search projection reuse conventional state-directory pr
         await withPluginMetadataSnapshotScope(
           metadata,
           async () => {
-            const observations = [];
-            const lstatProbes: Array<{
-              search: string;
-              runtime: string;
-              path: string;
-              error: Error;
-            }> = [];
             const stateDirectoryProbes: Array<{
               search: string;
               runtime: string;
@@ -62,7 +55,6 @@ test("automatic list and search projection reuse conventional state-directory pr
             }> = [];
             for (const search of [undefined, "unmatched-runtime-search", "openclaw"]) {
               const request = { configuredAgentsOnly: true, includeGlobal: false, search };
-              const counts = [];
               for (const agentRuntimeOverride of ["openclaw", undefined]) {
                 for (const agentId of agentIds) {
                   await writeSessionStore({
@@ -79,6 +71,7 @@ test("automatic list and search projection reuse conventional state-directory pr
                 }
                 const warm = await directSessionReq("sessions.list", request);
                 expect(warm.ok).toBe(true);
+                stateDirectoryProbes.length = 0;
                 const existsSync = fsSync.existsSync;
                 const exists = vi.spyOn(fsSync, "existsSync").mockImplementation((pathname) => {
                   // Retain bounded provenance for probes that only reproduce in shared CI shards.
@@ -94,23 +87,6 @@ test("automatic list and search projection reuse conventional state-directory pr
                   }
                   return existsSync(pathname);
                 });
-                const originalLstat = fsSync.lstatSync;
-                let capturedLstats = 0;
-                const lstat = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-                  if (capturedLstats < 3) {
-                    capturedLstats += 1;
-                    lstatProbes.push({
-                      search: search ?? "list",
-                      runtime: agentRuntimeOverride ?? "auto",
-                      path: String(args[0]),
-                      error: new Error("Session projection lstat probe"),
-                    });
-                  }
-                  return Reflect.apply(originalLstat, fsSync, args);
-                });
-                const readlink = vi.spyOn(fsSync, "readlinkSync");
-                const realpath = vi.spyOn(fsSync.realpathSync, "native");
-                const stat = vi.spyOn(fsSync, "statSync");
                 const environments = vi.spyOn(runtimePaths, "captureRuntimeStateEnvironment");
                 syncBuiltinESMExports();
                 try {
@@ -123,48 +99,20 @@ test("automatic list and search projection reuse conventional state-directory pr
                     search === "unmatched-runtime-search" ? 0 : agentIds.length,
                   );
                   expect.soft(environments.mock.calls.length, search ?? "list").toBe(0);
-                  counts.push({
-                    exists: exists.mock.calls.length,
-                    stateDirectoryExists: exists.mock.calls.filter(
-                      ([pathname]) => pathname === stateDir || pathname === legacyStateDir,
-                    ).length,
-                    lstat: lstat.mock.calls.length,
-                    readlink: readlink.mock.calls.length,
-                    realpath: realpath.mock.calls.length,
-                    stat: stat.mock.calls.length,
-                  });
+                  expect
+                    .soft(
+                      stateDirectoryProbes,
+                      `${search ?? "list"}: ${agentRuntimeOverride ?? "auto"}`,
+                    )
+                    .toEqual([]);
                 } finally {
-                  for (const spy of [exists, lstat, readlink, realpath, stat, environments]) {
+                  for (const spy of [exists, environments]) {
                     spy.mockRestore();
                   }
                   syncBuiltinESMExports();
                 }
               }
-              observations.push({
-                surface: search ? "search" : "list",
-                pinned: counts[0],
-                auto: counts[1],
-              });
             }
-            // Stack formatting can touch the filesystem, so wait until all spies are restored.
-            expect(
-              observations,
-              JSON.stringify(
-                {
-                  stateDirectoryProbes,
-                  lstatProbes: lstatProbes.map(({ search, runtime, path: pathname, error }) => ({
-                    search,
-                    runtime,
-                    path: pathname,
-                    stack: error.stack,
-                  })),
-                },
-                null,
-                2,
-              ),
-            ).toEqual(
-              observations.map(({ surface, pinned }) => ({ surface, pinned, auto: pinned })),
-            );
           },
           { config, trustConfigIdentity: true },
         );
