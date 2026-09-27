@@ -1857,7 +1857,7 @@ export function publishDiagnostics(
       publishedSuccessSummary(artifactRoot, sanitize),
       publicLimit,
     );
-    return;
+    return undefined;
   }
   if (outcome !== "failed") {
     throw new Error();
@@ -2046,6 +2046,12 @@ export function publishDiagnostics(
       "Upgrade survivor diagnostics: some inputs omitted; see failure.json omissions.\n",
     );
   }
+  // Return only published failure coordinates; logs and configuration stay in the artifact.
+  return {
+    phase: sanitize(report.phase, "phase"),
+    exitStatus: report.exitStatus,
+    signal: report.signal,
+  };
 }
 
 if (import.meta.main) {

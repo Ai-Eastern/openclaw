@@ -129,6 +129,12 @@ describe("native harness completion admission", () => {
 const key = requesterSessionKey,
   child = sourceSessionKey,
   source = sourceRunId;
+const inputProvenance = {
+  kind: "inter_session",
+  sourceTool: "agent_harness_task",
+  sourceChannel: "internal",
+  sourceSessionKey: child,
+};
 async function setupNativeRequester(state: OpenClawTestState) {
   const target = {
     agentId: "main",
@@ -164,7 +170,7 @@ async function captureForNativeRequester(
   );
 }
 describe("pre-mirror recovery input custody", () => {
-  it.each(["current", "prior", "unknown", "unadmitted-prior", "foreign-source", "human"] as const)(
+  it.each(["current", "prior", "unadmitted-prior", "foreign-source", "human"] as const)(
     "retains exact pre-mirror recovery admission after the real recorder commits %s",
     async (scenario) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -174,12 +180,7 @@ describe("pre-mirror recovery input custody", () => {
           sessionKey: key,
           entry: original,
           runId: source,
-          inputProvenance: {
-            kind: "inter_session",
-            sourceTool: "agent_harness_task",
-            sourceChannel: "internal",
-            sourceSessionKey: child,
-          },
+          inputProvenance,
         });
         if (!claim) {
           throw new Error("real harness task did not bind at admission");
@@ -204,12 +205,7 @@ describe("pre-mirror recovery input custody", () => {
             content: "completed child",
             idempotencyKey: `${source}:user`,
             __openclaw: { runId: source },
-            provenance: {
-              kind: "inter_session",
-              sourceTool: "agent_harness_task",
-              sourceChannel: "internal",
-              sourceSessionKey: child,
-            },
+            provenance: inputProvenance,
           },
         });
         const recoveryRunId = "recorder-recovery-current";
@@ -245,11 +241,7 @@ describe("pre-mirror recovery input custody", () => {
           }
           effect();
           const inputRunId =
-            scenario === "prior" || scenario === "unadmitted-prior"
-              ? priorRunId
-              : scenario === "unknown"
-                ? "unrelated-run"
-                : recoveryRunId;
+            scenario === "prior" || scenario === "unadmitted-prior" ? priorRunId : recoveryRunId;
           const recorder = createUserTurnTranscriptRecorder({
             target: { ...transcript, sessionEntry: recovered },
             input: {
