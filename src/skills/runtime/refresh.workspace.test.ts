@@ -102,7 +102,7 @@ async function remoteFixture() {
   }> = [];
   const access = {
     bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-    loadSkills: vi.fn(async () =>
+    loadSkills: vi.fn(async (_request: WorkspaceSkillSourceRequest) =>
       readWorkspaceSkillSources({
         sourcePlan: resolveWorkspaceSkillSourcePlan(host, { workspaceOnly: true }),
         limits: resolveSkillDiscoveryLimits(),
@@ -470,4 +470,59 @@ it("reacquires a closed transport and rejects late events after binding retireme
   expect(getSkillsSnapshotVersion(gateway)).toBe(version);
   await refresh.closeSkillsWatchers();
   expect(() => refresh.ensureSkillsWatcher(params)).toThrow("Workspace access is stopped");
+});
+
+it("keeps canonical Gateway roots local through discovery, refresh, and host changes", async () => {
+  const { params, access, release } = await remoteFixture();
+  const canonical = await fixture.createFixtureDirectory("canonical-project");
+  const projectRoot = path.join(canonical, "skills");
+  await writeSkill({
+    dir: path.join(projectRoot, "guide"),
+    name: "guide",
+    description: "Lower precedence project",
+  });
+  const project = path.join(projectRoot, "project");
+  await writeSkill({ dir: project, name: "project", description: "Original project instructions" });
+  const canonicalParams = {
+    ...params,
+    executionWorkspaceDir: canonical,
+    executionWorkspaceFileHost: "gateway" as const,
+  };
+  let snapshot = (await resolveReusableWorkspaceSkillSnapshot(canonicalParams)).snapshot;
+  expect(snapshot.resolvedSkills?.find((skill) => skill.name === "guide")?.description).toBe(
+    "Original host instructions",
+  );
+  expect(snapshot.resolvedSkills?.find((skill) => skill.name === "project")).toMatchObject({
+    fileHost: "gateway",
+    filePath: path.join(project, "SKILL.md"),
+  });
+  expect(access.loadSkills.mock.lastCall?.[0].executionWorkspaceDir).toBeUndefined();
+  expect(access.watchSkills.mock.lastCall?.[0].executionWorkspaceDir).toBeUndefined();
+  const watcher = watchForSkillRoot(projectRoot).watcher;
+  for (const current of createdWatchers) {
+    current.emit("ready");
+  }
+  await waitForSkillsWatcherTurn();
+  await writeSkill({ dir: project, name: "project", description: "Changed project instructions" });
+  vi.useFakeTimers();
+  watcher.emit("all", "change", path.join(project, "SKILL.md"));
+  await vi.advanceTimersByTimeAsync(250);
+  vi.useRealTimers();
+  snapshot = (
+    await resolveReusableWorkspaceSkillSnapshot({ ...canonicalParams, existingSnapshot: snapshot })
+  ).snapshot;
+  expect(snapshot.prompt).toContain("Changed project instructions");
+  // A remote explicit path with identical text is a different source identity.
+  const remote = await resolveReusableWorkspaceSkillSnapshot({
+    ...params,
+    executionWorkspaceDir: canonical,
+    existingSnapshot: snapshot,
+  });
+  expect(remote.shouldRefresh).toBe(true);
+  expect(access.loadSkills.mock.lastCall?.[0].executionWorkspaceDir).toBe(canonical);
+  expect(access.watchSkills.mock.lastCall?.[0].executionWorkspaceDir).toBe(canonical);
+  release();
+  await expect(
+    resolveReusableWorkspaceSkillSnapshot({ ...canonicalParams, existingSnapshot: snapshot }),
+  ).rejects.toThrow("stopped or not ready");
 });

@@ -224,6 +224,39 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
     }
   });
 
+  it("keeps canonical execution entries and their binary requirements on the right hosts", async () => {
+    const { gateway, sources, bridge, options } = await fixture();
+    await writeSkill({
+      dir: path.join(options.executionWorkspaceDir, "skills", "project"),
+      name: "project",
+      description: "Gateway canonical instructions",
+      metadata: JSON.stringify({ openclaw: { requires: { bins: ["remote-tool"] } } }),
+    });
+    const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
+    const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
+    try {
+      const params = { ...options, executionWorkspaceFileHost: "gateway" as const };
+      const entries =
+        caller === "prompt"
+          ? (await resolveWorkspaceSkillPromptEntries(gateway, params)).eligible
+          : await prepareWorkspaceSkills(gateway, params);
+      expect(entries.map((entry) => entry.skill.name)).toEqual(["available", "project", "pinned"]);
+      expect(entries.find((entry) => entry.skill.name === "project")?.skill).toMatchObject({
+        description: "Gateway canonical instructions",
+        fileHost: "gateway",
+      });
+      expect(entries.find((entry) => entry.skill.name === "available")?.skill.fileHost).toBe(
+        "workspace",
+      );
+      expect(loadSkills.mock.calls[0]![0]).toMatchObject({
+        executionWorkspaceDir: undefined,
+        additionalBins: expect.arrayContaining(["remote-tool", "library-tool"]),
+      });
+    } finally {
+      release();
+    }
+  });
+
   it("rejects discovery completed after its workspace binding stops", async () => {
     const { gateway, sources, bridge, options } = await fixture();
     const deferred = createDeferredCore<WorkspaceSkillSources>();
