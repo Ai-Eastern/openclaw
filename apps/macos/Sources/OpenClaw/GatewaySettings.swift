@@ -162,9 +162,6 @@ struct GatewaySettings: View {
                 } label: {
                     Text(verbatim: profile.name)
                     Text(verbatim: profile.url.absoluteString)
-                    if let progress = GatewayBrowserSignInCoordinator.shared.renewals[profile.id]?.progress {
-                        GatewayBrowserSignInProgressView(progress: progress)
-                    }
                 }
             }
         }

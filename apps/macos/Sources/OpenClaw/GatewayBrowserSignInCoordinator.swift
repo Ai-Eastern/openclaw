@@ -1,17 +1,15 @@
 import AppKit
 import Foundation
-import Observation
 import OpenClawKit
 import OSLog
 
 @MainActor
-@Observable
 final class GatewayBrowserSignInCoordinator {
     static let shared = GatewayBrowserSignInCoordinator()
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.browser-sign-in")
-    private(set) var renewals: [String: (progress: GatewayBrowserSignInProgress, task: Task<Void, Never>)] = [:]
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
-    @ObservationIgnored private var periodicCheck: Task<Void, Never>?
+    private var renewals: [String: Task<Void, Never>] = [:]
+    private var observers: [NSObjectProtocol] = []
+    private var periodicCheck: Task<Void, Never>?
 
     static var userIsPresent: Bool {
         NSApplication.shared.isActive && (SystemPresenceInfo.lastHardwareInputSeconds() ?? .max) < 5 * 60
@@ -46,7 +44,6 @@ final class GatewayBrowserSignInCoordinator {
                       profileID: id, now: Date(), userPresent: Self.userIsPresent, inUse: true)
             else { continue }
             let progress = GatewayBrowserSignInProgress()
-            progress.isRenewing = true
             progress.gatewayHost = profile.url.host ?? ""
             let task = Task { [weak self] in
                 defer { self?.renewals[id] = nil }
@@ -73,12 +70,12 @@ final class GatewayBrowserSignInCoordinator {
                         "automatic browser renewal \(outcome, privacy: .public) profile=\(id, privacy: .public)")
                 }
             }
-            self.renewals[id] = (progress, task)
+            self.renewals[id] = task
         }
     }
 
     private func cancelAutomaticRenewal(profileID: String) async {
-        guard let task = self.renewals[profileID]?.task else { return }
+        guard let task = self.renewals[profileID] else { return }
         task.cancel()
         // Join cloudflared before a user-owned attempt starts its replacement helper.
         await task.value

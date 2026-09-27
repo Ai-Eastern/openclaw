@@ -32,7 +32,6 @@ struct GatewayBrowserHandoff: Sendable {
 final class GatewayBrowserSignInProgress {
     private(set) var handoff: GatewayBrowserHandoff?
     var gatewayHost = ""
-    var isRenewing = false
     private(set) var error: String?
     private(set) var isOpeningBrowser = false
     var onChange: (() -> Void)?
@@ -102,8 +101,7 @@ struct GatewayBrowserSignInProgressView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(self.progress.isRenewing
-                    ? String(localized: "Renewing browser sign-in…") : self.progress.handoff?.isAvailable == true
+                Text(self.progress.handoff?.isAvailable == true
                     ? String(localized: "Complete sign-in in your browser…") : String(localized: "Connecting…"))
                     .font(.callout)
             }
