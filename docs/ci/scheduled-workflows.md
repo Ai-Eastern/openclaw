@@ -144,7 +144,9 @@ gh workflow run ci-repair-agent.yml --ref main -f run_id=<failed-run-id> -F dry_
 The agent uses `OPENCLAW_CI_REPAIR_OPENAI_API_KEY` when configured, falling back to
 `OPENAI_API_KEY`, and the existing CI model variable. No new secret is required.
 Job summaries record skips, diagnoses, rejected guards, proof failures, or the PR
-link. Context, structured result, patch, and guard/proof logs are retained as
+link. Collection and reproduction evidence is uploaded before Codex starts so a
+stalled action or lost runner does not erase the completed baseline. Context,
+structured result, patch, and guard/proof logs are retained as
 Actions artifacts for fourteen days. A timeout, missing evidence, unavailable API,
 or malformed patch never authorizes publication. A partial publication failure
 is left for maintainer reconciliation; the agent does not overwrite a branch or

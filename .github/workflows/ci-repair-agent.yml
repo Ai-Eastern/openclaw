@@ -129,6 +129,19 @@ jobs:
         id: reproduce
         timeout-minutes: 30
         run: node ../scripts/ci-repair-agent.mjs reproduce
+      # Preserve trusted reproduction evidence even if Codex stalls or the runner is lost.
+      - name: Checkpoint reproduction evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-repair-reproduction
+          path: |
+            candidate/.artifacts/ci-repair/context.json
+            candidate/.artifacts/ci-repair/failures.md
+            candidate/.artifacts/ci-repair/reproduce-*.log
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
       # No GitHub token is passed to Codex or the test processes. Only patch and
       # evidence artifacts cross to publish; that job mints its app token on a
       # fresh runner and checkout, never beside Codex or its child processes.
