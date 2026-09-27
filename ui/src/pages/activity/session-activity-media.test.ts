@@ -307,6 +307,7 @@ it.each([
   { count: 0, cursor: false, omitted: true, error: false },
   { count: 0, cursor: true, omitted: true, error: false },
   { count: 0, cursor: false, omitted: false, error: true },
+  { count: 0, cursor: true, omitted: true, error: true },
   { count: 0, cursor: false, omitted: false, error: false },
 ])(
   "keeps image discovery feedback inside its media inset (%j)",
@@ -319,8 +320,9 @@ it.each([
         ...(cursor ? { nextCursor: "older" } : {}),
         ...(omitted ? { omittedOversized: true } : {}),
       };
+      // With a notice and an error, the first page carries the notice and the next page fails.
       const request = vi.fn(async () => {
-        if (error) {
+        if (error && (!omitted || request.mock.calls.length > 1)) {
           throw new Error("Image discovery failed");
         }
         return result;
@@ -358,7 +360,7 @@ it.each([
       }
       const action = row.querySelector<HTMLButtonElement>(".activity-feed__note-action");
       expect(action?.classList.contains("btn") ?? false).toBe(false);
-      if (cursor) {
+      if (cursor && !error) {
         expect(action?.textContent?.trim()).toBe("Older images");
         expect(action?.parentElement).toBe(
           count ? media?.querySelector(".chat-message-images") : note,

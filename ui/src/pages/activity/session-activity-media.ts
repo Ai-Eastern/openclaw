@@ -302,16 +302,20 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
           ]
         : [];
     const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
-    const note = entry.error
-      ? html`<span role="status">${t("activity.images.failed")}</span
-          ><button
-            class="activity-feed__note-action"
-            ?disabled=${Boolean(entry.pending)}
-            @click=${this.load}
-          >
-            ${t("common.retry")}
-          </button>`
-      : html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${hasImages ? nothing : older}`;
+    const note = html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${
+      entry.error
+        ? html`<span role="status">${t("activity.images.failed")}</span
+            ><button
+              class="activity-feed__note-action"
+              ?disabled=${Boolean(entry.pending)}
+              @click=${this.load}
+            >
+              ${t("common.retry")}
+            </button>`
+        : hasImages
+          ? nothing
+          : older
+    }`;
     const imageIdentity = this.imageIdentity;
     const agentId = this.agentId;
     return html`
