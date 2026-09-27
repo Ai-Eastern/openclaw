@@ -396,72 +396,131 @@ it("reads a sparse page in the transcript worker and shares equivalent queued re
 });
 
 it("waits for a missing projection and serves the original history request", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "worker-history-rebuild",
-      sessionKey: "agent:main:worker-history-rebuild",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
-    const entry = { sessionId: target.sessionId, updatedAt: 1 };
-    await replaceSessionEntry(target, entry);
-    await replaceTranscriptEvents(target, [
-      { type: "session", version: 3, id: target.sessionId },
-      { type: "message", id: "recovered", message: { role: "user", content: "Still here" } },
-    ]);
-    await waitForSessionTranscriptProjection(target);
-    openOpenClawAgentDatabase({ agentId: target.agentId, env: state.env })
-      .db.prepare(
-        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-      )
-      .run(target.sessionId);
-
-    const projectionWaits: Array<{
-      durationMs: number;
-      outcome: "returned" | "threw";
-      signalAborted: boolean | undefined;
-      abortReasonName: string | undefined;
-    }> = [];
-    const waitForProjection = transcriptReconcile.waitForSessionTranscriptProjection;
-    const projectionWait = vi
-      .spyOn(transcriptReconcile, "waitForSessionTranscriptProjection")
-      .mockImplementation(async (scope, signal) => {
-        const startedAt = performance.now();
-        let outcome: "returned" | "threw" = "threw";
-        try {
-          await waitForProjection(scope, signal);
-          outcome = "returned";
-        } finally {
-          projectionWaits.push({
-            durationMs: Math.round(performance.now() - startedAt),
-            outcome,
-            signalAborted: signal?.aborted,
-            abortReasonName: signal?.reason instanceof Error ? signal.reason.name : undefined,
-          });
-        }
-      });
-    try {
-      const page = await readChatHistoryPage({
-        entry,
-        provider: undefined,
-        sessionId: target.sessionId,
-        storePath: target.storePath,
-        sessionAgentId: target.agentId,
-        canonicalKey: target.sessionKey,
-        max: 10,
-        maxHistoryBytes: 100_000,
-        effectiveMaxChars: 8000,
-        offset: undefined,
-        messageId: undefined,
-      });
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
-    } catch (error) {
-      console.error("History projection recovery failed", { pid: process.pid, projectionWaits });
-      throw error;
-    } finally {
-      projectionWait.mockRestore();
+  const diagnosticStartedAt = performance.now();
+  const timings: Array<Record<string, string | number>> = [];
+  let droppedTimings = 0;
+  const projectionWaits: Array<{
+    startedAtMs: number;
+    durationMs: number;
+    outcome: "returned" | "threw";
+    signalAborted: boolean | undefined;
+    abortReasonName: string | undefined;
+  }> = [];
+  const recordTiming = (source: string, message: unknown) => {
+    const fields = asOptionalRecord(message);
+    if (!fields) {
+      return;
     }
-  });
+    const timing: Record<string, string | number> = {
+      source,
+      atMs: Math.round(performance.now() - diagnosticStartedAt),
+    };
+    // Keep only fixed diagnostic names and timings, never task or session payloads.
+    for (const key of ["worker", "operation", "writer", "outcome"]) {
+      const value = fields[key];
+      if (typeof value === "string") {
+        timing[key] = value.slice(0, 120);
+      }
+    }
+    for (const key of [
+      "queueMs",
+      "preparationMs",
+      "runMs",
+      "transferMs",
+      "elapsedMs",
+      "queueWaitMs",
+      "writerExecutionMs",
+      "completionDelayMs",
+    ]) {
+      const value = fields[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        timing[key] = Math.round(value);
+      }
+    }
+    if (timings.length === 128) {
+      timings.shift();
+      droppedTimings += 1;
+    }
+    timings.push(timing);
+  };
+  const workerTasks = channel("openclaw.worker.task");
+  const sessionWrites = channel("openclaw.session.write");
+  const recordWorkerTask = (message: unknown) => recordTiming("worker.task", message);
+  const recordSessionWrite = (message: unknown) => recordTiming("session.write", message);
+  workerTasks.subscribe(recordWorkerTask);
+  sessionWrites.subscribe(recordSessionWrite);
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "worker-history-rebuild",
+        sessionKey: "agent:main:worker-history-rebuild",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      const entry = { sessionId: target.sessionId, updatedAt: 1 };
+      await replaceSessionEntry(target, entry);
+      await replaceTranscriptEvents(target, [
+        { type: "session", version: 3, id: target.sessionId },
+        { type: "message", id: "recovered", message: { role: "user", content: "Still here" } },
+      ]);
+      await waitForSessionTranscriptProjection(target);
+      openOpenClawAgentDatabase({ agentId: target.agentId, env: state.env })
+        .db.prepare(
+          "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+        )
+        .run(target.sessionId);
+
+      const waitForProjection = transcriptReconcile.waitForSessionTranscriptProjection;
+      const projectionWait = vi
+        .spyOn(transcriptReconcile, "waitForSessionTranscriptProjection")
+        .mockImplementation(async (scope, signal) => {
+          const startedAt = performance.now();
+          let outcome: "returned" | "threw" = "threw";
+          try {
+            await waitForProjection(scope, signal);
+            outcome = "returned";
+          } finally {
+            projectionWaits.push({
+              startedAtMs: Math.round(startedAt - diagnosticStartedAt),
+              durationMs: Math.round(performance.now() - startedAt),
+              outcome,
+              signalAborted: signal?.aborted,
+              abortReasonName: signal?.reason instanceof Error ? signal.reason.name : undefined,
+            });
+          }
+        });
+      try {
+        const page = await readChatHistoryPage({
+          entry,
+          provider: undefined,
+          sessionId: target.sessionId,
+          storePath: target.storePath,
+          sessionAgentId: target.agentId,
+          canonicalKey: target.sessionKey,
+          max: 10,
+          maxHistoryBytes: 100_000,
+          effectiveMaxChars: 8000,
+          offset: undefined,
+          messageId: undefined,
+        });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+      } finally {
+        projectionWait.mockRestore();
+      }
+    });
+  } catch (error) {
+    console.error("History projection recovery failed", {
+      pid: process.pid,
+      projectionWaits,
+      timings,
+      droppedTimings,
+    });
+    throw error;
+  } finally {
+    // Cleanup drains workers; retain their settlement timings after the request deadline.
+    workerTasks.unsubscribe(recordWorkerTask);
+    sessionWrites.unsubscribe(recordSessionWrite);
+  }
 });
 
 it("reads a new branch and reset interval after earlier worker pages settle", async () => {
