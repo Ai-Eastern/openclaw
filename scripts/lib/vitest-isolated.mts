@@ -185,8 +185,7 @@ export function isolatedVitestCreateArgs(options: {
     "--userns=keep-id",
     `--user=${uid}:${gid}`,
     "--pid=private",
-    // Tests can orphan descendants intentionally. Node cannot reap them as PID 1,
-    // so retain the engine init that makes process-group extinction observable.
+    // Detached test children outlive their launcher; Node cannot reap adopted orphans.
     "--init",
     "--ipc=private",
     "--cpus=4",
