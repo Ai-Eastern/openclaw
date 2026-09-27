@@ -22,6 +22,7 @@ const catalog = { requiredProfile: profile.id, profiles: [profile], environments
 function fixture(
   request: (method: string) => Promise<unknown> = async () => catalog,
   modelSelectionPolicy?: { restricted: true; defaultModel: string | null },
+  modelReady: Promise<void> = Promise.resolve(),
 ) {
   return createDraftFixture({
     methods: ["environments.list", "sessions.create", "sessions.send", "sessions.describe"],
@@ -34,29 +35,32 @@ function fixture(
         agentRuntime: runtime,
       },
     ],
-    modelCatalog: async () => ({
-      ...(modelSelectionPolicy ? { modelSelectionPolicy } : {}),
-      models: [
-        {
-          id: "default",
-          provider: "openai",
-          name: "Default",
-          available: false,
-          unavailableReason: "missing-auth",
-          agentRuntime: runtime,
-          runtimeChoices: [
-            {
-              available: true,
-              agentRuntime: {
-                ...runtime,
-                id: "external-runtime",
-                cloudPlacementExecutionMode: "remote-exec",
+    modelCatalog: async () => {
+      await modelReady;
+      return {
+        ...(modelSelectionPolicy ? { modelSelectionPolicy } : {}),
+        models: [
+          {
+            id: "default",
+            provider: "openai",
+            name: "Default",
+            available: false,
+            unavailableReason: "missing-auth",
+            agentRuntime: runtime,
+            runtimeChoices: [
+              {
+                available: true,
+                agentRuntime: {
+                  ...runtime,
+                  id: "external-runtime",
+                  cloudPlacementExecutionMode: "remote-exec",
+                },
               },
-            },
-          ],
-        },
-      ],
-    }),
+            ],
+          },
+        ],
+      };
+    },
     request,
   });
 }
@@ -270,4 +274,23 @@ it("retires an open placement picker once when policy takes over, without a rend
   f.place.restorePreferenceSelections();
   f.place.restorePreferenceSelections();
   expect(close).toHaveBeenCalledOnce();
+});
+
+it("keeps a cold required-worker draft on configured defaults across asynchronous catalogs", async () => {
+  const place = createDeferred<unknown>();
+  const modelsReady = createDeferred();
+  const f = fixture(() => place.promise, undefined, modelsReady.promise);
+  const read = f.gateway.refreshCloudProfiles();
+  f.flow.setMessage("Use the worker without choosing a model");
+  expect(f.flow.canSubmit()).toBe(false);
+  place.resolve(catalog);
+  await read;
+  f.place.restorePreferenceSelections();
+  expect(f.place.requiredWorkerInference).toBe(true);
+  modelsReady.resolve();
+  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+  f.place.restorePreferenceSelections();
+  expect(f.place.modelControl.modelForSubmission()).toBe("");
+  expect(f.place.modelControl.agentRuntime).toBeUndefined();
+  expect(f.flow.canSubmit()).toBe(true);
 });
