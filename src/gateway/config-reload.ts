@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -221,6 +222,9 @@ export function startGatewayConfigReloader(opts: {
   };
   watchPath: string;
 }): GatewayConfigReloader {
+  // Write listeners schedule timers inside temporary writer scopes. Reloads belong
+  // to this Gateway instance, even after the originating config lock has closed.
+  const runInReloadContext = AsyncLocalStorage.snapshot();
   const initialSourceConfig = opts.initialCompareConfig ?? opts.initialConfig;
   let currentConfig = opts.initialConfig;
   let currentCompareConfig = initialSourceConfig;
@@ -381,7 +385,7 @@ export function startGatewayConfigReloader(opts: {
       clearTimeout(debounceTimer);
     }
     debounceTimer = setTimeout(() => {
-      startTrackedReload();
+      runInReloadContext(startTrackedReload);
     }, wait);
   };
   const schedule = () => {
