@@ -1055,6 +1055,7 @@ internal fun ChatScreen(
   ) { onJumpToLatest, compactHeight, tabletop ->
     ChatComposer(
       onInputPositioned = { composerAnchor = it },
+      agentName = viewModel.chatComposerAgentName(composerOwner),
       ownerReady = composerOwnerReady,
       compactHeight = compactHeight,
       detailsExpanded = detailsExpanded,
@@ -3236,6 +3237,7 @@ private fun minimumChatInputHeight(): Dp {
 @Composable
 private fun ChatComposer(
   onInputPositioned: (LayoutCoordinates) -> Unit,
+  agentName: String?,
   ownerReady: Boolean,
   compactHeight: Boolean,
   detailsExpanded: Boolean,
@@ -3413,6 +3415,7 @@ private fun ChatComposer(
         } else {
           ChatInputPill(
             inputEnabled = ownerReady && !detailsExpanded,
+            agentName = agentName,
             onOpenDetails = if (compactHeight) ({ onDetailsExpandedChange(true) }) else null,
             value = value,
             onValueChange = onValueChange,
@@ -4258,6 +4261,7 @@ internal fun canSelectChatPermissionMode(
 @Composable
 private fun ChatInputPill(
   inputEnabled: Boolean,
+  agentName: String?,
   onOpenDetails: (() -> Unit)?,
   value: String,
   onValueChange: (String) -> Unit,
@@ -4377,7 +4381,13 @@ private fun ChatInputPill(
                 Box(modifier = Modifier.fillMaxWidth().verticalScroll(scroll, enabled = inputEnabled), contentAlignment = Alignment.CenterStart) {
                   if (value.isEmpty()) {
                     // BasicTextField's line limit does not constrain its decoration.
-                    Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                      text = agentName?.let { nativeString("Message \$agentName", it) } ?: nativeString("Message"),
+                      style = draftStyle,
+                      color = ClawTheme.colors.textMuted,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
                   }
                   innerTextField()
                 }
