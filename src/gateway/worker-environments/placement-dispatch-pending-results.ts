@@ -337,7 +337,7 @@ export async function recoverPendingWorkspaceResults(
                 : completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
             };
             const settleRecoveredResult = async (
-              stagedResultRef: string | null | undefined,
+              resultRef: string | null | undefined,
               conflictPaths: readonly string[],
               completion: Pick<
                 Parameters<typeof settleStagedWorkspaceResult>[0],
@@ -350,7 +350,7 @@ export async function recoverPendingWorkspaceResults(
                 turnClaim,
                 conflictPaths,
                 priorConflict: priorWorkspaceResultConflict,
-                stagedResultRef,
+                stagedResultRef: resultRef,
                 workspace,
                 report: recovery.reportConflict,
               });
@@ -360,7 +360,7 @@ export async function recoverPendingWorkspaceResults(
                 placements,
                 turnClaim,
                 workspace,
-                stagedResultRef,
+                stagedResultRef: resultRef,
                 conflictRetained: finalized.conflictRetained,
                 ...completion,
               });
