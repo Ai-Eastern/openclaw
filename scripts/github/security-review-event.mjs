@@ -2,6 +2,7 @@
 
 import { appendFile, readFile } from "node:fs/promises";
 import {
+  CI_WAIT_DESCRIPTION,
   createGitHubApi,
   parseApprovalCommands,
   publishGuardStatus,
@@ -142,8 +143,8 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
       break;
     }
     if (page === MAX_PAGES) {
-      console.warn(
-        `::warning::CI reconciliation reached the ${MAX_PAGES}-page ceiling before the creation boundary; continuing with the runs already read.`,
+      throw new Error(
+        `CI reconciliation listing reached the ${MAX_PAGES}-page ceiling before the creation boundary; the covered window does not advance, and the next pass rescans from the last successful pass.`,
       );
     }
   }
@@ -165,10 +166,14 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
         break;
       }
     }
-    // A review that remains pending publishes a newer status, stopping reselection.
+    // Provisional resolver and in-progress review statuses stay eligible until
+    // review publishes a settled result. Only the review's own wait status
+    // defers to the next CI completion.
     if (
       status &&
-      (status.state !== "pending" || timestamp(status.created_at) >= timestamp(run.updated_at))
+      (status.state !== "pending" ||
+        (/^PR #[1-9][0-9]*: (.*)$/su.exec(status.description ?? "")?.[1] === CI_WAIT_DESCRIPTION &&
+          timestamp(status.created_at) >= timestamp(run.updated_at)))
     ) {
       continue;
     }

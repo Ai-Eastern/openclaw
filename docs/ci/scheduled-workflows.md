@@ -328,15 +328,20 @@ from five minutes before the previous successful scheduled pass started until
 five minutes ago (sixty-minute fallback, six-hour cap). Passes tile without gaps;
 late or dropped cron ticks only widen the next window, up to the cap. Run listing
 uses a creation boundary three hours before the window and reads until a short
-page or a page's oldest run predates that boundary. A ten-page ceiling warns and
-continues with the runs already read. Scheduled and dispatched resolver passes
-share one concurrency group without canceling an active pass; GitHub keeps one
+page or a page's oldest run predates that boundary. Reaching the ten-page ceiling
+with an incomplete listing fails the pass before status publication or matrix
+output, so the covered window does not advance. The next pass rescans from the
+last successful pass. Scheduled and dispatched resolver passes share one
+concurrency group without canceling an active pass; GitHub keeps one
 pending pass, which still starts from the last successful window.
 
 Wholly skipped CI runs are ignored. Normal review runs only for heads whose
-`openclaw/ci-gate` status is missing or pending and predates CI completion; a review
-that remains pending stops reselection. It never checks out PR code and uses one
-hosted `ubuntu-24.04` resolver job per pass, run-list reads plus paginated
+`openclaw/ci-gate` status is missing, pending from before CI completion, or pending
+with a provisional description. Only a settled status or the review's own
+`PR #<n>: Waiting for CI; review updates automatically` status created at or after
+CI completion stops reselection, so provisional statuses from an interrupted
+handoff are retried. It never checks out PR code and uses one hosted
+`ubuntu-24.04` resolver job per pass, run-list reads plus paginated
 combined-status reads per newly completed head, and no Blacksmith registrations.
 See [Security review checks](/ci/pipeline#security-review-checks).
 

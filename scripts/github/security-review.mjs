@@ -9,6 +9,7 @@ import {
   readGuardReview,
 } from "./guard-review.mjs";
 import {
+  CI_WAIT_DESCRIPTION,
   GitHubDiffDataError,
   GitHubRateLimitError,
   GitHubReadTimeoutError,
@@ -196,7 +197,7 @@ async function main() {
     const ci = await ciState(review);
     if (ci === "pending") {
       await assertGuardUnchanged(review);
-      await publishGuardStatus(review, "pending", "Waiting for CI; review updates automatically");
+      await publishGuardStatus(review, "pending", CI_WAIT_DESCRIPTION);
       console.log("Waiting for CI. CI completion will automatically reevaluate security review.");
       return;
     }

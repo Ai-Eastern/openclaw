@@ -68,7 +68,13 @@ function evaluate(options: Options = {}) {
     [ciRunsPath]: { body: { workflow_runs: [{ ...completedRun, ...options.run }] } },
     [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
       body: {
-        statuses: [{ ...recordedPullRequest(42), created_at: "2026-01-01T23:30:00Z" }],
+        statuses: [
+          {
+            ...recordedPullRequest(42),
+            description: "PR #42: Waiting for CI; review updates automatically",
+            created_at: "2026-01-01T23:30:00Z",
+          },
+        ],
       },
     },
     ...options.responses,
@@ -606,9 +612,17 @@ describe("scheduled reconciliation", () => {
     { state: "success", created_at: "2026-01-01T23:30:00Z" },
     { state: "failure", created_at: "2026-01-01T23:30:00Z" },
     { state: "error", created_at: "2026-01-01T23:30:00Z" },
-    { state: "pending", created_at: "2026-01-01T23:41:00Z" },
-    { state: "pending", created_at: completedRun.updated_at },
-  ])("does not reselect a settled or newer review: %j", (status) => {
+    {
+      state: "pending",
+      created_at: "2026-01-01T23:41:00Z",
+      description: "PR #42: Waiting for CI; review updates automatically",
+    },
+    {
+      state: "pending",
+      created_at: completedRun.updated_at,
+      description: "PR #42: Waiting for CI; review updates automatically",
+    },
+  ])("does not reselect a settled result or current review wait: %j", (status) => {
     const result = evaluate({
       eventName: "schedule",
       responses: {
@@ -619,6 +633,38 @@ describe("scheduled reconciliation", () => {
     });
     expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
     expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
+  });
+
+  it.each([
+    "PR #42: Review scheduled; CI and security review have not completed",
+    "PR #42: CI and security review have not completed",
+    "PR #42: Waiting for CI; review updates automatically (interrupted)",
+    "PR #42: Still Waiting for CI; review updates automatically",
+    "Waiting for CI; review updates automatically",
+    "PR #0: Waiting for CI; review updates automatically",
+    "PR #42: Waiting for CI; review updates automatically\n",
+  ])("reselects a newer provisional pending status: %j", (description) => {
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
+          body: {
+            statuses: [
+              {
+                context: "openclaw/ci-gate",
+                state: "pending",
+                created_at: "2026-01-01T23:41:00Z",
+                description,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(result.status, result.error).toBe(0);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+    expect(result.published).toHaveLength(1);
+    expect(result.output).toBe(`matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\n`);
   });
 
   it.each([
@@ -706,16 +752,22 @@ describe("scheduled reconciliation", () => {
   });
 
   it.each([
-    { stop: "a short page", pages: 2, lastPageSize: 1, crossesBoundary: false, warns: false },
+    { stop: "a short page", pages: 2, lastPageSize: 1, crossesBoundary: false, incomplete: false },
     {
       stop: "a full page whose oldest run predates the creation boundary",
       pages: 2,
       lastPageSize: 100,
       crossesBoundary: true,
-      warns: false,
+      incomplete: false,
     },
-    { stop: "the page ceiling", pages: 10, lastPageSize: 100, crossesBoundary: false, warns: true },
-  ])("stops at $stop and selects the runs already read", (scenario) => {
+    {
+      stop: "the page ceiling",
+      pages: 10,
+      lastPageSize: 100,
+      crossesBoundary: false,
+      incomplete: true,
+    },
+  ])("stops at $stop and publishes only for a complete listing", (scenario) => {
     const responses: Record<string, Reply> = {};
     const listingPaths: string[] = [];
     for (let page = 1; page <= scenario.pages; page += 1) {
@@ -742,12 +794,23 @@ describe("scheduled reconciliation", () => {
       };
     }
     const result = evaluate({ eventName: "schedule", responses });
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
     expect(result.requests.filter(({ path }) => path.includes("/workflows/ci.yml/runs"))).toEqual(
       listingPaths.map((path) => ({ path, method: "GET" })),
     );
-    expect(result.error.includes("::warning::")).toBe(scenario.warns);
+    if (scenario.incomplete) {
+      expect(result.status).toBe(1);
+      expect(result.error).toContain(
+        "listing reached the 10-page ceiling before the creation boundary",
+      );
+      expect(result.error).toContain("covered window does not advance");
+      expect(result.matrix).toBeUndefined();
+      expect(result.output).toBe("");
+      expect(result.published).toEqual([]);
+      return;
+    }
+    expect(result.status, result.error).toBe(0);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+    expect(result.error).toBe("");
     expect(result.published).toHaveLength(1);
   });
 
