@@ -141,34 +141,48 @@ function dispatch(
   window.dispatchEvent(new MessageEvent("message", { source, data, origin, ports }));
 }
 
-async function installClickDocument(frame: HTMLIFrameElement) {
-  let ready = false;
-  const onReady = (event: MessageEvent<unknown>) => {
-    if (event.source === frame.contentWindow && event.data === "test-click-ready") {
-      ready = true;
-    }
-  };
-  window.addEventListener("message", onReady);
-  frame.srcdoc = `<button id="open">Open work session</button><script>
+async function installClickDocument(frame: HTMLIFrameElement, signal: AbortSignal) {
+  signal.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener("message", onReady);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onReady = (event: MessageEvent<unknown>) => {
+      if (event.source === frame.contentWindow && event.data === "test-click-ready") {
+        cleanup();
+        resolve();
+      }
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    window.addEventListener("message", onReady);
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      frame.srcdoc = `<button id="open">Open work session</button><script>
     document.getElementById("open").onclick = () => parent.postMessage(${JSON.stringify(message)}, ${JSON.stringify(window.location.origin)});
     addEventListener("message", event => {
       if (event.source === parent && event.data === "test-click") document.getElementById("open").click();
     });
     parent.postMessage("test-click-ready", ${JSON.stringify(window.location.origin)});
   </script>`;
-  try {
-    await expect.poll(() => ready).toBe(true);
-  } finally {
-    window.removeEventListener("message", onReady);
-  }
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
   frame.contentWindow!.postMessage("test-click", "*");
 }
 
 describe("authenticated plugin-frame session navigation", () => {
-  it("routes a real sandbox-frame click with the canonical base path and ordered selection", async () => {
+  it("routes a real sandbox-frame click with the canonical base path and ordered selection", async ({
+    signal,
+  }) => {
     const fixture = await mount();
     expect(fixture.frame.getAttribute("sandbox")).toBe("allow-scripts");
-    await installClickDocument(fixture.frame);
+    await installClickDocument(fixture.frame, signal);
     await expect.poll(() => fixture.navigate.mock.calls.length).toBe(1);
     expect(fixture.selectAgent).toHaveBeenCalledExactlyOnceWith("writer");
     expect(fixture.setSessionKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
