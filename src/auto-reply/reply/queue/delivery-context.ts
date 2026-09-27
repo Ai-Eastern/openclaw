@@ -6,13 +6,15 @@ import { combineChannelAdmissionEvidence } from "../../../channels/message-acces
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
-import type { InternalFollowupRun } from "../agent-runner-execution.types.js";
+import type { GroupParticipationContext } from "../group-participation-inputs.js";
 import {
   resolveReplyOperatorAuthorityKey,
   resolveReplyScreenToolTarget,
   resolveReplyThemeProfileId,
 } from "../reply-tool-authority.js";
 import type { FollowupRun } from "./types.js";
+
+type GroupFollowupRun = FollowupRun & { groupParticipation?: GroupParticipationContext };
 
 export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
   return (
@@ -248,12 +250,12 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
 export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
-): FollowupRuntimeMetadata & Pick<InternalFollowupRun, "groupParticipation"> {
+): FollowupRuntimeMetadata & Pick<GroupFollowupRun, "groupParticipation"> {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
-  const groupSources: InternalFollowupRun[] = items;
+  const groupSources: GroupFollowupRun[] = items;
   const groupParticipation =
     groupSources.length > 0 && groupSources.every((item) => item.groupParticipation)
       ? {
@@ -307,8 +309,8 @@ export function collectRuntimeMetadata(
   };
 }
 
-export function createOverflowSummaryRetrySource(source: FollowupRun): InternalFollowupRun {
-  const internalSource: InternalFollowupRun = source;
+export function createOverflowSummaryRetrySource(source: FollowupRun): GroupFollowupRun {
+  const internalSource: GroupFollowupRun = source;
   return {
     groupParticipation: internalSource.groupParticipation,
     prompt: source.prompt,

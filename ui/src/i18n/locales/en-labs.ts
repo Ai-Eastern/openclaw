@@ -6,7 +6,7 @@ const enLabs = {
     decisionAssistance: {
       title: "Decision assistance",
       description:
-        "Enable experimental features powered by Decision models. Requires a Decision model, set globally or per agent. No features use this setting yet.",
+        "Enable experimental features powered by Decision models, including group participation when mention gating is disabled. Requires a Decision model, set globally or per agent.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
