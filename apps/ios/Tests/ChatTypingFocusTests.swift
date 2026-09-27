@@ -1,4 +1,3 @@
-import Observation
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -6,78 +5,93 @@ import XCTest
 @testable import OpenClaw
 
 @MainActor
-@Observable
-private final class ChatTypingRenderPhase {
-    var value = 0
+private enum ChatTypingMainRunLoop {
+    /// Returns only when the main run loop idles at the test's own stack base with `isSettled` true.
+    /// An awaited continuation can instead resume inside UIKit's nested keyboard run loop, mid-SwiftUI
+    /// update, where a retired composer is still attached and cleared but not yet replaced.
+    static func settle(until isSettled: @escaping @MainActor () -> Bool = { true }) {
+        let settled = XCTestExpectation(description: "Main run loop settled at the test's stack base")
+        settled.assertForOverFulfill = false
+        var depth = 0
+        let observer = CFRunLoopObserverCreateWithHandler(
+            nil,
+            CFRunLoopActivity([.entry, .beforeWaiting, .exit]).rawValue,
+            true,
+            CFIndex.max)
+        { _, activity in
+            switch activity {
+            case .entry: depth += 1
+            case .exit: depth -= 1
+            default:
+                // Depth 1 is the waiter's own loop; SwiftUI and Core Animation commit earlier in this callout.
+                if depth == 1, MainActor.assumeIsolated(isSettled) { settled.fulfill() }
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed)
+    }
 }
 
 @MainActor
-private final class ChatTypingRenderCompletion {
-    private var completedPhase = -1
-    private var awaitedPhase: Int?
-    private var continuation: CheckedContinuation<Void, Never>?
+private final class ChatTypingKeyboardLoop {
+    private(set) var didRun = false
+    private(set) var isRunning = false
 
-    func complete(_ phase: Int) {
-        self.completedPhase = max(self.completedPhase, phase)
-        guard let awaitedPhase, self.completedPhase >= awaitedPhase else { return }
-        self.awaitedPhase = nil
-        let continuation = self.continuation
-        self.continuation = nil
-        continuation?.resume()
-    }
-
-    func wait(for phase: Int) async {
-        if self.completedPhase >= phase { return }
-        await withCheckedContinuation { continuation in
-            self.awaitedPhase = phase
-            self.continuation = continuation
-        }
-    }
-}
-
-private struct ChatTypingRenderBoundary: UIViewRepresentable {
-    let phase: Int
-    let completion: ChatTypingRenderCompletion
-
-    func makeUIView(context: Context) -> UIView {
-        UIView()
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        // Observe the completed SwiftUI transaction without changing the real composer.
-        DispatchQueue.main.async {
-            uiView.window?.layoutIfNeeded()
-            self.completion.complete(self.phase)
+    func run(_ body: () -> Void) {
+        self.didRun = true
+        self.isRunning = true
+        defer { self.isRunning = false }
+        body()
+        // Model UIKit's nested keyboard run loop: drain queued main work, including resumed main-actor jobs.
+        for _ in 0..<8 {
+            RunLoop.main.run(mode: .default, before: .distantPast)
         }
     }
 }
 
 private struct ChatTypingRenderedOwner: View {
-    let phase: ChatTypingRenderPhase
-    let completion: ChatTypingRenderCompletion
-
     var body: some View {
         NavigationStack {
             ChatProTab(headerSidebarAction: nil, openSettings: {})
-                .overlay(alignment: .topLeading) {
-                    ChatTypingRenderBoundary(phase: self.phase.value, completion: self.completion)
-                        .frame(width: 1, height: 1)
-                        .allowsHitTesting(false)
-                }
         }
     }
 }
 
-/// XCTest keeps awaited key-window checks outside Swift Testing's concurrent suites.
+/// XCTest keeps key-window checks outside Swift Testing's concurrent suites.
 @MainActor
 final class ChatTypingFocusTests: XCTestCase {
-    func testInitialAgentHydrationPreservesFocusedTypingWithinAccount() async throws {
+    func testInitialAgentHydrationPreservesFocusedTypingWithinAccount() throws {
         for changesAccount in [true, false] {
-            try await Self.checkTyping(changesAccount: changesAccount)
+            try Self.checkTyping(changesAccount: changesAccount)
         }
     }
 
-    private static func checkTyping(changesAccount: Bool) async throws {
+    func testSettleWaitsAtStackBaseForReplacedEditor() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        let retiredEditor = UITextView()
+        window.addSubview(retiredEditor)
+        let replacementEditor = UITextView()
+        let keyboardLoop = ChatTypingKeyboardLoop()
+        RunLoop.main.perform {
+            MainActor.assumeIsolated {
+                keyboardLoop.run {
+                    retiredEditor.removeFromSuperview()
+                    // The replacement lands on a later main-queue turn, as a deferred SwiftUI commit does.
+                    DispatchQueue.main.async { window.addSubview(replacementEditor) }
+                }
+            }
+        }
+
+        ChatTypingMainRunLoop.settle { replacementEditor.window === window }
+
+        XCTAssertTrue(keyboardLoop.didRun)
+        XCTAssertFalse(keyboardLoop.isRunning, "The wait must return after the nested keyboard loop unwinds.")
+        XCTAssertNil(retiredEditor.window)
+        XCTAssertTrue(replacementEditor.window === window)
+    }
+
+    private static func checkTyping(changesAccount: Bool) throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
                 .first { $0.activationState == .foregroundActive },
@@ -98,12 +112,8 @@ final class ChatTypingFocusTests: XCTestCase {
             return
         }
 
-        let phase = ChatTypingRenderPhase()
-        let completion = ChatTypingRenderCompletion()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-        let controller = UIHostingController(rootView: ChatTypingRenderedOwner(
-            phase: phase,
-            completion: completion)
+        let controller = UIHostingController(rootView: ChatTypingRenderedOwner()
             .environment(AppAppearanceModel())
             .environment(appModel)
             .environment(appModel.voiceWake)
@@ -120,8 +130,8 @@ final class ChatTypingFocusTests: XCTestCase {
         }
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
-        await completion.wait(for: 0)
-        await Self.completeDeferredInteractionUpdate()
+        ChatTypingMainRunLoop.settle { Self.composer(in: controller.view) != nil }
+        Self.completeDeferredInteractionUpdate()
 
         let originalEditor = try XCTUnwrap(Self.composer(in: controller.view))
         guard window.isKeyWindow, originalEditor.window === window else {
@@ -165,12 +175,18 @@ final class ChatTypingFocusTests: XCTestCase {
             handoffEditor.insertText("X")
             XCTAssertEqual(handoffEditor.text, draft + "X")
         }
-        // This test-owned phase observes a transaction even if the owner reuses its model.
-        phase.value = 1
-        await completion.wait(for: 1)
-        await Self.completeDeferredInteractionUpdate()
+        if originalModel !== owner.viewModel {
+            XCTAssertEqual(originalModel.input, draft, "Typing must not update the retired model.")
+        }
+        // Wait for the committed swap: an account change replaces the editor, hydration keeps it.
+        ChatTypingMainRunLoop.settle {
+            let editors = Self.composers(in: controller.view)
+            return editors.count == 1 && (editors[0] === originalEditor) != changesAccount
+        }
+        Self.completeDeferredInteractionUpdate()
         let currentModel = try XCTUnwrap(owner.viewModel)
         let currentEditor = try XCTUnwrap(Self.composer(in: controller.view))
+        XCTAssertEqual(currentEditor === originalEditor, !changesAccount)
         guard window.isKeyWindow, currentEditor.window === window else {
             XCTFail("The committed composer must remain onscreen in the active window.")
             return
@@ -205,22 +221,24 @@ final class ChatTypingFocusTests: XCTestCase {
     }
 
     @MainActor
-    private static func completeDeferredInteractionUpdate() async {
+    private static func completeDeferredInteractionUpdate() {
         // ChatComposerTextViewIOS deliberately applies interactivity on the next main-queue turn.
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async { continuation.resume() }
-        }
+        let applied = XCTestExpectation(description: "Deferred composer interaction update")
+        DispatchQueue.main.async { applied.fulfill() }
+        XCTAssertEqual(XCTWaiter.wait(for: [applied], timeout: 5), .completed)
     }
 
     @MainActor
     private static func composer(in view: UIView) -> UITextView? {
+        self.composers(in: view).first
+    }
+
+    @MainActor
+    private static func composers(in view: UIView) -> [UITextView] {
         if let editor = view as? UITextView, editor.accessibilityIdentifier == "chat-message-input" {
-            return editor
+            return [editor]
         }
-        for child in view.subviews {
-            if let editor = Self.composer(in: child) { return editor }
-        }
-        return nil
+        return view.subviews.flatMap { Self.composers(in: $0) }
     }
 
     private static func gatewayConfig(token: String) throws -> GatewayConnectConfig {
