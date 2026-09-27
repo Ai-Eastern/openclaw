@@ -409,7 +409,7 @@ describe("chat pane typing presence", () => {
       container.querySelector(".chat-group--typing .chat-group-footer")?.textContent,
     ).toContain("is typing...");
     expect(container.querySelectorAll(".chat-group.user.chat-group--peer")).toHaveLength(2);
-    expect(container.querySelector(".agent-chat__typing-person")?.textContent).toContain("Draft");
+    expect(container.querySelector(".agent-chat__typing-summary")?.textContent).toBe("Drafts");
     expect(
       container.querySelector(".chat-group--typing .chat-bubble .chat-text")?.textContent,
     ).toContain("Hello **world**");
@@ -496,7 +496,7 @@ describe("chat pane typing presence", () => {
         Math.min(2, count),
       );
     }
-    expect(container.querySelector(".agent-chat__typing-overflow")?.textContent).toBe(
+    expect(container.querySelector(".agent-chat__typing-summary")?.textContent).toBe(
       "Several people are typing…",
     );
     const stable = pane.typingActorViews();
@@ -545,9 +545,14 @@ describe("chat pane typing presence", () => {
     for (let index = 0; index < 1000; index += 1) {
       pane.handleSessionTypingEvent(event(index));
     }
-    vi.advanceTimersByTime(29_800);
-    pane.handleSessionTypingEvent({ ...event(999), preview: "Renewed during exit" });
     const requestUpdate = vi.spyOn(pane, "requestUpdate");
+    vi.advanceTimersByTime(10_000);
+    // The anonymous summary changes only at several → two → one → idle,
+    // plus the two visible previews. It must not count down 998 renders.
+    expect(requestUpdate).toHaveBeenCalledTimes(5);
+    vi.advanceTimersByTime(19_800);
+    pane.handleSessionTypingEvent({ ...event(999), preview: "Renewed during exit" });
+    requestUpdate.mockClear();
     vi.advanceTimersByTime(200);
     expect(requestUpdate).toHaveBeenCalledTimes(1);
     expect(pane.typingActors.size).toBe(1);
@@ -580,28 +585,26 @@ describe("chat pane typing presence", () => {
       pane.handleSessionTypingEvent(event(index));
     }
     vi.advanceTimersByTime(10_000);
-    expect(pane.typingOverflow).toEqual({ state: "idle" });
+    expect(pane.typingOverflow).toEqual({ activity: "idle" });
     pane.handleSessionTypingEvent(event(7));
-    expect(pane.typingOverflow).toEqual({ state: "mixed" });
+    expect(pane.typingOverflow).toEqual({ activity: "single" });
     const container = document.createElement("div");
     render(
       renderChatTypingIndicator(pane.typingActorViews(), "none", pane.typingOverflow),
       container,
     );
-    expect(container.querySelector(".agent-chat__typing-overflow")?.textContent).toBe(
-      "Some people are typing; others have drafts",
-    );
+    expect(container.querySelector(".agent-chat__typing-summary")?.textContent).toBe("1 typing");
     expect(container.querySelector("[role=status]")?.textContent).not.toContain("Peer 0 is typing");
     vi.advanceTimersByTime(10_000);
-    expect(pane.typingOverflow).toEqual({ state: "idle" });
+    expect(pane.typingOverflow).toEqual({ activity: "idle" });
     pane.clearTypingActors();
     for (let index = 0; index < 8; index += 1) {
       pane.handleSessionTypingEvent(event(index));
     }
     vi.advanceTimersByTime(29_700);
-    expect(pane.typingOverflow).toEqual({ state: "idle", exitDurationMs: 300 });
+    expect(pane.typingOverflow).toEqual({ activity: "idle", exitDurationMs: 300 });
     pane.handleSessionTypingEvent(event(7));
-    expect(pane.typingOverflow).toEqual({ state: "mixed" });
+    expect(pane.typingOverflow).toEqual({ activity: "single" });
     vi.advanceTimersByTime(300);
     expect(pane.typingActorViews()).toEqual([
       { id: "peer-7", label: "Peer 7", preview: "Draft 7" },
@@ -614,6 +617,60 @@ describe("chat pane typing presence", () => {
     expect(pane.typingActors.size).toBe(0);
     expect(pane.typingOverflow).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps one group through threshold changes and reports only active peers", () => {
+    const container = document.createElement("div");
+    const actors = Array.from({ length: 7 }, (_, index) => ({
+      id: "peer-" + index,
+      label: "A very long unbroken collaborator name ".repeat(4) + index,
+      preview: "A preview",
+      paused: index > 2,
+    }));
+    render(renderChatTypingIndicator(actors), container);
+    const group = container.querySelector(".agent-chat__typing-group");
+    const summary = container.querySelector(".agent-chat__typing-summary");
+    expect(summary?.textContent).toBe("1 typing");
+    expect(container.querySelectorAll(".agent-chat__typing-person")).toHaveLength(5);
+    expect(container.querySelectorAll(".agent-chat__typing-state")).toHaveLength(2);
+    expect(
+      container.querySelector(".agent-chat__typing-person [role=img]")?.getAttribute("aria-label"),
+    ).toBe(actors[2]?.label);
+    for (const activity of ["several", "pair", "single", "idle"] as const) {
+      render(renderChatTypingIndicator(actors.slice(0, 2), "gutter", { activity }), container);
+      expect(container.querySelector(".agent-chat__typing-group")).toBe(group);
+      expect(group?.hasAttribute("data-exiting")).toBe(false);
+      expect(container.querySelector(".agent-chat__typing-summary")).toBe(summary);
+      expect(container.querySelectorAll(".agent-chat__typing-person")).toHaveLength(0);
+      expect(container.querySelectorAll(".agent-chat__typing-group-icon svg")).toHaveLength(1);
+      expect(summary?.textContent).toBe(
+        activity === "several"
+          ? "Several people are typing…"
+          : activity === "pair"
+            ? "2 typing"
+            : activity === "single"
+              ? "1 typing"
+              : "Drafts",
+      );
+    }
+    render(renderChatTypingIndicator(actors), container);
+    expect(container.querySelector(".agent-chat__typing-group")).toBe(group);
+    expect(container.querySelector(".agent-chat__typing-summary")).toBe(summary);
+    expect(summary?.textContent).toBe("1 typing");
+    for (const actor of actors) {
+      actor.paused = true;
+    }
+    render(renderChatTypingIndicator(actors, "none"), container);
+    expect(summary?.textContent).toBe("Drafts");
+    expect(container.querySelectorAll("[role=img], .agent-chat__typing-group-icon")).toHaveLength(
+      0,
+    );
+    expect(
+      container.querySelector(".agent-chat__typing-overflow")?.getAttribute("aria-label"),
+    ).toContain(actors[2]?.label);
+    expect(
+      container.querySelector(".agent-chat__typing-overflow")?.getAttribute("title"),
+    ).toContain(`${actors[2]?.label} — Draft`);
   });
 
   it("sends only the last 300 draft code points and omits previews when typing stops", () => {

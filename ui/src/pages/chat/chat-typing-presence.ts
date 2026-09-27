@@ -17,7 +17,8 @@ export type ChatTypingActorView = Omit<ChatTypingActorState, "retireAt"> & {
 };
 
 export type ChatTypingOverflow = {
-  state: "active" | "mixed" | "idle";
+  // Anonymous copy only distinguishes zero, one, two, and several active peers.
+  activity: "idle" | "single" | "pair" | "several";
   exitDurationMs?: number;
 };
 

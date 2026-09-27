@@ -573,8 +573,14 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     const overflowCount = this.typingActors.size - views.length;
     const overflow: ChatTypingOverflow | undefined = generic
       ? {
-          state:
-            overflowActive === 0 ? "idle" : overflowActive === overflowCount ? "active" : "mixed",
+          activity:
+            overflowActive === 0
+              ? "idle"
+              : overflowActive === 1
+                ? "single"
+                : overflowActive === 2
+                  ? "pair"
+                  : "several",
           ...(overflowExiting === overflowCount
             ? { exitDurationMs: exitDurationMs ?? this.typingOverflow?.exitDurationMs }
             : {}),
@@ -592,7 +598,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
           previous.exitDurationMs === view.exitDurationMs
         );
       }) &&
-      overflow?.state === this.typingOverflow?.state &&
+      overflow?.activity === this.typingOverflow?.activity &&
       overflow?.exitDurationMs === this.typingOverflow?.exitDurationMs
     ) {
       return;

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
@@ -15,15 +16,33 @@ export function renderChatTypingIndicator(
     return null;
   }
   const active = actors.filter((actor) => !actor.paused);
-  const overflowLabel = overflow
-    ? t(
-        overflow.state === "active"
-          ? "chat.sessionSuggestions.typingSeveral"
-          : overflow.state === "mixed"
-            ? "chat.sessionSuggestions.typingMixed"
-            : "chat.sessionSuggestions.draftsSeveral",
-      )
-    : "";
+  const peers = actors.slice(2, 7);
+  const activePeers = peers.filter((actor) => !actor.paused).length;
+  const groupActivity = overflow?.activity ?? (activePeers ? "counted" : "idle");
+  const groupLabel =
+    groupActivity === "idle"
+      ? t("chat.sessionSuggestions.draftsGroup")
+      : groupActivity === "several"
+        ? t("chat.sessionSuggestions.typingSeveral")
+        : t("chat.sessionSuggestions.typingCount", {
+            count: String(overflow ? (groupActivity === "single" ? 1 : 2) : activePeers),
+          });
+  // The group is one presentation unit. Only its final departure gets an exit;
+  // individual changes do not squeeze or reflow it below the previews.
+  const groupExit =
+    overflow?.exitDurationMs ??
+    (peers.length && peers.every((actor) => actor.exitDurationMs !== undefined)
+      ? Math.max(...peers.map((actor) => actor.exitDurationMs ?? 0))
+      : undefined);
+  const groupDescription =
+    avatarPlacement === "none" && peers.length
+      ? peers
+          .map(
+            (actor) =>
+              `${actor.label} — ${t(actor.paused ? "chat.sessionSuggestions.pausedDraftState" : "chat.sessionSuggestions.typingDraftState")}`,
+          )
+          .join("; ")
+      : undefined;
   const status =
     active.length === 0
       ? ""
@@ -91,44 +110,47 @@ export function renderChatTypingIndicator(
       },
     )}
     ${
-      overflow
+      overflow || peers.length
         ? html`<div
-            class="agent-chat__typing-row"
-            ?data-exiting=${overflow.exitDurationMs !== undefined}
-            style=${overflow.exitDurationMs === undefined ? nothing : `--chat-typing-exit-duration: ${overflow.exitDurationMs}ms`}
+            class="agent-chat__typing-row agent-chat__typing-group"
+            ?data-exiting=${groupExit !== undefined}
+            style=${groupExit === undefined ? nothing : `--chat-typing-exit-duration: ${groupExit}ms`}
           >
             <div class="agent-chat__typing-row-content">
-              <div class="agent-chat__typing-overflow">${overflowLabel}</div>
+              <div
+                class="agent-chat__typing-overflow ${avatarPlacement === "none" ? "agent-chat__typing-overflow--no-avatars" : ""}"
+                role="group"
+                aria-label=${groupDescription ? `${t("chat.sessionSuggestions.otherCollaborators")}: ${groupDescription}` : t("chat.sessionSuggestions.otherCollaborators")}
+                title=${groupDescription ?? nothing}
+                aria-live="off"
+              >
+                ${
+                  avatarPlacement === "none"
+                    ? nothing
+                    : html`<span class="agent-chat__typing-identities">
+                        ${
+                          overflow
+                            ? html`<span class="agent-chat__typing-group-icon" aria-hidden="true"
+                                >${icons.users}</span
+                              >`
+                            : repeat(
+                                peers,
+                                (actor) => actor.id,
+                                (actor) => html`<span class="agent-chat__typing-person">
+                                  ${renderChatAuthorAvatar({ id: actor.id, name: actor.label, identity: { type: "profile", id: actor.id } })}
+                                </span>`,
+                              )
+                        }
+                      </span>`
+                }
+                <span class="agent-chat__typing-summary">${groupLabel}</span>
+              </div>
             </div>
           </div>`
-        : actors.length > 2
-          ? html`<div class="agent-chat__typing-overflow" aria-live="off">
-              ${repeat(
-                actors.slice(2, 7),
-                (actor) => actor.id,
-                (actor) => html`<div
-                  class="agent-chat__typing-row"
-                  ?data-exiting=${actor.exitDurationMs !== undefined}
-                  style=${actor.exitDurationMs === undefined ? nothing : `--chat-typing-exit-duration: ${actor.exitDurationMs}ms`}
-                >
-                  <div class="agent-chat__typing-row-content">
-                    <span class="agent-chat__typing-person">
-                      ${avatarPlacement === "none" ? nothing : renderChatAuthorAvatar({ id: actor.id, name: actor.label, identity: { type: "profile", id: actor.id } })}
-                      <span class="agent-chat__typing-person-name" title=${actor.label}
-                        >${actor.label}</span
-                      >
-                      <span class="agent-chat__typing-state"
-                        >${t(actor.paused ? "chat.sessionSuggestions.pausedDraftState" : "chat.sessionSuggestions.typingDraftState")}</span
-                      >
-                    </span>
-                  </div>
-                </div>`,
-              )}
-            </div>`
-          : nothing
+        : nothing
     }
     <span class="sr-only" role="status"
-      >${[status, overflow?.state !== "idle" ? overflowLabel : ""].filter(Boolean).join(" ")}</span
+      >${[status, overflow && groupActivity !== "idle" ? groupLabel : ""].filter(Boolean).join(" ")}</span
     >
   </div>`;
 }
