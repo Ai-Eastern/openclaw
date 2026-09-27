@@ -641,6 +641,11 @@ openclaw-pending-session-create {
   width: 100%;
 }
 
+.chat-thread-inner--virtual {
+  /* Only measured rows extend the scroll range; intrinsic overflow can still paint. */
+  contain: layout;
+}
+
 .chat-virtual-block {
   position: absolute;
   top: 0;
