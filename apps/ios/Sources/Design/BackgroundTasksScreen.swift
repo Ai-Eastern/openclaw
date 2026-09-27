@@ -274,30 +274,24 @@ struct BackgroundTasksScreen: View {
         self.loading = true
         self.errorMessage = nil
         do {
-            self.tasks = try await MobileBackgroundTaskList.load { status, limit in
-                try await self.requestTasks(status: status, limit: limit)
-            }
+            self.tasks = try await MobileBackgroundTaskList.load(request: self.requestTasks)
         } catch {
             self.errorMessage = error.localizedDescription
         }
         self.loading = false
     }
 
-    private func requestTasks(status: [String]?, limit: Int) async throws -> [MobileBackgroundTask] {
-        let params = TasksListParams(status: status.map { AnyCodable($0) }, agentid: self.agentID, limit: limit)
-        let data = try await self.request(method: "tasks.list", params: params)
-        return try JSONDecoder().decode(MobileBackgroundTasksEnvelope.self, from: data).tasks
-    }
-
-    private func request(method: String, params: some Encodable) async throws -> Data {
+    private func requestTasks(status: [String], limit: Int) async throws -> [MobileBackgroundTask] {
+        let params = TasksListParams(status: AnyCodable(status), agentid: self.agentID, limit: limit)
         let payload = try JSONEncoder().encode(params)
         guard let paramsJSON = String(data: payload, encoding: .utf8) else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        return try await self.appModel.operatorSession.request(
-            method: method,
+        let data = try await self.appModel.operatorSession.request(
+            method: "tasks.list",
             paramsJSON: paramsJSON,
             timeoutSeconds: 12)
+        return try JSONDecoder().decode(MobileBackgroundTasksEnvelope.self, from: data).tasks
     }
 }
 
