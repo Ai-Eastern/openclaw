@@ -23,8 +23,6 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { force: true, recursive: true });
   }
@@ -381,74 +379,6 @@ describe("terminal PTY invocation", () => {
       [],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
-  });
-});
-
-describe("Bun Windows PTY spawn contract", () => {
-  beforeEach(() => {
-    mocks.spawn.mockReset();
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "1.4.2" });
-  });
-
-  function nativeSpawn() {
-    const child = {
-      pid: 4321,
-      exited: new Promise<number>(() => {}),
-      terminal: { close: vi.fn(), write: vi.fn(), resize: vi.fn() },
-      kill: vi.fn(),
-    };
-    const spawn = vi.fn().mockReturnValue(child);
-    vi.stubGlobal("Bun", { spawn });
-    return { spawn, child };
-  }
-
-  it.each(["C:\\Windows\\System32\\cmd.exe", "C:\\Program Files\\cmd.exe"])(
-    "preserves node-pty's verbatim command line through %s",
-    async (comspec) => {
-      const { spawn, child } = nativeSpawn();
-      const handle = await spawnTerminalPty({
-        file: "C:\\Program Files\\tools\\custom.cmd",
-        args: ["thread (draft) ^ title"],
-        env: { ComSpec: comspec, Term: "dumb", PWD: "preserved", TMUX: "preserved" },
-        cols: 80,
-        rows: 24,
-      });
-      const tail = '/d /s /c ""C:\\Program Files\\tools\\custom.cmd" "thread (draft) ^ title""';
-      const executable = comspec.includes(" ") ? `"${comspec}"` : comspec;
-      expect(spawn).toHaveBeenCalledWith(
-        [comspec, tail],
-        expect.objectContaining({
-          argv0: executable,
-          windowsVerbatimArguments: true,
-          env: { ComSpec: comspec, TERM: "xterm-256color", PWD: "preserved", TMUX: "preserved" },
-        }),
-      );
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      handle.kill("SIGHUP");
-      expect(child.kill).toHaveBeenCalledWith();
-    },
-  );
-
-  it("keeps argv quoting and ambient Windows environment under Bun's ownership", async () => {
-    vi.stubEnv("TERM", "dumb");
-    vi.stubEnv("TMUX", "host");
-    const { spawn } = nativeSpawn();
-    await spawnTerminalPty({
-      file: "C:\\Program Files\\tool.exe",
-      args: ["space and & metacharacters"],
-      cols: 80,
-      rows: 24,
-    });
-    expect(spawn).toHaveBeenCalledWith(
-      ["C:\\Program Files\\tool.exe", "space and & metacharacters"],
-      {
-        cwd: undefined,
-        env: undefined,
-        terminal: expect.objectContaining({ name: "xterm-256color" }),
-      },
-    );
-    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 });
 

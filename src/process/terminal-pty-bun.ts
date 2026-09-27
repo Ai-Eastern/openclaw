@@ -32,9 +32,7 @@ type BunTerminalRuntime = {
     argv: string[],
     options: {
       cwd?: string;
-      env?: Record<string, string>;
-      argv0?: string;
-      windowsVerbatimArguments?: boolean;
+      env: Record<string, string>;
       terminal: {
         cols: number;
         rows: number;
@@ -51,7 +49,7 @@ type TerminalPtyExit = { exitCode: number; signal?: number };
 
 /** Runs a PTY on Bun's native terminal; the caller has resolved env and TERM. */
 export function spawnBunTerminalPty(
-  params: Omit<TerminalPtySpawnParams, "args"> & { args: string[] | string; name: string },
+  params: TerminalPtySpawnParams & { env: Record<string, string>; name: string },
 ): TerminalPtyHandle {
   // SAFETY: callers enter only when process.versions.bun is set; Bun is then the runtime global.
   const bun = (globalThis as typeof globalThis & { Bun?: BunTerminalRuntime }).Bun;
@@ -141,17 +139,9 @@ export function spawnBunTerminalPty(
     eofGrace = setTimeout(finish, OUTPUT_EOF_GRACE_MS);
   };
 
-  const verbatim = typeof params.args === "string";
-  const argv =
-    typeof params.args === "string" ? [params.file, params.args] : [params.file, ...params.args];
-  const child = bun.spawn(argv, {
+  const child = bun.spawn([params.file, ...params.args], {
     cwd: params.cwd,
     env: params.env,
-    // libuv joins verbatim argv with spaces. Keep the executable lookup unquoted,
-    // but match node-pty's executable token before the already-prepared cmd tail.
-    ...(verbatim
-      ? { argv0: quoteWindowsPtyExecutable(params.file), windowsVerbatimArguments: true }
-      : {}),
     terminal: {
       cols: params.cols,
       rows: params.rows,
@@ -212,9 +202,7 @@ export function spawnBunTerminalPty(
       return { dispose: () => exitListeners.delete(listener) };
     },
     kill: (signal) => {
-      signalTerminalPtyTree(child.pid, signal, (direct) =>
-        process.platform === "win32" ? child.kill() : child.kill(direct),
-      );
+      signalTerminalPtyTree(child.pid, signal, (direct) => child.kill(direct));
       if (exited || (signal !== undefined && signal !== "SIGKILL" && signal !== "SIGTERM")) {
         return;
       }
@@ -226,13 +214,4 @@ export function spawnBunTerminalPty(
       armEofGrace();
     },
   };
-}
-
-// node-pty's argsToCommandLine(file, []) rule, including enclosing quotes.
-function quoteWindowsPtyExecutable(file: string): string {
-  const quote =
-    file === "" ||
-    (/[ \t]/u.test(file) && file.length > 1 && !(file.startsWith('"') && file.endsWith('"')));
-  const escaped = file.replace(/(\\*)"/gu, '$1$1\\"');
-  return quote ? `"${escaped.replace(/(\\+)$/u, "$1$1")}"` : escaped;
 }

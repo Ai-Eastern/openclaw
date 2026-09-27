@@ -112,24 +112,21 @@ export async function spawnTerminalPty(
   if (env) {
     setPtyTerminalName({ env, name: terminalName, platform: process.platform });
   }
+  if (process.versions.bun && process.platform !== "win32") {
+    // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN; use its native PTY.
+    const { spawnBunTerminalPty } = await import("./terminal-pty-bun.js");
+    const bunEnv = env ?? inheritedTerminalEnv(terminalName);
+    // node-pty always exports the child's working directory as PWD.
+    bunEnv.PWD = params.cwd ?? process.cwd();
+    assertCurrent();
+    return spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+  }
+  const { spawn } = await import("@lydell/node-pty");
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
     env: env ?? process.env,
   });
-  if (process.versions.bun) {
-    // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN; use its native PTY.
-    const { spawnBunTerminalPty } = await import("./terminal-pty-bun.js");
-    let bunEnv = env;
-    if (process.platform !== "win32") {
-      bunEnv ??= inheritedTerminalEnv(terminalName);
-      // node-pty's Unix terminal exports the child's working directory as PWD.
-      bunEnv.PWD = params.cwd ?? process.cwd();
-    }
-    assertCurrent();
-    return spawnBunTerminalPty({ ...params, ...invocation, env: bunEnv, name: terminalName });
-  }
-  const { spawn } = await import("@lydell/node-pty");
   assertCurrent();
   const pty = spawn(invocation.file, invocation.args, {
     name: terminalName,
@@ -156,7 +153,7 @@ export async function spawnTerminalPty(
   } satisfies TerminalPtyHandle;
 }
 
-// node-pty's Unix terminal inherits process.env without host multiplexer state.
+// node-pty inherits process.env without host terminal-multiplexer state.
 const HOST_TERMINAL_ENV_KEYS = new Set([
   "TMUX",
   "TMUX_PANE",
