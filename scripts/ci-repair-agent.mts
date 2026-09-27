@@ -360,7 +360,7 @@ export function guardPatch(patch: string, result: Result, expectedSha256?: strin
     }
     if (
       FORBIDDEN_ADDITION.test(added) ||
-      (TEST_LIKE_PATH.test(path) && FORBIDDEN_TEST_ADDITION.test(added))
+      ((TEST.test(path) || TEST_LIKE_PATH.test(path)) && FORBIDDEN_TEST_ADDITION.test(added))
     ) {
       reasons.push(`Forbidden added pattern: ${path}`);
     }

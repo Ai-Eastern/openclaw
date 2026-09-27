@@ -199,6 +199,8 @@ describe("patch-only publication guard", () => {
   });
   it.each([
     "src/example.test.ts",
+    "extensions/chat/send.spec.ts",
+    "ui/src/editor.spec.tsx",
     "ui/src/e2e/example.e2e.test.ts",
     "src/example.test-support.ts",
     "src/test-utils/fixture.ts",
