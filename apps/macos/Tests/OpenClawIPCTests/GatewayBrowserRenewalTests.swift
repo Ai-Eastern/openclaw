@@ -12,7 +12,7 @@ struct GatewayBrowserRenewalTests {
         let payload = try JSONSerialization.data(withJSONObject: claims).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        return try gatewayBrowserSessionFixture(token: "synthetic.\(payload).signature", expiresAt: expiry)
+        return try gatewayBrowserSessionFixture(token: "eyJhbGciOiJSUzI1NiJ9.\(payload).signature", expiresAt: expiry)
     }
 
     @Test(arguments: [

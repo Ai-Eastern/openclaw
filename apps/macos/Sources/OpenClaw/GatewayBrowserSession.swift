@@ -94,14 +94,8 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
         }
         // The credential was verified at sign-in. These claims only schedule renewal;
         // old saved sessions without iat keep their original fifteen-minute window.
-        let parts = self.token.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else { return 15 * 60 }
-        let payload = parts[1].replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        guard let data = Data(base64Encoded: payload + String(repeating: "=", count: (4 - payload.count % 4) % 4)),
-              let lifetime = try? JSONDecoder().decode(Lifetime.self, from: data),
-              lifetime.iat.isFinite, lifetime.iat > 0,
-              lifetime.exp.isFinite, lifetime.exp > lifetime.iat
+        guard let lifetime = try? CloudflareAccessLogin.decodeJWT(Lifetime.self, token: self.token),
+              lifetime.iat.isFinite, lifetime.iat > 0, lifetime.exp.isFinite, lifetime.exp > lifetime.iat
         else { return 15 * 60 }
         return max(15 * 60, min(7 * 24 * 60 * 60, (lifetime.exp - lifetime.iat) / 4))
     }

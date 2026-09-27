@@ -156,7 +156,8 @@ final class GatewayBrowserSignInCoordinator {
                         let session = try await CloudflareAccessLogin.signIn(
                             application: application, attempt: attempt, progress: progress)
                         try Task.checkCancellation()
-                        return try await store.saveBrowserSession(name: name, session: session, attempt: attempt)
+                        return try await store.saveBrowserSession(
+                            name: name, session: session, attempt: attempt, renewingOnly: automatic)
                     }
                 }
                 try Task.checkCancellation()

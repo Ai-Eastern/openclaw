@@ -222,13 +222,15 @@ actor MacGatewayProfileStore {
     func saveBrowserSession(
         name: String,
         session: GatewayBrowserSession,
-        attempt: BrowserSignInAttempt) async throws -> MacGatewayProfile
+        attempt: BrowserSignInAttempt,
+        renewingOnly: Bool = false) async throws -> MacGatewayProfile
     {
         try session.validate(for: attempt.url)
         return try await self.commit(
             name: name,
             credentials: Credentials(token: nil, password: nil, browserSession: session),
-            attempt: attempt)
+            attempt: attempt,
+            renewingOnly: renewingOnly)
     }
 
     func saveConnection(
@@ -247,7 +249,8 @@ actor MacGatewayProfileStore {
     private func commit(
         name: String,
         credentials: Credentials?,
-        attempt: BrowserSignInAttempt) async throws -> MacGatewayProfile
+        attempt: BrowserSignInAttempt,
+        renewingOnly: Bool = false) async throws -> MacGatewayProfile
     {
         try self.requireCurrentAttempt(attempt)
         let old = try self.loadRegistry().profiles.first { $0.profile.id == attempt.profileID }
@@ -261,7 +264,9 @@ actor MacGatewayProfileStore {
         let renewsBrowserSession = !changesPrincipal && nextSession != nil &&
             previousSession.map { $0.expiresAt > Date() } == true &&
             previousSession?.browserDataPrincipal == nextSession?.browserDataPrincipal
-        guard self.committingBrowserSignIns[attempt.id] == nil else { throw GatewayBrowserSessionError.superseded }
+        // Automatic renewal never switches accounts or replaces an expired session.
+        guard !renewingOnly || renewsBrowserSession,
+              self.committingBrowserSignIns[attempt.id] == nil else { throw GatewayBrowserSessionError.superseded }
         self.committingBrowserSignIns[attempt.id] = CommitState(removesProfile: credentials == nil)
         self.credentialTransitions[attempt.profileID] = renewsBrowserSession
         defer {
