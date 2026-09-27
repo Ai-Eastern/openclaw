@@ -280,7 +280,9 @@ function handle(socket, phase, message) {
             hidden: false,
             isDefault: true,
             defaultReasoningEffort: "low",
-            supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "Low reasoning effort" },
+            ],
             multiAgentVersion: "v1",
             inputModalities: ["text"],
           },
