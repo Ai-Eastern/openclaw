@@ -2043,6 +2043,25 @@ jobs:
               });
             }
           }
+          // The trusted planner may name owners added after a frozen checkout.
+          // Project them out here so the runner never receives impossible work.
+          const projectFrozenNodeTestPlan = (plan) => {
+            const configs = plan.configs?.filter((config) => existsSync(config));
+            if (plan.configs?.length && !configs?.length) {
+              return null;
+            }
+            return { ...plan, configs };
+          };
+          const targetNodeTestShards = compatibilityTarget
+            ? rawNodeTestShards.flatMap((shard) => {
+                const groups = shard.groups
+                  ?.map(projectFrozenNodeTestPlan)
+                  .filter((group) => group !== null);
+                if (shard.groups?.length && !groups?.length) return [];
+                const projected = projectFrozenNodeTestPlan({ ...shard, groups });
+                return projected ? [projected] : [];
+              })
+            : rawNodeTestShards;
           // Node rows list every striped test file. Current targets pack the
           // projected runner contract; older targets keep their flat fields or
           // projected legacy groups because their shard runner predates the codec.
@@ -2056,7 +2075,7 @@ jobs:
                 })
               : null;
           const nodeTestGroupsCodec =
-            (rawNodeTestShards.length > 0 || uiTestGroups !== null) &&
+            (targetNodeTestShards.length > 0 || uiTestGroups !== null) &&
             existsSync(nodeTestGroupsCodecPath)
               ? await importTargetPlan(nodeTestGroupsCodecPath)
               : null;
@@ -2107,7 +2126,7 @@ jobs:
             "test/vitest/vitest.tooling-docker.config.ts",
           ]);
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
-          const nodeTestShards = rawNodeTestShards
+          const nodeTestShards = targetNodeTestShards
             .toSorted((a, b) =>
               Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
               (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
@@ -2187,7 +2206,7 @@ jobs:
             !frozenTarget && !compatibilityTarget && !releaseGate &&
             /^[0-9a-f]{40}$/u.test(checkoutRevision) && checkoutRevision === workflowRevision &&
             typeof nodeTestPlan.hasCompleteStartupCorpusCoverage === "function" &&
-            nodeTestPlan.hasCompleteStartupCorpusCoverage(rawNodeTestShards, startupCorpusTestFiles)
+            nodeTestPlan.hasCompleteStartupCorpusCoverage(targetNodeTestShards, startupCorpusTestFiles)
               ? checkoutRevision : "";
           if (startupCorpusNodeRevision) {
             // The exact-tree Node receipt makes this row's only test step a no-op.
@@ -2259,7 +2278,7 @@ jobs:
             run_build_artifacts: runBuildArtifacts,
             run_proof_tier: runProofTier,
             run_baseline_ratchets: runBaselineRatchets,
-            baseline_ratchets_in_preflight: runBaselineRatchets && workflowEventName === "pull_request",
+            baseline_ratchets_in_preflight: runBaselineRatchets && workflowEventName === "pull_request" && nodeRunnerBackend !== "runson",
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
@@ -3763,7 +3782,7 @@ jobs:
     name: checks-fast-baseline-ratchets
     needs: [preflight]
     if: needs.preflight.outputs.run_baseline_ratchets == 'true' && needs.preflight.outputs.baseline_ratchets_in_preflight != 'true'
-    # Non-PR execution retains the existing runner and release-gate merge adapter.
+    # Standalone execution retains the existing runner and release-gate merge adapter.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'runson' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'hybrid' && (github.run_attempt != 1 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || needs.preflight.outputs.node_runner_backend == 'runson' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_qualification != 'true') || needs.preflight.outputs.frozen_target == 'true')))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'runson' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'hybrid' && (github.run_attempt != 1 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || needs.preflight.outputs.node_runner_backend == 'runson' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_qualification != 'true') || needs.preflight.outputs.frozen_target == 'true')))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 60
     env:

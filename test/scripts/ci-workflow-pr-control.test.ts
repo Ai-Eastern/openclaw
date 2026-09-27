@@ -52,16 +52,22 @@ describe("PR failure cancellation", () => {
     }
   });
 
-  it.each(["blacksmith", "github", "hybrid"] as const)(
-    "reconciles installed check selection with the full %s PR graph",
-    (runnerProfile) => {
+  it.each([
+    { runnerProfile: "blacksmith", runnerBackend: "blacksmith", inline: true },
+    { runnerProfile: "github", runnerBackend: "github", inline: true },
+    { runnerProfile: "hybrid", runnerBackend: "hybrid", inline: true },
+    { runnerProfile: "hybrid", runnerBackend: "runson", inline: false },
+  ] as const)(
+    "reconciles installed check selection with the full $runnerBackend PR graph",
+    ({ runnerProfile, runnerBackend, inline }) => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         checkFamilyScope: true,
         historicalCompatibility: false,
         eventName: "pull_request",
         runnerProfile,
-        runnerBackend: runnerProfile,
+        runnerBackend,
+        nodeRunnerBackend: runnerBackend,
         changedPaths: ["src/agents/example.ts"],
         ciTypeGraphNames: ["core-test-agents-root"],
         changedPlannerSource: `
@@ -80,7 +86,7 @@ describe("PR failure cancellation", () => {
         eventName: "pull_request",
         repository: "openclaw/openclaw",
         runAttempt: 1,
-        runnerBackend: runnerProfile,
+        runnerBackend,
         runnerProfile,
         preflightOutputs: { ...manifest.outputs, baseline_ratchets_result: "success" },
         additionalNeeds: {
@@ -89,10 +95,14 @@ describe("PR failure cancellation", () => {
       };
       const evaluate = (value: string) =>
         evaluateWorkflowExpression(value.startsWith("${{") ? value : `\${{ ${value} }}`, context);
-      expect(evaluate(workflow.jobs["checks-baseline-ratchets"].if)).toBe(false);
+      expect(evaluate(workflow.jobs["checks-baseline-ratchets"].if)).toBe(!inline);
       expect(manifest.outputs.baseline_ratchets_in_preflight).toBe(
-        manifest.outputs.run_baseline_ratchets,
+        inline ? manifest.outputs.run_baseline_ratchets : "false",
       );
+      if (!inline) {
+        expect(evaluate(workflow.jobs["checks-baseline-ratchets"]["runs-on"])).toBe("ubuntu-24.04");
+        expect(evaluate(workflow.jobs["check-plan"]["runs-on"])).toBe("ubuntu-24.04");
+      }
       let admitted = 0;
       for (const [name, job] of Object.entries(workflow.jobs) as Array<
         [

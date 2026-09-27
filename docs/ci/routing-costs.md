@@ -174,9 +174,10 @@ organization-wide usage.
 
 ## Ratchet admission before Node tests
 
-Selected ratchets now run inside preflight for actual `pull_request` events,
-using its exact merge tree and comparison base. The same command body remains
-in the standalone job for other events, including release-gate merge preparation.
+Selected ratchets now run inside preflight for actual `pull_request` events
+outside the RunsOn backend, using its exact merge tree and comparison base. The
+same command body remains in the standalone job for RunsOn PRs and other events,
+including release-gate merge preparation.
 Node admission and the final gate require the recorded inline step outcome;
 a required skipped or missing result fails. Job counts and hosted-budget
 accounting exclude the removed PR job. Cache trust and runner routing stay unchanged.

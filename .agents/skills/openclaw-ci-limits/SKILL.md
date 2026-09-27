@@ -245,9 +245,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   outage override remains intact. Budget three control-job registrations per eligible
   hybrid first attempt when optional hosted admission is closed, two when admitted,
   and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
-  Selected PR baseline ratchets run inside preflight on its existing runner,
-  sharing one command body with the standalone adapter for other events.
-  Use the actual workflow event, not a release-gate's normalized PR scope.
+  Selected PR baseline ratchets run inside preflight on its existing runner
+  unless the resolved Node backend is RunsOn, which retains hosted standalone
+  ratchets. Both routes share one command body with the adapter for other events.
+  Use the actual workflow event and resolved Node backend, not a release-gate's
+  normalized PR scope or the shared hybrid runner profile.
   Preserve exact merge-parent/base validation, every ratchet, cache trust,
   and explicit step-outcome admission in Node and the final gate. Required
   missing/skipped outcomes fail; job-count and hosted-budget inventories exclude
