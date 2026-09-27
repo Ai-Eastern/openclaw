@@ -112,7 +112,8 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
 
   const stream = options.stream ?? process.stderr;
   const isTty = stream.isTTY;
-  const allowLog = !isTty && options.fallback === "log";
+  const fallback = options.fallback;
+  const allowLog = !isTty && fallback === "log";
   if (!isTty && !allowLog) {
     return noopReporter;
   }
@@ -120,9 +121,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   const delayMs = resolveTimerTimeoutMs(options.delayMs, 0, 0);
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
   const stdinIsRaw = process.stdin.isRaw;
-  const wantsSpinner = options.fallback === undefined || options.fallback === "spinner";
+  const wantsSpinner = fallback === undefined || fallback === "spinner";
   const allowSpinner = wantsSpinner && isTty && !stdinIsRaw;
-  const allowLine = isTty && options.fallback === "line";
+  const allowLine = isTty && fallback === "line";
   if (isTty && stdinIsRaw && wantsSpinner) {
     // Raw stdin usually means an interactive prompt owns cursor movement.
     return noopReporter;
