@@ -68,7 +68,7 @@ export function runCiManifestFixture(options: {
   historicalReader?: boolean;
   toolingOwnerSelection?: boolean;
   runnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
-  nodeRunnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
+  nodeRunnerBackend?: "blacksmith" | "github" | "github-pr" | "hybrid" | "runson";
   runnerProfile?: "blacksmith" | "github" | "hybrid";
   targetHostedRunnerProfileContract?: boolean;
   uiE2eProjectsCapability?: boolean;
