@@ -30,7 +30,7 @@ When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions. Explicitly
 setting `tools.toolSearch: true` selects one `tool_search_code` tool, plus any direct-only tools whose
 structured results cannot cross the compact bridge. The code tool runs a short
-JavaScript body in an isolated Node subprocess with an `openclaw.tools` bridge:
+JavaScript body in an isolated QuickJS sandbox with an `openclaw.tools` bridge:
 
 ```js
 const hits = await openclaw.tools.search("create a GitHub issue");
@@ -83,7 +83,7 @@ run:
 7. Expose the OpenClaw code bridge, the structured fallback tools, or the
    compact directory surface alongside those stable, directly callable tools.
 
-At execution time every real tool call returns to OpenClaw. The isolated Node
+At execution time every real tool call returns to OpenClaw. The isolated QuickJS
 runtime does not hold plugin implementations, MCP client objects, or secrets.
 `openclaw.tools.call(...)` crosses the bridge back into the Gateway, where the
 normal policy, approval, hook, logging, and result handling still apply.
@@ -104,9 +104,10 @@ normal policy, approval, hook, logging, and result handling still apply.
 
 All modes use the same policy-filtered catalog and normal OpenClaw execution
 path. Tools marked `catalogMode: "direct-only"` stay outside that catalog and
-remain model-visible. If the current runtime cannot launch the isolated Node code-mode child
-process, explicitly selected `code` mode falls back to `tools` before catalog
-compaction. In `directory` mode, client-provided tools stay directly visible
+remain model-visible. Explicitly selected `code` mode is always honored, including
+on Bun without an installed Node and in Electron hosts. If the bundled QuickJS executor is unavailable,
+`tool_search_code` fails explicitly with plugin-policy guidance; it never silently
+switches to `tools`. In `directory` mode, client-provided tools stay directly visible
 for the current run while OpenClaw tools, plugin tools, and MCP tools can be
 compacted behind the directory catalog. A direct call to an exact hidden
 directory name is hydrated from that same authorized catalog before execution
@@ -115,7 +116,7 @@ in the embedded harness. The [Copilot harness](/plugins/copilot) instead maps
 be invoked through `tool_call`, because they are not registered SDK handlers.
 
 The structured `tools` surface is on by default for OpenClaw runs. It does not
-add the Node code bridge's wall-clock deadline to tools that wait for approval or
+add the code bridge's wall-clock deadline to tools that wait for approval or
 take more than a few seconds. Explicit `toolSearch: true` and object settings
 retain their existing semantics: `true` still selects `code`, and an object
 without a mode still uses `code`. See [Runtime boundary](#runtime-boundary).
@@ -325,38 +326,47 @@ tool names because exact deferred dispatch uses those names.
 
 ## Runtime boundary
 
-The code bridge runs in a short-lived Node subprocess. The subprocess starts
-with Node permission mode enabled, an empty environment, no filesystem or
-network grants, and no child-process or worker grants. OpenClaw enforces a
-parent-process wall-clock timeout and kills the subprocess on timeout, including
-after async continuations.
+The code bridge always uses the bundled `code-mode-quickjs` executor through
+OpenClaw's Code Mode executor contract, on both Node and Bun. It does not require
+an installed Node runtime under Bun and ignores `tools.codeMode.executor`.
+QuickJS runs inside a separate WebAssembly guest in a worker thread, with no
+ambient host filesystem, network, process, environment, or module access.
+
+The only host operations admitted by this bridge are `openclaw.tools.search`,
+`openclaw.tools.describe`, and `openclaw.tools.call`. Other shared Code Mode
+globals (such as `catalog`, `nodes`, `results`, `skills`, `API`, timers, and the
+`namespaces` alias of `openclaw`) may be visible, but their host requests fail with
+an explicit allowlist error or reach the same three operations. Tool calls keep the
+normal policy, approvals, hooks, and execution path.
+`openclaw.tools` calls start when awaited or chained with `.then`, `.catch`, or
+`.finally`; an unawaited, unchained call never runs. Started calls are drained
+before the result returns. Use `await` or `Promise.all` to consume results and
+handle errors.
+
+The guest has a 64 MiB memory limit, a 10 MiB combined return/output limit,
+and 128 in-flight bridge slots. The shared controller
+separately caps console output at 16 KiB of serialized code units and includes
+a truncation marker. Oversized returned output also carries a truncation marker.
+These guest limits do not cap total Gateway memory or host-side tool execution.
 
 The default `codeTimeoutMs` is 10 seconds for the entire `tool_search_code`
-invocation, including bridged tool execution and approval waits. The deadline
-does not pause while `openclaw.tools.call(...)` waits on the host. This bridge
-does not return a resumable `waiting` result: expiry kills the child and cancels
-outstanding calls. Before retrying a timed-out mutation, inspect its outcome;
-cancellation cannot undo side effects that already occurred.
+invocation, including executor preparation, guest execution, bridged tool calls,
+and approval waits. The deadline does not pause during host waits. Expiry stops
+the guest and cancels outstanding calls, including after async continuations.
+The tool does not expose a resumable `waiting` result. Before retrying a timed-out
+mutation, inspect its outcome; cancellation cannot undo side effects that
+already occurred.
 
-This is different from the [Code Mode](/tools/code-mode/configuration)
-`exec`/`wait` surface, which pauses its budget for approvals and can checkpoint
-unfinished tool waits for a later `wait`. Use structured `tools` mode when the
-Node bridge deadline is unsuitable; target tools still enforce their own
-timeouts, approvals, and cancellation. The hard deadline also stops runaway
-JavaScript after async continuations, so disabling it around host waits is not
-a safe substitute for resumable execution.
+This differs from the [Code Mode](/tools/code-mode/configuration) `exec`/`wait`
+surface, which pauses its budget for approvals and can checkpoint unfinished
+work for a later `wait`. Use structured `tools` mode when the bridge deadline
+is unsuitable; target tools still enforce their own timeouts and approvals.
 
-Outstanding bridged tool calls are canceled when the child settles, including
-fatal exits and final results. Failed exits wait for stderr to drain before
-rendering a bounded diagnostic. The error separately reports bytes discarded
-from the 64 KiB retained tail and bytes omitted from its final text preview.
-
-The runtime exposes only:
-
-- `console.log`, `console.warn`, and `console.error`
-- `openclaw.tools.search`
-- `openclaw.tools.describe`
-- `openclaw.tools.call`
+If QuickJS cannot start, the tool reports the executor error and the next step:
+the bundled `code-mode-quickjs` plugin must not be listed in `plugins.deny` or
+disabled with `plugins.entries.code-mode-quickjs.enabled: false`. Alternatively,
+set `tools.toolSearch.mode` to `"tools"`. Outstanding host calls are canceled on
+completion, failure, timeout, and abort.
 
 Normal OpenClaw behavior still applies to final calls:
 
@@ -382,7 +392,7 @@ An explicit `tools.toolSearch` value takes precedence, including `false`.
 Setting `agents.defaults.experimental.localModelLean: false` restores optional
 tools but does not turn off automatic Tool Search.
 
-Opt into the legacy Node code bridge explicitly (not the structured default):
+Opt into the QuickJS code bridge explicitly:
 
 ```bash
 openclaw config set tools.toolSearch true
@@ -526,8 +536,10 @@ Tool Search should fail closed:
 - if a selected tool becomes unavailable, `tool_call` should fail
 - if policy or approval blocks execution, the call result should report that
   block instead of bypassing it
-- if the code bridge cannot create an isolated runtime, use `mode: "tools"` or
-  disable Tool Search for that deployment
+- if the QuickJS sandbox cannot start, `tool_search_code` fails explicitly with
+  plugin-policy guidance; enable the bundled executor or set `mode: "tools"`
+- guest failures remain errors; timeout and abort report `tool_search_code timed out`
+  and `tool_search_code aborted`, respectively
 
 ## Related
 

@@ -160,8 +160,12 @@ function structuredControlStubs(): AnyAgentTool[] {
   ];
 }
 
-function codeModeFixture(targets: AnyAgentTool[]): AnyAgentTool {
-  const config = { tools: { toolSearch: true } };
+function codeModeFixture(
+  targets: AnyAgentTool[],
+  config: Parameters<typeof createToolSearchTools>[0]["config"] = {
+    tools: { toolSearch: true },
+  },
+): AnyAgentTool {
   const catalogRef = createToolSearchCatalogRef();
   applyRunToolSearchCatalog({
     tools: [fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"), ...targets],
@@ -1067,54 +1071,24 @@ describe("Tool Search", () => {
     testCatalogRefs.clear();
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
-    testing.setToolSearchCodeModeSupportedForTest(undefined);
     testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
   });
 
-  it("falls back to structured controls when code mode is unsupported", () => {
-    testing.setToolSearchCodeModeSupportedForTest(false);
-    try {
-      const config = { tools: { toolSearch: true } } as never;
-      const resolved = resolveToolSearchConfig(config);
-      const compacted = applyToolSearchCatalog({
-        tools: [
-          fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
-          ...structuredControlStubs(),
-          pluginTool("fake_bun_fallback", "Fallback target"),
-        ],
-        config,
-        sessionId: "session-code-unsupported",
-      });
-
-      expect(resolved.mode).toBe("tools");
-      expect(compacted.tools.map((tool) => tool.name)).toEqual([
-        TOOL_SEARCH_RAW_TOOL_NAME,
-        TOOL_DESCRIBE_RAW_TOOL_NAME,
-        TOOL_CALL_RAW_TOOL_NAME,
-      ]);
-      expect(compacted.catalogToolCount).toBe(1);
-    } finally {
-      testing.setToolSearchCodeModeSupportedForTest(undefined);
-    }
-  });
-
-  it("falls back to structured controls under Electron without changing Node mode", () => {
-    const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
-    Object.defineProperty(process.versions, "electron", {
-      configurable: true,
-      value: "99.0.0",
+  it("reports an unavailable QuickJS sandbox without dispatching a tool when its plugin is denied", async () => {
+    const target = pluginTool("fake_denied_sandbox", "Must not run without the sandbox");
+    const runtimeCodeTool = codeModeFixture([target], {
+      tools: { toolSearch: true },
+      plugins: { deny: ["code-mode-quickjs"] },
     });
-    try {
-      expect(resolveToolSearchConfig({ tools: { toolSearch: true } } as never).mode).toBe("tools");
-    } finally {
-      if (electronDescriptor) {
-        Object.defineProperty(process.versions, "electron", electronDescriptor);
-      } else {
-        delete (process.versions as NodeJS.ProcessVersions & { electron?: string }).electron;
-      }
-    }
 
-    expect(resolveToolSearchConfig({ tools: { toolSearch: true } } as never).mode).toBe("code");
+    const result = runtimeCodeTool.execute("call-denied-sandbox", {
+      code: 'return await openclaw.tools.call("fake_denied_sandbox", {});',
+    });
+    await expect(result).rejects.toThrow(/^tool_search_code could not start its QuickJS sandbox:/);
+    await expect(result).rejects.toThrow("plugins.deny");
+    await expect(result).rejects.toThrow("plugins.entries.code-mode-quickjs.enabled: false");
+    await expect(result).rejects.toThrow('tools.toolSearch.mode to "tools"');
+    expect(target.execute).not.toHaveBeenCalled();
   });
 
   it("guides structured control tools toward compact catalog calls", () => {
@@ -3164,12 +3138,12 @@ describe("Tool Search", () => {
 
   it("waits for started bridged calls before returning code-mode success", async () => {
     const target = pluginTool("fake_then_started", "Started by .then without await");
-    let resolveTool: (() => void) | undefined;
+    const started = createDeferred<void>();
+    const completion = createDeferred<void>();
     target.execute = vi.fn(
       async (_toolCallId: string, input: unknown): Promise<ReturnType<typeof jsonResult>> => {
-        await new Promise<void>((resolve) => {
-          resolveTool = resolve;
-        });
+        started.resolve();
+        await completion.promise;
         return jsonResult({ name: target.name, input });
       },
     );
@@ -3188,12 +3162,10 @@ describe("Tool Search", () => {
         return result;
       });
 
-    await vi.waitFor(() => expect(target.execute).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await started.promise;
+    expect(target.execute).toHaveBeenCalledTimes(1);
     expect(settled).toBe(false);
-    resolveTool?.();
+    completion.resolve();
     const result = await resultPromise;
 
     const details = resultDetails(result);
@@ -3383,7 +3355,7 @@ describe("Tool Search", () => {
     expect(writeTool.execute).not.toHaveBeenCalled();
   });
 
-  it("preserves code-mode bridge errors from the child process", async () => {
+  it("preserves code-mode bridge errors from the sandbox", async () => {
     const runtimeCodeTool = codeModeFixture([]);
 
     await expect(
@@ -3501,9 +3473,7 @@ describe("Tool Search", () => {
 
     const config = {
       tools: {
-        // Generous timeout: the child process must have started the bridged call
-        // before the deadline fires, or the abort assertion races process spawn
-        // latency under machine load.
+        // Sandbox preparation must finish before the host call's abort can be observed.
         toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1500 },
       },
     } as never;

@@ -13,11 +13,9 @@ import {
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
-import { readToolSearchCode, runCodeMode, runCodeModeChild } from "./tool-search-code-mode.js";
+import { readToolSearchCode, runCodeMode } from "./tool-search-code-mode.js";
 import {
-  isToolSearchCodeModeSupported,
   resolveToolSearchConfig,
-  setToolSearchCodeModeSupportedForTest,
   setToolSearchMinCodeTimeoutMsForTest,
 } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
@@ -269,7 +267,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
       label: "Tool Search Code",
       description:
-        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string, which must be in English: matching is lexical against tool names and descriptions, which are written in English. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
+        "Run JavaScript in an isolated QuickJS sandbox over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string, which must be in English: matching is lexical against tool names and descriptions, which are written in English. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
       parameters: Type.Object({
         code: Type.String({
           description:
@@ -445,12 +443,9 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 const testing = {
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
-  isToolSearchCodeModeSupported,
-  setToolSearchCodeModeSupportedForTest,
   setToolSearchMinCodeTimeoutMsForTest,
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
-  runCodeModeChild,
 };
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

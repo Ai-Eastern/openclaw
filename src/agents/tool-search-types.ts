@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
@@ -77,7 +76,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
 
-/** Resolved Tool Search config after defaults, limits, and runtime support checks. */
+/** Resolved Tool Search config after defaults and limits. */
 export type ToolSearchConfig = {
   enabled: boolean;
   mode: ToolSearchMode;
@@ -139,19 +138,6 @@ export type ToolSearchCatalogRef = {
   disposeObserver?: () => void;
   onDispose?: Set<() => void>;
 };
-
-export type CodeModeBridgeMethod = "search" | "describe" | "call";
-
-export type CodeModeChildMessage =
-  | { type: "result"; ok: true; value: unknown }
-  | { type: "result"; ok: false; error?: string }
-  | { type: "log"; items?: unknown[] }
-  | { type: "bridge"; id?: unknown; method?: unknown; args?: unknown };
-
-export type CodeModeBridgeResultMessage = { type: "bridge-result"; id: string } & Result<
-  unknown,
-  string
->;
 
 export type ToolSearchCatalogApplyResult = {
   tools: AnyAgentTool[];

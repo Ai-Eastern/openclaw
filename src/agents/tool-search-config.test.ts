@@ -1,13 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveToolSearchConfig,
-  setToolSearchCodeModeSupportedForTest,
-} from "./tool-search-config.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
 
 describe("Tool Search activation defaults", () => {
-  afterEach(() => setToolSearchCodeModeSupportedForTest(undefined));
-
   it.each([undefined, {}, { tools: {} }] satisfies Array<OpenClawConfig | undefined>)(
     "uses structured search without authored settings: %j",
     (config) => {
@@ -35,10 +30,26 @@ describe("Tool Search activation defaults", () => {
     enabled: boolean;
     mode: string;
   }>)("preserves authored $raw configuration", ({ raw, enabled, mode }) => {
-    setToolSearchCodeModeSupportedForTest(true);
     expect(resolveToolSearchConfig({ tools: { toolSearch: raw } })).toMatchObject({
       enabled,
       mode,
     });
+  });
+
+  it("honors code mode under Electron", () => {
+    const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
+    Object.defineProperty(process.versions, "electron", {
+      configurable: true,
+      value: "99.0.0",
+    });
+    try {
+      expect(resolveToolSearchConfig({ tools: { toolSearch: true } }).mode).toBe("code");
+    } finally {
+      if (electronDescriptor) {
+        Object.defineProperty(process.versions, "electron", electronDescriptor);
+      } else {
+        delete (process.versions as NodeJS.ProcessVersions & { electron?: string }).electron;
+      }
+    }
   });
 });

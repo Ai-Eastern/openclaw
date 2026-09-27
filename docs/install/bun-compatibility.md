@@ -83,6 +83,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                               |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Tool Search code mode runs in the bundled QuickJS sandbox and no longer needs an installed Node runtime under Bun.                                                                                   |
 | Unreleased (main)                  | Expands Bun SQLite storage from four databases to up to 64 dedicated workers within the existing 64-client cap while retaining worker-exit cleanup.                                                  |
 | Unreleased (main)                  | Managed Bun services on macOS persist OPENCLAW_SQLITE_LIBRARY and HOMEBREW_PREFIX from the installing shell.                                                                                         |
 | Unreleased (main)                  | Daemon install, repair, doctor, and service audits probe Bun executables through the same SQLite library selection as Gateway startup, with a minimal probe environment. #142186                     |

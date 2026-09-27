@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
@@ -15,7 +15,6 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
-import { testing } from "../tool-search.test-support.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../tools/sessions-spawn-tool.js";
 import { createAgentHarnessToolSurfaceRuntimeCore as createAgentHarnessToolSurfaceRuntimeBase } from "./tool-surface-bridge.js";
@@ -439,8 +438,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   });
 
   it("atomically filters and restores direct tools plus the hidden catalog", () => {
-    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
-    testing.setToolSearchCodeModeSupportedForTest(true);
     const runtime = createRuntime({ tools: { toolSearch: true } });
     const compacted = runtime.compactTools(
       tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
@@ -469,8 +466,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   });
 
   it("derives callable inventory after runtime schema projection", () => {
-    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
-    testing.setToolSearchCodeModeSupportedForTest(true);
     const runtime = createRuntime({ tools: { toolSearch: true } });
     const invalid = {
       ...createStubTool("invalid_hidden"),
@@ -587,23 +582,20 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   });
 
   it("preserves explicit code-mode compaction for lean runs", () => {
-    testing.setToolSearchCodeModeSupportedForTest(true);
+    const config: OpenClawConfig = {
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      tools: { toolSearch: { mode: "code" } },
+    };
+    const runtime = createRuntime(config);
     try {
-      const config: OpenClawConfig = {
-        agents: { defaults: { experimental: { localModelLean: true } } },
-        tools: { toolSearch: { mode: "code" } },
-      };
-      const runtime = createRuntime(config);
-
       // Compaction still applies to non-core tools; core coding tools stay visible.
       expect(
         runtime
           .compactTools(tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]))
           .tools.map((tool) => tool.name),
       ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]);
-      runtime.cleanup();
     } finally {
-      testing.setToolSearchCodeModeSupportedForTest(undefined);
+      runtime.cleanup();
     }
   });
 });

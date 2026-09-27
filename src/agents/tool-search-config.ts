@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import {
   MAX_TOOL_SEARCH_RESULTS,
   type ToolSearchConfig,
@@ -35,20 +34,7 @@ function readInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-let toolSearchCodeModeSupportedForTest: boolean | undefined;
 let toolSearchMinCodeTimeoutMsForTest: number | undefined;
-
-export function isToolSearchCodeModeSupported(): boolean {
-  if (toolSearchCodeModeSupportedForTest !== undefined) {
-    return toolSearchCodeModeSupportedForTest;
-  }
-  // Electron advertises Node flags but process.execPath remains the host binary,
-  // so the isolated code child cannot be launched as a plain Node process.
-  return (
-    typeof process.versions.electron !== "string" &&
-    resolveNodeRuntimeExecutable({ requiredFlag: "--permission" }) !== undefined
-  );
-}
 
 function resolveMinCodeTimeoutMs(): number {
   return toolSearchMinCodeTimeoutMsForTest ?? 1000;
@@ -57,10 +43,8 @@ function resolveMinCodeTimeoutMs(): number {
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
   const raw = readToolSearchConfig(config);
   const rawMode = typeof raw.mode === "string" ? raw.mode : "code";
-  const requestedMode: ToolSearchMode =
-    rawMode === "tools" || rawMode === "directory" || rawMode === "code" ? rawMode : "code";
   const mode: ToolSearchMode =
-    requestedMode === "code" && !isToolSearchCodeModeSupported() ? "tools" : requestedMode;
+    rawMode === "tools" || rawMode === "directory" || rawMode === "code" ? rawMode : "code";
   const configured = Object.keys(raw).some((key) => key !== "enabled");
   const maxSearchLimit = Math.max(
     1,
@@ -79,10 +63,6 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     ),
     maxSearchLimit,
   };
-}
-
-export function setToolSearchCodeModeSupportedForTest(value: boolean | undefined): void {
-  toolSearchCodeModeSupportedForTest = value;
 }
 
 export function setToolSearchMinCodeTimeoutMsForTest(value: number | undefined): void {

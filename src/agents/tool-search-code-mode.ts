@@ -1,22 +1,83 @@
-import { Buffer } from "node:buffer";
-import { spawn } from "node:child_process";
-import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
+import type {
+  CodeModeExecutorContinuation,
+  CodeModeExecutorInlineHost,
+} from "./code-mode-executor-types.js";
+import { runCodeModeExecutor } from "./code-mode-executor.js";
+import { createHeadlessDeadlineScope } from "./code-mode-headless.js";
+import { CodeModeOutputState } from "./code-mode-json.js";
+import {
+  CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+  MAX_CODE_MODE_PENDING_TOOL_CALLS,
+  type CodeModeNamespaceDescriptor,
+  type CodeModeSettlementMode,
+  type CodeModeWorkerBoundary,
+  type CodeModeWorkerPayload,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
+} from "./code-mode-worker-types.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { appendBoundedTextTail, SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
-import { TOOL_SEARCH_CODE_MODE_CHILD_SOURCE } from "./tool-search-code-mode-child.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type {
-  CodeModeBridgeMethod,
-  CodeModeBridgeResultMessage,
-  CodeModeChildMessage,
-  ToolSearchConfig,
-  ToolSearchToolContext,
-} from "./tool-search-types.js";
+import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search-types.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
+
+const MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
+const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
+const BRIDGE_ALLOWLIST_MESSAGE =
+  "tool_search_code exposes only openclaw.tools.search, openclaw.tools.describe, and openclaw.tools.call.";
+// Tool Search promises start lazily; the shared namespace starts requests eagerly.
+const TOOL_SEARCH_PRELUDE = `;(() => {
+  const raw = globalThis.openclaw.tools;
+  const lazy = (call) => (...args) => {
+    let promise;
+    const start = () => (promise ??= call(...args));
+    return Object.freeze({
+      then: (resolve, reject) => start().then(resolve, reject),
+      catch: (reject) => start().catch(reject),
+      finally: (onFinally) => start().finally(onFinally),
+    });
+  };
+  Object.defineProperty(globalThis, "openclaw", {
+    value: Object.freeze({ tools: Object.freeze({
+      search: lazy(raw.search),
+      describe: lazy(raw.describe),
+      call: lazy(raw.call),
+    }) }),
+    enumerable: true,
+    writable: false,
+    configurable: false,
+  });
+})();
+`;
+const TOOL_SEARCH_NAMESPACE: CodeModeNamespaceDescriptor = {
+  id: "openclaw",
+  globalName: "openclaw",
+  scope: {
+    kind: "object",
+    entries: [
+      [
+        "tools",
+        {
+          kind: "object",
+          entries: ["search", "describe", "call"].map((method) => [
+            method,
+            { kind: "function", path: [method] },
+          ]),
+        },
+      ],
+    ],
+  },
+};
+
+type PendingCall = {
+  request: PendingBridgeRequest;
+  controller: AbortController;
+  promise: Promise<void>;
+  settled?: { response: SettledBridgeRequest; sequence: number };
+};
 
 export async function runCodeMode(params: {
   toolCallId: string;
@@ -27,47 +88,227 @@ export async function runCodeMode(params: {
   onUpdate?: AgentToolUpdateCallback;
   onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
+  const scope = createHeadlessDeadlineScope(
+    params.signal,
+    params.config.codeTimeoutMs,
+    "tool_search_code",
+  );
   const runtime = new ToolSearchRuntime(params.ctx, params.config, { validateInput: true });
-  params.onRuntime?.(runtime);
-  const logs: string[] = [];
-  const value = await runCodeModeChild({
-    code: params.code,
-    config: params.config,
-    logs,
-    parentToolCallId: params.toolCallId,
-    runtime,
-    signal: params.signal,
-    onUpdate: params.onUpdate,
-  });
-  return {
-    ok: true,
-    // JSON IPC already detached and normalized the child's result.
-    value: value ?? null,
-    logs,
-    telemetry: runtime.telemetry(),
+  const output = new CodeModeOutputState(MAX_OUTPUT_BYTES);
+  const pending = new Map<string, PendingCall>();
+  let sequence = 0;
+  let continuation: CodeModeExecutorContinuation | undefined;
+  const remainingMs = () => {
+    scope.signal.throwIfAborted();
+    const remaining = Math.ceil(scope.deadline - performance.now());
+    if (remaining <= 0) {
+      throw new CodeModeHeadlessTimeoutError("tool_search_code timed out");
+    }
+    return remaining;
   };
-}
-
-function resolveCodeModeChildCommand(): { executable: string; args: string[] } {
-  const executable = resolveNodeRuntimeExecutable({ requiredFlag: "--permission" });
-  if (!executable) {
-    throw new ToolInputError(
-      "tool_search_code requires an installed Node runtime with --permission support.",
+  const dispatchRequest = async (request: PendingBridgeRequest, signal: AbortSignal) => {
+    const [namespace, path, args] = request.args;
+    if (
+      request.method !== "namespace" ||
+      namespace !== "openclaw" ||
+      !Array.isArray(path) ||
+      path.length !== 1 ||
+      (path[0] !== "search" && path[0] !== "describe" && path[0] !== "call") ||
+      !Array.isArray(args)
+    ) {
+      throw new Error(BRIDGE_ALLOWLIST_MESSAGE);
+    }
+    signal.throwIfAborted();
+    return runCodeModeBridgeRequest(runtime, path[0], args, {
+      parentToolCallId: params.toolCallId,
+      signal,
+      onUpdate: params.onUpdate,
+    });
+  };
+  const dispatch = (
+    boundary: Pick<CodeModeWorkerBoundary, "pendingRequests" | "canceledRequestIds">,
+  ) => {
+    for (const id of boundary.canceledRequestIds) {
+      pending.get(id)?.controller.abort();
+      pending.delete(id);
+    }
+    for (const request of boundary.pendingRequests) {
+      if (pending.has(request.id)) {
+        continue;
+      }
+      const controller = new AbortController();
+      const entry: PendingCall = { request, controller, promise: Promise.resolve() };
+      pending.set(request.id, entry);
+      const settle = (ok: boolean, json: string) => {
+        entry.settled = { response: { id: request.id, ok, json }, sequence: ++sequence };
+      };
+      entry.promise = dispatchRequest(request, AbortSignal.any([scope.signal, controller.signal]))
+        .then((value) => settle(true, JSON.stringify(toToolSearchJsonSafe(value))))
+        .catch((error: unknown) =>
+          settle(false, JSON.stringify(error instanceof Error ? error.message : String(error))),
+        );
+    }
+  };
+  const waitForSettlement = (mode: CodeModeSettlementMode): Promise<void> => {
+    const required = [...pending.values()].filter(
+      (entry) => mode.kind === "awaiting" || mode.requiredRequestIds.includes(entry.request.id),
     );
-  }
-  return {
-    executable,
-    args: ["--permission", "--input-type=module", "--eval", TOOL_SEARCH_CODE_MODE_CHILD_SOURCE],
+    const outstanding = required.filter((entry) => !entry.settled);
+    if (
+      outstanding.length === 0 ||
+      (mode.kind === "awaiting" && outstanding.length < required.length)
+    ) {
+      return Promise.resolve();
+    }
+    return (
+      mode.kind === "draining"
+        ? Promise.all(outstanding.map((entry) => entry.promise))
+        : Promise.race(outstanding.map((entry) => entry.promise))
+    ).then(() => undefined);
   };
-}
-
-function isCodeModeBridgeMethod(value: unknown): value is CodeModeBridgeMethod {
-  return value === "search" || value === "describe" || value === "call";
+  const takeSettled = () => {
+    const ready = [...pending.values()].flatMap((entry) => (entry.settled ? [entry.settled] : []));
+    ready.sort((left, right) => left.sequence - right.sequence);
+    for (const { response } of ready) {
+      pending.delete(response.id);
+    }
+    return ready.map(({ response }) => response);
+  };
+  const pendingRequests = () => [...pending.values()].map((entry) => entry.request);
+  const inlineHost: CodeModeExecutorInlineHost = {
+    onNetworkContent: () => runtime.observeNetworkContent(params.toolCallId),
+    onBoundary: async (boundary, context) => {
+      output.append(boundary.output);
+      dispatch(boundary);
+      if (context.yieldSignal.aborted) {
+        return { kind: "checkpoint" };
+      }
+      let onPressure: (() => void) | undefined;
+      try {
+        const ready = await scope.wait(
+          Promise.race([
+            waitForSettlement(boundary.settlementMode).then(() => true),
+            new Promise<false>((resolve) => {
+              onPressure = () => resolve(false);
+              context.yieldSignal.addEventListener("abort", onPressure, { once: true });
+            }),
+          ]),
+        );
+        if (!ready || context.yieldSignal.aborted) {
+          return { kind: "checkpoint" };
+        }
+        return {
+          kind: "continue",
+          timeoutMs: Math.min(context.maxTimeoutMs, remainingMs()),
+          settledRequests: takeSettled(),
+          pendingRequests: pendingRequests(),
+        };
+      } finally {
+        if (onPressure) {
+          context.yieldSignal.removeEventListener("abort", onPressure);
+        }
+      }
+    },
+  };
+  const config = {
+    timeoutMs: params.config.codeTimeoutMs,
+    memoryLimitBytes: MEMORY_LIMIT_BYTES,
+    maxOutputBytes: MAX_OUTPUT_BYTES,
+    maxPendingToolCalls: MAX_CODE_MODE_PENDING_TOOL_CALLS,
+    maxSnapshotBytes: MAX_SNAPSHOT_BYTES,
+  };
+  const run = async (input: CodeModeWorkerPayload<CodeModeExecutorContinuation>) => {
+    const remaining = remainingMs();
+    const execution = runCodeModeExecutor(
+      { ...input, config: { ...config, timeoutMs: remaining } },
+      {
+        executor: "quickjs",
+        runtimeConfig: params.ctx.runtimeConfig ?? params.ctx.config,
+        timeoutMs: remaining + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+        signal: scope.signal,
+        inlineHost,
+      },
+    );
+    try {
+      // Executor preparation (plugin resolution and import) must not outlast the deadline.
+      return await scope.wait(execution);
+    } catch (error) {
+      void execution.then(
+        (late) => (late.status === "waiting" ? late.continuation.dispose() : undefined),
+        () => undefined,
+      );
+      throw error;
+    }
+  };
+  try {
+    params.onRuntime?.(runtime);
+    let result = await run({
+      kind: "exec",
+      source: params.code,
+      prelude: TOOL_SEARCH_PRELUDE,
+      config,
+      catalog: [],
+      apiFiles: [],
+      namespaces: [TOOL_SEARCH_NAMESPACE],
+      swarmEnabled: false,
+    });
+    for (;;) {
+      continuation = result.status === "waiting" ? result.continuation : undefined;
+      scope.signal.throwIfAborted();
+      output.append(result.output);
+      if (result.status === "completed") {
+        const bounded = output.take({ value: result.value });
+        return {
+          ok: true,
+          value: bounded.value ?? null,
+          logs: bounded.output.map((entry) => {
+            if (isRecord(entry) && entry.type === "text" && typeof entry.text === "string") {
+              return entry.text;
+            }
+            return JSON.stringify(isRecord(entry) && entry.type === "json" ? entry.value : entry);
+          }),
+          telemetry: runtime.telemetry(),
+        };
+      }
+      if (result.status === "failed") {
+        if (result.code === "timeout") {
+          throw new CodeModeHeadlessTimeoutError("tool_search_code timed out");
+        }
+        if (result.code === "aborted") {
+          throw new CodeModeHeadlessAbortError("tool_search_code aborted");
+        }
+        if (result.code === "runtime_unavailable") {
+          throw new Error(
+            `tool_search_code could not start its QuickJS sandbox: ${result.error} The bundled code-mode-quickjs plugin must not be denied (plugins.deny) or disabled (plugins.entries.code-mode-quickjs.enabled: false), or set tools.toolSearch.mode to "tools".`,
+          );
+        }
+        throw new Error(result.error);
+      }
+      dispatch(result);
+      if (pending.size === 0) {
+        throw new Error("tool_search_code is waiting without pending bridge requests");
+      }
+      await scope.wait(waitForSettlement(result.settlementMode));
+      result = await run({
+        kind: "resume",
+        continuation: result.continuation,
+        config,
+        settledRequests: takeSettled(),
+        pendingRequests: pendingRequests(),
+      });
+    }
+  } finally {
+    for (const entry of pending.values()) {
+      entry.controller.abort();
+    }
+    scope.cleanup();
+    await continuation?.dispose();
+  }
 }
 
 async function runCodeModeBridgeRequest(
   runtime: ToolSearchRuntime,
-  method: CodeModeBridgeMethod,
+  method: "search" | "describe" | "call",
   args: unknown,
   options?: {
     parentToolCallId?: string;
@@ -110,167 +351,6 @@ async function runCodeModeBridgeRequest(
     }
   }
   throw new ToolInputError("Unsupported tool_search_code bridge method.");
-}
-
-export function runCodeModeChild(params: {
-  code: string;
-  config: ToolSearchConfig;
-  logs: string[];
-  parentToolCallId: string;
-  runtime: ToolSearchRuntime;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-}): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const command = resolveCodeModeChildCommand();
-    const child = spawn(command.executable, command.args, {
-      cwd: os.tmpdir(),
-      env: {},
-      // The worker returns logs/results over IPC and never writes stdout.
-      // Ignore it so an unused pipe cannot fill or surface unhandled errors.
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
-    });
-    let stderrTail = "";
-    let stderrDroppedBytes = 0;
-    let settled = false;
-    let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
-    const bridgeAbortController = new AbortController();
-    const settle = (callback: () => void, abortReason?: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (exitRejectionTimer) {
-        clearTimeout(exitRejectionTimer);
-      }
-      params.signal?.removeEventListener("abort", abortFromParent);
-      // Host tool calls share the child lifetime, including fatal exits and final IPC results.
-      bridgeAbortController.abort(abortReason);
-      child.kill();
-      callback();
-    };
-    const abortFromParent: () => void = () => {
-      child.kill("SIGKILL");
-      settle(() => reject(new Error("tool_search_code aborted")), params.signal?.reason);
-    };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-      const error = new Error("tool_search_code timed out");
-      child.kill("SIGKILL");
-      settle(() => reject(error), error);
-    }, params.config.codeTimeoutMs);
-    params.signal?.addEventListener("abort", abortFromParent, { once: true });
-    if (params.signal?.aborted) {
-      abortFromParent();
-      return;
-    }
-
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => {
-      const appended = appendBoundedTextTail(stderrTail, chunk);
-      stderrTail = appended.tail;
-      stderrDroppedBytes += appended.droppedBytes;
-    });
-    child.stderr?.on("error", (error) => {
-      settle(() => reject(error));
-    });
-    child.on("error", (error) => {
-      settle(() => reject(error));
-    });
-    const rejectOnExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      const suffix = stderrTail.trim();
-      const preview = sliceUtf16Safe(suffix, -500);
-      const previewDroppedBytes = Buffer.byteLength(suffix) - Buffer.byteLength(preview);
-      const notices = [
-        stderrDroppedBytes > 0
-          ? `${stderrDroppedBytes} UTF-8 bytes of earlier stderr discarded at the ${SESSION_TOOL_STDERR_TAIL_BYTES}-byte retention cap`
-          : "",
-        previewDroppedBytes > 0
-          ? `${previewDroppedBytes} UTF-8 bytes omitted from the trimmed stderr preview`
-          : "",
-      ].filter(Boolean);
-      const detail =
-        preview || notices.length > 0
-          ? `: ${preview}${notices.length > 0 ? ` [${notices.join("; ")}]` : ""}`
-          : "";
-      settle(() =>
-        reject(new Error(`tool_search_code child exited with ${signal ?? code}${detail}`)),
-      );
-    };
-    child.on("exit", (code, signal) => {
-      // Preserve the existing IPC grace even when stderr closes first or never closes.
-      if (!settled && code === 0 && signal === null) {
-        exitRejectionTimer = setTimeout(() => rejectOnExit(code, signal), 250);
-      }
-    });
-    child.on("close", (code, signal) => {
-      // Node owns exit + stdio drain ordering; rendering at exit can miss the final chunk.
-      if (!settled && (code !== 0 || signal !== null)) {
-        rejectOnExit(code, signal);
-      }
-    });
-    child.on("message", (message: CodeModeChildMessage) => {
-      if (settled || !isRecord(message) || typeof message.type !== "string") {
-        return;
-      }
-      if (message.type === "log") {
-        const items = Array.isArray(message.items) ? message.items : [];
-        params.logs.push(items.map((item) => String(item)).join(" "));
-        return;
-      }
-      if (message.type === "result") {
-        if (message.ok) {
-          settle(() => resolve(message.value));
-        } else {
-          settle(() =>
-            reject(new Error(typeof message.error === "string" ? message.error : "code failed")),
-          );
-        }
-        return;
-      }
-      if (message.type !== "bridge") {
-        return;
-      }
-      const id = typeof message.id === "string" ? message.id : "";
-      const method = isCodeModeBridgeMethod(message.method) ? message.method : undefined;
-      if (!id || !method) {
-        return;
-      }
-      void runCodeModeBridgeRequest(params.runtime, method, message.args, {
-        parentToolCallId: params.parentToolCallId,
-        signal: bridgeAbortController.signal,
-        onUpdate: params.onUpdate,
-      })
-        .then((value) => {
-          if (settled || !child.connected) {
-            return;
-          }
-          const response: CodeModeBridgeResultMessage = {
-            type: "bridge-result",
-            id,
-            ok: true,
-            value: toToolSearchJsonSafe(value),
-          };
-          child.send(response, () => undefined);
-        })
-        .catch((error: unknown) => {
-          if (settled || !child.connected) {
-            return;
-          }
-          const response: CodeModeBridgeResultMessage = {
-            type: "bridge-result",
-            id,
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          };
-          child.send(response, () => undefined);
-        });
-    });
-
-    child.send({ type: "run", code: params.code, timeoutMs: params.config.codeTimeoutMs });
-  });
 }
 
 export function readToolSearchCode(args: unknown): string {
