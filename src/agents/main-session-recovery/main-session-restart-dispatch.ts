@@ -425,6 +425,7 @@ async function resumeMainSessionWithinAdmission(
           listSubagentRunsForRequester(dispatchSessionKey, {
             requesterAgentId: params.agentId,
             requesterSessionId: params.entry.sessionId,
+            requesterLifecycleRevision: params.entry.lifecycleRevision,
             requesterStorePath,
           }),
         ),

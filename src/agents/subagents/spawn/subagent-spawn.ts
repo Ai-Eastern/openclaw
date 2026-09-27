@@ -89,6 +89,7 @@ export async function spawnSubagentDirect(
       cleanup,
       expectsCompletionMessage,
       completionRequesterSessionId,
+      completionRequesterLifecycleRevision,
     },
     runtime: {
       hookRunner,
@@ -579,6 +580,7 @@ export async function spawnSubagentDirect(
           expectsCompletionMessage: completionMode === "announce",
           completionTarget: params.completionTarget,
           completionRequesterSessionId,
+          completionRequesterLifecycleRevision,
           spawnMode,
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,

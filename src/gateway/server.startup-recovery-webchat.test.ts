@@ -1,14 +1,21 @@
 import { createServer } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../agents/main-session-recovery/main-session-recovery-admission.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
   appendTranscriptMessage,
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -22,7 +29,7 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it(
-  "queues WebChat behind startup recovery, consumes cancellation, and executes the survivor once",
+  "queues WebChat behind recovery and keeps child context out of a reset parent",
   { timeout: 90_000 },
   async () => {
     const token = "startup-recovery-webchat-token";
@@ -44,6 +51,27 @@ it(
     const recoveryMessage = "Resume this interrupted task after restart.";
     const canceledMessage = "Cancel this queued browser turn.";
     const survivorMessage = "Run this browser turn after recovery.";
+    const afterResetMessage = "Resume only the work created after this reset.";
+    const originalChildMarker = "recovery-child-before-reset";
+    const currentChildMarker = "recovery-child-after-reset";
+    const afterResetRequest = createDeferred<string>();
+    const readRecoveryPrompt = (payload: string) => {
+      const request: unknown = JSON.parse(payload);
+      const input = isRecord(request) && Array.isArray(request.input) ? request.input : [];
+      const prompts = input.flatMap((message: unknown) => {
+        const content = isRecord(message) && Array.isArray(message.content) ? message.content : [];
+        return content.flatMap((part: unknown) =>
+          isRecord(part) &&
+          typeof part.text === "string" &&
+          part.text.includes("Your previous turn was interrupted by a gateway restart") &&
+          part.text.includes("Unfinished child sessions to reconcile:")
+            ? [part.text]
+            : [],
+        );
+      });
+      expect(prompts).toHaveLength(1);
+      return prompts[0] ?? "";
+    };
     const recoveryGate = createDeferred();
     const targetRequests: string[] = [];
     let holdRecovery = false;
@@ -62,9 +90,14 @@ it(
         const isTitleRequest = body.includes("Generate a concise session title");
         if (
           !isTitleRequest &&
-          [recoveryMessage, canceledMessage, survivorMessage].some((text) => body.includes(text))
+          [recoveryMessage, canceledMessage, survivorMessage, afterResetMessage].some((text) =>
+            body.includes(text),
+          )
         ) {
           targetRequests.push(body);
+        }
+        if (!isTitleRequest && body.includes(afterResetMessage)) {
+          afterResetRequest.resolve(body);
         }
         if (holdRecovery && !isTitleRequest && body.includes(recoveryMessage)) {
           holdRecovery = false;
@@ -161,6 +194,40 @@ it(
         },
       );
       clearSessionStoreCacheForTest();
+      const addRecoveryChild = (marker: string) => {
+        const parent = loadSessionEntryReadOnly({ storePath, sessionKey });
+        if (!parent) {
+          throw new Error("Recovery parent is missing");
+        }
+        const child = createSubagentRunRecord({
+          runId: marker,
+          childSessionKey: `agent:main:subagent:${marker}`,
+          requesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+          requesterStorePath: resolvePhysicalSessionStorePath({
+            agentId: "main",
+            storePath,
+            sessionKey,
+          }),
+          completionRequesterSessionId: parent.sessionId,
+          completionRequesterLifecycleRevision: parent.lifecycleRevision,
+          label: marker,
+          expectsCompletionMessage: false,
+          cleanupHandled: true,
+          cleanupCompletedAt: Date.now(),
+          completion: { required: false },
+          delivery: { status: "not_required" },
+          execution: {
+            status: "terminal",
+            endedAt: Date.now(),
+            outcome: { status: "error", error: "Interrupted by restart" },
+            interruptionReason: "gateway-restart",
+          },
+        });
+        subagentRuns.set(child.runId, child);
+        persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
+      };
+      addRecoveryChild(originalChildMarker);
       const recoveryRuntime = getGatewayRecoveryRuntime();
       if (!recoveryRuntime) {
         throw new Error("Gateway recovery runtime is unavailable");
@@ -172,6 +239,7 @@ it(
         gatewayRuntime: recoveryRuntime,
       });
       await vi.waitFor(() => expect(targetRequests).toHaveLength(1), { timeout: 30_000 });
+      expect(readRecoveryPrompt(targetRequests[0] ?? "").includes(originalChildMarker)).toBe(true);
       const initialOwner = getSessionWorkAdmissionOwnerRelease({
         scope: storePath,
         identities: [sessionKey, sessionId],
@@ -252,6 +320,49 @@ it(
         client.request("agent.wait", { runId: survivorRunId, timeoutMs: 30_000 }),
       ).resolves.toMatchObject({ status: "ok" });
       expect(targetRequests).toHaveLength(2);
+
+      const beforeReset = loadSessionEntryReadOnly({ storePath, sessionKey });
+      await client.request("sessions.reset", { key: sessionKey });
+      const afterReset = loadSessionEntryReadOnly({ storePath, sessionKey });
+      expect(afterReset?.sessionId).toBe(beforeReset?.sessionId);
+      expect(afterReset?.lifecycleRevision).not.toBe(beforeReset?.lifecycleRevision);
+      await appendTranscriptMessage(
+        { agentId: "main", sessionKey, sessionId, storePath },
+        { message: { role: "user", content: afterResetMessage } },
+      );
+      await patchSessionEntryCore({ storePath, sessionKey }, (entry) => ({
+        ...entry,
+        status: "running",
+        abortedLastRun: true,
+        updatedAt: Date.now() - 10_000,
+      }));
+      addRecoveryChild(currentChildMarker);
+      const resetRecovery = recoverRestartAbortedMainSessions({
+        cfg,
+        stateDir: state.stateDir,
+        gatewayRuntime: recoveryRuntime,
+      });
+      const [resetResult, providerPayload] = await Promise.all([
+        resetRecovery,
+        afterResetRequest.promise,
+      ]);
+      expect(resetResult).toMatchObject({ started: 1, failed: 0 });
+      const resetPrompt = readRecoveryPrompt(providerPayload);
+      console.log(
+        JSON.stringify({
+          proof: "restart-parent-provider-boundary",
+          originalChildDelivered: readRecoveryPrompt(targetRequests[0] ?? "").includes(
+            originalChildMarker,
+          ),
+          resetPreservedSessionId: afterReset?.sessionId === beforeReset?.sessionId,
+          resetChangedLifecycle: afterReset?.lifecycleRevision !== beforeReset?.lifecycleRevision,
+          currentChildDelivered: resetPrompt.includes(currentChildMarker),
+          oldChildDeliveredAfterReset: resetPrompt.includes(originalChildMarker),
+          historicalMetadataRetained: providerPayload.includes(originalChildMarker),
+        }),
+      );
+      expect(resetPrompt.includes(currentChildMarker)).toBe(true);
+      expect(resetPrompt.includes(originalChildMarker)).toBe(false);
     } finally {
       recoveryGate.resolve();
       replacementOwner?.release();
@@ -269,6 +380,8 @@ it(
           providerServer.close(() => resolve());
         });
       }
+      subagentRuns.delete(originalChildMarker);
+      subagentRuns.delete(currentChildMarker);
       await state.cleanup();
     }
   },

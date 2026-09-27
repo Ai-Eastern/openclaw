@@ -44,6 +44,7 @@ export function listRunsForRequesterFromRuns(
   options?: {
     requesterRunId?: string;
     requesterSessionId?: string;
+    requesterLifecycleRevision?: string;
     requesterAgentId?: string;
     requesterStorePath?: string | null;
   },
@@ -72,7 +73,8 @@ export function listRunsForRequesterFromRuns(
     if (
       entry.requesterSessionKey === key &&
       (options?.requesterSessionId === undefined ||
-        entry.completionRequesterSessionId === options.requesterSessionId) &&
+        (entry.completionRequesterSessionId === options.requesterSessionId &&
+          entry.completionRequesterLifecycleRevision === options.requesterLifecycleRevision)) &&
       (!latestRuns || latestRuns.getLatestSubagentRun(entry.childSessionKey) === entry) &&
       (!options?.requesterAgentId || entry.requesterAgentId === options.requesterAgentId) &&
       (options?.requesterStorePath === undefined ||

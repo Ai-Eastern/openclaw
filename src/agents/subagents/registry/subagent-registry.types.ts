@@ -179,6 +179,7 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   wakeOnDescendantSettle?: boolean;
   execution: SubagentExecutionState;
   completion?: SubagentCompletionState;
