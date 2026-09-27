@@ -197,7 +197,7 @@ it.each([
         }
         return mutate(...args);
       });
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       let successor: ReturnType<typeof createRunningTaskRunCoreWithReceiptAsync> | undefined;
       const cleanup = cleanupTerminalAcpSession(
         {
