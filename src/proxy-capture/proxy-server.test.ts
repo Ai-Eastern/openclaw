@@ -524,6 +524,8 @@ describe("startDebugProxyServer", () => {
     const proxy = await startDebugProxyServer({ settings });
 
     try {
+      // Start the async reader before the bounded abort assertions measure cleanup.
+      await readCaptureEvents(settings.sessionId, 20);
       const aborted = await rawSlowGetThroughProxy({
         abortAfterBytes: 64 * 1024,
         pauseBeforeReadMs: 0,
@@ -576,6 +578,8 @@ describe("startDebugProxyServer", () => {
     const proxy = await startDebugProxyServer({ settings });
 
     try {
+      // Start the async reader before the bounded abort assertions measure cleanup.
+      await readCaptureEvents(settings.sessionId, 20);
       const aborted = await rawSlowGetThroughProxy({
         abortAfterBytes: 64 * 1024,
         abortWithReset: true,
