@@ -145,7 +145,9 @@ export function renderChatTypingIndicator(
                   <span class="chat-sender-name agent-chat__typing-preview-label"
                     >${actor.label}</span
                   >
-                  <span class="agent-chat__typing-state"
+                  <span
+                    class="agent-chat__typing-state agent-chat__typing-text"
+                    ?data-typing=${!actor.paused}
                     >${t(actor.paused ? "chat.sessionSuggestions.pausedDraftState" : "chat.sessionSuggestions.typingDraftState")}</span
                   >
                 </div>
@@ -183,7 +185,13 @@ export function renderChatTypingIndicator(
                         )}
                       </span>`
                 }
-                <span class="agent-chat__typing-summary">${groupLabel.content}</span>
+                <span class="agent-chat__typing-summary"
+                  ><span
+                    class="agent-chat__typing-text"
+                    ?data-typing=${Boolean(overflow?.several || activeNames.length)}
+                    >${groupLabel.content}</span
+                  ></span
+                >
               </div>
             </div>
           </div>`

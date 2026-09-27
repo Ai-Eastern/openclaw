@@ -230,6 +230,9 @@ describe("chat pane typing presence", () => {
     vi.advanceTimersByTime(9_999);
     render(renderChatTypingIndicator(pane.typingActorViews()), container);
     expect(container.querySelector(".agent-chat__typing-state")?.textContent).toBe("is typing...");
+    expect(container.querySelector(".agent-chat__typing-state")?.hasAttribute("data-typing")).toBe(
+      true,
+    );
     vi.advanceTimersByTime(1);
     expect(pane.typingActorViews()).toEqual([
       { id: "alice", label: "Alice", preview: typing.preview, paused: true },
@@ -237,6 +240,9 @@ describe("chat pane typing presence", () => {
     render(renderChatTypingIndicator(pane.typingActorViews()), container);
     expect(container.querySelector(".chat-bubble")).toBe(bubble);
     expect(container.querySelector(".agent-chat__typing-state")?.textContent).toBe("Draft");
+    expect(container.querySelector(".agent-chat__typing-state")?.hasAttribute("data-typing")).toBe(
+      false,
+    );
     expect(container.querySelector("[role=status]")?.textContent).toBe("");
     vi.advanceTimersByTime(10_000);
     expect(pane.typingActors.size).toBe(1);
@@ -664,6 +670,9 @@ describe("chat pane typing presence", () => {
       ).toBe(true);
       expect(container.querySelectorAll(".agent-chat__typing-group-icon")).toHaveLength(0);
       expect(summary?.textContent).toBe(text);
+      expect(summary?.querySelector(".agent-chat__typing-text")?.hasAttribute("data-typing")).toBe(
+        text !== "Drafts",
+      );
     }
     for (const actor of actors) {
       actor.paused = true;
@@ -676,6 +685,9 @@ describe("chat pane typing presence", () => {
     named.paused = false;
     render(renderChatTypingIndicator(actors), container);
     expect(summary?.textContent).toBe(`${actors[2]?.label} is typing…`);
+    expect(summary?.querySelector(".agent-chat__typing-text")?.hasAttribute("data-typing")).toBe(
+      true,
+    );
     expect(container.querySelector(".agent-chat__typing-name")?.getAttribute("title")).toBe(
       actors[2]?.label,
     );
