@@ -1,10 +1,11 @@
-import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCandidateEnv,
   canonicalFailure,
   classifyJob,
+  dependencyInputsChanged,
   escapeMarkdown,
   guardPatch,
   isInfraOnly,
@@ -36,6 +37,134 @@ vi.mock("node:fs", () => ({
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllEnvs();
+});
+describe("rebased dependency proof", () => {
+  it.each([
+    "pnpm-lock.yaml",
+    "package.json",
+    "extensions/chat/package.json",
+    "pnpm-workspace.yaml",
+    ".npmrc",
+    "extensions/chat/.npmrc",
+    "patches/library.patch",
+    "patches/nested/library.patch",
+  ])("requires a refresh for changed dependency input %s", (path) => {
+    expect(dependencyInputsChanged(["src/example.ts", path])).toBe(true);
+  });
+  it("does not refresh for unchanged inputs or unrelated source changes", () => {
+    expect(dependencyInputsChanged([])).toBe(false);
+    expect(
+      dependencyInputsChanged(["src/example.ts", "src/example.test.ts", "docs/package.json.md"]),
+    ).toBe(false);
+  });
+  it.each([
+    { changed: "pnpm-lock.yaml", installExit: 0 },
+    { changed: "src/example.ts", installExit: 0 },
+    { changed: "pnpm-lock.yaml", installExit: 1 },
+    { changed: "pnpm-lock.yaml", installExit: 124 },
+  ])(
+    "refreshes before proof and stops on installation failure: %j",
+    async ({ changed, installExit }) => {
+      vi.stubEnv("CI_GIT_OWNER", "/synthetic/git-owner.py");
+      vi.stubEnv("GITHUB_OUTPUT", "/synthetic/output");
+      vi.stubEnv("GH_TOKEN", "synthetic");
+      const failedSha = "a".repeat(40);
+      const commands: string[] = [];
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockImplementation((path) => {
+        switch (String(path).split("/").at(-1)) {
+          case "context.json":
+            return JSON.stringify({
+              run: { id: 123, attempt: 1, sha: failedSha },
+              tests: [
+                { file: "src/example.test.ts", reproduction: "reproduced", previousFailures: [] },
+              ],
+            });
+          case "result.json":
+            return JSON.stringify(result);
+          case "repair-base.json":
+            return JSON.stringify({ base: "b".repeat(40) });
+          case "repair.patch":
+            return patch();
+          default:
+            throw new Error("Unexpected artifact");
+        }
+      });
+      vi.mocked(execFileSync).mockImplementation((_program, args) => {
+        if (args?.includes(failedSha)) {
+          expect(args.slice(args.indexOf("diff"))).toEqual([
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            failedSha,
+            "HEAD",
+            "--",
+          ]);
+          return `${changed}\0`;
+        }
+        return args?.includes("format-patch") ? patch() : "";
+      });
+      vi.mocked(spawnSync).mockImplementation((program, args, options) => {
+        const installing = args?.includes("install") ?? false;
+        commands.push(installing ? "install" : "test");
+        expect(options?.env).toEqual(buildCandidateEnv(process.env));
+        if (installing) {
+          expect(program).toBe("timeout");
+          expect(args).toEqual([
+            "--signal=TERM",
+            "--kill-after=15s",
+            "600s",
+            "pnpm",
+            "install",
+            "--frozen-lockfile",
+          ]);
+        }
+        return {
+          pid: 1,
+          output: [],
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          status: installing ? installExit : 0,
+          signal: null,
+        };
+      });
+      const previousExitCode = process.exitCode;
+      try {
+        await main(["prove"]);
+        expect(commands).toEqual(
+          changed === "src/example.ts"
+            ? ["test"]
+            : installExit === 0
+              ? ["install", "test"]
+              : ["install"],
+        );
+        const saves = vi.mocked(writeFileSync).mock.calls;
+        expect(saves.some(([path]) => String(path).endsWith("publish-request.json"))).toBe(
+          installExit === 0,
+        );
+        expect(
+          vi
+            .mocked(appendFileSync)
+            .mock.calls.some(([, data]) => data === "publish_request=true\n"),
+        ).toBe(installExit === 0);
+        const proof = saves.filter(([path]) => String(path).endsWith("prove.log")).at(-1)?.[1];
+        expect(proof).toContain(
+          changed === "src/example.ts"
+            ? "Dependency refresh not needed"
+            : installExit === 0
+              ? "Dependencies refreshed"
+              : "Dependency refresh failed; no publication",
+        );
+        if (installExit !== 0) {
+          expect(proof).toContain(`exit=${installExit}`);
+          expect(process.exitCode).toBe(1);
+        }
+      } finally {
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
 });
 
 describe("structured patch result", () => {
@@ -303,6 +432,13 @@ describe("patch-only publication guard", () => {
     "test('case', { timeout: 30_000 }, fn);",
     "test('case', { retry: 2 }, fn);",
     "describe('suite', { repeats: 2 }, fn);",
+    ...["skip", "only", "todo", "fails", "timeout", "retry", "repeats"].flatMap((key) => [
+      `const options = { "${key}": true };`,
+      `const options = { '${key}': true };`,
+      `const options = { ["${key}"]: true };`,
+      `const options = { ['${key}']: true };`,
+      `const options = { [\`${key}\`]: true };`,
+    ]),
     "  timeout: 30_000,",
     "it('case', fn, 30000);",
     "test('case', fn, 30_000);",
@@ -337,6 +473,12 @@ describe("patch-only publication guard", () => {
     expect(
       guardPatch(
         patch("src/client.ts", "const options = {};", "const options = { timeout: 30000 };"),
+        result,
+      ).passed,
+    ).toBe(true);
+    expect(
+      guardPatch(
+        patch("src/client.ts", "const options = {};", 'const options = { "timeout": 30000 };'),
         result,
       ).passed,
     ).toBe(true);

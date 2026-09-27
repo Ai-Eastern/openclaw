@@ -248,7 +248,7 @@ const FORBIDDEN_ADDITION =
 const TEST_LIKE_PATH = /(?:\.test\.|test-support|test-utils|\.test-harness\.|(?:^|\/)test\/)/u;
 // Added fragments may omit the surrounding test call; reject controls conservatively in test code.
 const FORBIDDEN_TEST_ADDITION =
-  /(?:\.\s*(?:skip|run)If\b|\[\s*["'](?:skip|run)If["']\s*\]|\b(?:skip|only|todo|fails|timeout|retry|repeats)\s*:|,\s*[+-]?(?:0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?)\s*,?\s*\))/u;
+  /(?:\.\s*(?:skip|run)If\b|\[\s*["'](?:skip|run)If["']\s*\]|(["']?)\b(?:skip|only|todo|fails|timeout|retry|repeats)\1\s*:|\[\s*(["'`])(?:skip|only|todo|fails|timeout|retry|repeats)\2\s*\]\s*:|,\s*[+-]?(?:0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?)\s*,?\s*\))/u;
 const assertionCount = (text: string) =>
   [...text.matchAll(/\b(?:expect\s*\(|assert(?:\s*\.\s*\w+)?\s*\()/gu)].length;
 export const patchSha256 = (patch: string) => createHash("sha256").update(patch).digest("hex");
@@ -847,13 +847,27 @@ export function buildCandidateEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function installDependencies() {
-  const installed = spawnSync("pnpm", ["install", "--frozen-lockfile"], {
-    stdio: "inherit",
-    env: buildCandidateEnv(process.env),
-  });
+  const installed = spawnSync(
+    "timeout",
+    ["--signal=TERM", "--kill-after=15s", "600s", "pnpm", "install", "--frozen-lockfile"],
+    {
+      stdio: "inherit",
+      env: buildCandidateEnv(process.env),
+    },
+  );
   if (installed.error || installed.status !== 0) {
-    throw new Error("Candidate dependency installation failed");
+    throw new Error(
+      `Candidate dependency installation failed (exit=${installed.status ?? "unavailable"})`,
+    );
   }
+}
+
+export function dependencyInputsChanged(paths: readonly string[]): boolean {
+  return paths.some((path) =>
+    /(?:^|\/)(?:pnpm-lock\.yaml|package\.json|pnpm-workspace\.yaml|\.npmrc)$|^patches\//u.test(
+      path,
+    ),
+  );
 }
 
 function testOnce(file: string, name: string): boolean {
@@ -1075,6 +1089,33 @@ function prove() {
     ]),
   ];
   const log: string[] = [];
+  const changedPaths = git([
+    "diff",
+    "--no-renames",
+    "--name-only",
+    "-z",
+    context.sha,
+    "HEAD",
+    "--",
+  ]).split("\0");
+  if (dependencyInputsChanged(changedPaths)) {
+    log.push("Dependency inputs changed since the failed revision; refreshing dependencies");
+    save("prove.log", log.join("\n"));
+    try {
+      installDependencies();
+    } catch (error) {
+      log.push(
+        `Dependency refresh failed; no publication: ${error instanceof Error ? error.message : "installation failed"}`,
+      );
+      save("prove.log", log.join("\n"));
+      throw error;
+    }
+    log.push("Dependencies refreshed with pnpm install --frozen-lockfile");
+  } else {
+    log.push("Dependency refresh not needed: dependency inputs match the failed revision");
+  }
+  save("prove.log", log.join("\n"));
+  note(log.at(-1)!);
   for (const [index, file] of files.entries()) {
     const rounds =
       context.tests.find((test) => test.file === file)?.reproduction === "not-reproduced" ? 5 : 1;
