@@ -166,7 +166,6 @@ function openAgentDatabaseBackend(
     }
     return attachment.startupJournal;
   };
-  // This request-local flag is installed only for the synchronous native command below.
   const readDeletionJournal = () =>
     readAgentDeletionJournalStatusInDatabase(
       expectDefined(shared, "Agent execution shared-state owner").db,
@@ -437,8 +436,8 @@ function openAgentDatabaseBackend(
         { operationLabel: "session.archive.publish" },
       );
     }
-    const kernel: typeof transcript = transcript;
-    if (command.type === "session.transcript.initialize" && kernel) {
+    if (command.type === "session.transcript.initialize" && transcript) {
+      const kernel: NonNullable<typeof transcript> = transcript;
       kernel.assertIdentity(command.input);
       const opened = openWriter();
       return runOpenClawAgentWriteTransaction(
@@ -485,9 +484,10 @@ function openAgentDatabaseBackend(
               return;
             }
             try {
-              if (!kernel) {
+              if (!transcript) {
                 throw new Error("Session transcript initialization was not prepared");
               }
+              const kernel: NonNullable<typeof transcript> = transcript;
               kernel.assertIdentity(initialization);
               kernel.initialize(
                 current,
