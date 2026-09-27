@@ -84,7 +84,8 @@ jobs:
     needs: verify
     if: needs.verify.outputs.allowed == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Typical runs take about 10 minutes; bound intermittent post-step finalization stalls.
+    timeout-minutes: 75
     permissions:
       contents: read
       actions: read
@@ -127,7 +128,7 @@ jobs:
         run: node ../scripts/ci-repair-agent.mjs collect
       - name: Reproduce before editing
         id: reproduce
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: node ../scripts/ci-repair-agent.mjs reproduce
       # Preserve trusted reproduction evidence even if Codex stalls or the runner is lost.
       - name: Checkpoint reproduction evidence
@@ -171,7 +172,7 @@ jobs:
       - name: Prove the rebased repair
         id: prove
         if: steps.prepare.outputs.prepared == 'true'
-        timeout-minutes: 45
+        timeout-minutes: 30
         run: node ../scripts/ci-repair-agent.mjs prove
       - name: Summarize repair
         if: always()

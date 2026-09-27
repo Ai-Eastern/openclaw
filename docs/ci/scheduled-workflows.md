@@ -125,9 +125,9 @@ A permitted repair is committed locally with hooks disabled, rebased onto freshl
 fetched public `main`, and tested again. Conflicts stop publication. Previously
 non-reproduced failures require five consecutive passes without retrying a failed
 proof. A single-file attempt is bounded to eight minutes to accommodate cold
-worker compilation; reproduction and proof steps have 30- and 45-minute limits.
+worker compilation; reproduction and proof steps have 20- and 30-minute limits.
 Empty or more-than-eight-file failure selections produce a diagnosis without editing. The complete repair job
-has a two-hour limit; the Codex step retains its fifteen-minute limit. Dependency
+has a 75-minute limit (typical runs take about ten minutes); the Codex step retains its fifteen-minute limit. Dependency
 installation and test children receive no Actions control-file variables, runtime
 or GitHub credentials, OIDC request variables, or Actions cache/results URLs.
 
