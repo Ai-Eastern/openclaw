@@ -450,15 +450,34 @@ compact groups, runner registrations, or a separate worker budget.
 Gateway core, database-worker, methods, methods-isolated, server, and
 server-isolated configs run with exclusive plan admission. Cold in-process
 Gateway boot measured 37 seconds alone and 50 seconds under contention against
-a 90-second test budget. Jobs containing these configs execute their packed
-plans serially. Their ordinary compact bins admit at most 300 predicted test
-seconds. Formerly parallel jobs retain
-their two-worker ceiling through the job environment, except measured Gateway
-bins whose other groups retain that ceiling individually. The shard runner enforces the same
-config policy even when a caller requests two plans. Precise changed-test
+a 90-second test budget. Ordinary packed plans before each exclusive plan join
+before it starts; the exclusive plan joins before later plans start. Ordinary
+spans admit at most two plans on CI hosts with at least eight available CPUs and
+24 GiB memory. Root, full-agentic, and Gateway aggregates retain the same fence.
+Portable runners without joined process groups keep Gateway-containing jobs
+serial, as do callers sharing a final cache leaf. Plan admission retains the
+existing summed duration budgets, runner allocations, and per-plan worker limits.
+This adds no jobs. The shard runner enforces the same exclusive fence even when
+a caller requests two plans. Precise changed-test
 selection retains the Gateway config owner and its admission metadata.
 Gateway admission is finalized before runtime placement, so inventory changes
 retain the admitted job ceiling instead of creating a different group policy.
+
+Direct CI invocations with multiple literal test-file targets use this bounded
+admission when their process groups and cache leaves are scheduler-owned and
+output ownership is explicit. Use a console reporter such as `--reporter=dot`
+with `--coverage.enabled=false`, or the existing multi-invocation JSON report
+owner. Unresolved config outputs and GitHub summary reporters stay serial;
+explicit parallel overrides retain their caller-owned output policy.
+Selected specs and file membership remain unchanged. Explicit
+`OPENCLAW_TEST_PROJECTS_PARALLEL` and `OPENCLAW_TEST_PROJECTS_SERIAL` settings keep
+their existing behavior. Automatic admission stops after a failure or unverified
+join and drains already admitted work; bounded scheduling does not establish that a
+full protected proof fits its lease or workflow deadline.
+
+Ordinary compact Gateway bins retain their 300-second predicted test budget.
+Formerly parallel bins keep their two-worker ceiling through the job environment,
+except measured Gateway bins whose other groups retain that ceiling individually.
 
 Gateway methods use four workers only in serial, non-frozen self-hosted jobs
 with at least eight actual CPUs and 28 GiB RAM. Constrained hosts, overlapping

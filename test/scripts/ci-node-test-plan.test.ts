@@ -5184,6 +5184,169 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("allocates sparse selections without reserving their full-suite rows", () => {
+    const heavyCli = "src/cli/gateway-backed-exit-health.process.test.ts";
+    const targets = [
+      "src/config/allowed-values.test.ts",
+      "src/commands/doctor-heartbeat-cadence-migration.test.ts",
+      "src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts",
+      "src/infra/runtime-guard.test.ts",
+      heavyCli,
+      "src/cli/directory-cli.test.ts",
+      "src/config/config.backup-rotation.test.ts",
+      "src/config/commands.test.ts",
+    ];
+    const options = {
+      runnerBackend: "hybrid",
+      includeReleaseOnlyRuntimeTests: false,
+    } satisfies NonNullable<Parameters<typeof createSelectedNodeTestShardBundles>[1]>;
+    // Precise selections inherit templates before whole-plan runtime relocation.
+    const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    let full: CompactNodeTestShard[];
+    try {
+      full = createNodeTestShardBundles({
+        ...options,
+        includeReleaseOnlyPluginShards: false,
+        compactMode: "pull-request",
+      });
+      const heavyGroup = expectDefined(
+        full
+          .flatMap((job) => job.groups)
+          .find((group) => group.includePatterns?.includes(heavyCli)),
+        "indivisible CLI timing fixture",
+      );
+      const readTimings = testTimings.readCompactGroupTimings;
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
+        ...readTimings(profile),
+        [heavyGroup.timing_key!]: 200,
+      }));
+      full = createNodeTestShardBundles({
+        ...options,
+        includeReleaseOnlyPluginShards: false,
+        compactMode: "pull-request",
+      });
+    } finally {
+      placement.mockRestore();
+    }
+    const owners = full.filter((job) =>
+      job.groups.some((group) => group.includePatterns?.some((file) => targets.includes(file))),
+    );
+    expect(owners.length).toBeGreaterThan(1);
+    const selected = createSelectedNodeTestShardBundles(targets, options)!;
+    expect(selected).not.toBeNull();
+    expect(selected.length).toBeLessThan(owners.length);
+    expect(
+      selected
+        .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
+        .toSorted(),
+    ).toEqual(targets.toSorted());
+    expect(
+      selected.every((job) => job.groups.every((group) => group.includePatterns!.length > 0)),
+    ).toBe(true);
+    expect(selected.reduce((sum, job) => sum + job.predictedSeconds!, 0)).toBeLessThan(
+      owners.reduce((sum, job) => sum + job.predictedSeconds!, 0),
+    );
+    const heavyJob = selected.find((job) =>
+      job.groups.some((group) => group.includePatterns?.includes(heavyCli)),
+    )!;
+    expect(heavyJob.predictedSeconds).toBeGreaterThan(150);
+    expect(heavyJob.groups.flatMap((group) => group.includePatterns ?? [])).toEqual([heavyCli]);
+    for (const job of selected) {
+      expect(job.predictedTestSeconds).toBeGreaterThan(0);
+      expect(job.predictedTestSeconds).toBeLessThanOrEqual(job.predictedSeconds!);
+      if (job.planConcurrency === 2) {
+        expect(job.predictedTestSeconds).toBeLessThanOrEqual(300);
+        expect(
+          job.groups.filter((group) => group.shard_name.startsWith("core-runtime-config-hosted-"))
+            .length,
+        ).toBeLessThanOrEqual(1);
+      }
+      for (const group of job.groups) {
+        const original = full.find((owner) =>
+          owner.groups.some((entry) => entry.shard_name === group.shard_name),
+        )!;
+        expect(job).toMatchObject({
+          runner: original.runner,
+          planConcurrency: original.planConcurrency,
+          requiresDist: original.requiresDist,
+        });
+        expect(job.pretestBuildMode).toBe(original.pretestBuildMode);
+        expect(job.timeoutMinutes).toBe(original.timeoutMinutes);
+        expect(job.env).toEqual(original.env);
+        const owner = original.groups.find((entry) => entry.shard_name === group.shard_name)!;
+        expect(group.env).toEqual(owner.env);
+        expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+        expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
+      }
+    }
+  });
+
+  it("retains the ordered wall budget when repacking selected files", async () => {
+    const config = "test/vitest/vitest.infra.config.ts";
+    const entries = [
+      ["src/infra/env.test.ts", "core-runtime-infra-env-auth", 170],
+      ["src/infra/os-summary.test.ts", "core-runtime-infra-misc-os", 170],
+      ["src/infra/ports-probe.test.ts", "core-runtime-infra-system-runtime", 160],
+      ["src/infra/provider-usage.test.ts", "core-runtime-infra-provider-push", 160],
+      ["src/infra/channel-runtime-context.test.ts", "core-runtime-infra-channel-plugin", 150],
+      ["src/infra/diagnostic-trace-context.test.ts", "core-runtime-infra-diagnostics-state", 150],
+    ] as const;
+    const files = entries.map(([file]) => file);
+    const targets = files.slice(0, 3);
+    vi.resetModules();
+    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+      fullSuiteVitestShards: [{ name: "core-runtime", config, projects: [config] }],
+    }));
+    vi.doMock("../vitest/vitest.database-worker-core-paths.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.database-worker-core-paths.mjs")>()),
+      databaseWorkerCoreTestFiles: [],
+      isDatabaseWorkerCoreTestFile: () => false,
+    }));
+    vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
+      listTrackedTestFiles: (root: string) => (root === "src/infra" ? files : []),
+    }));
+    vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
+      ...testTimings,
+      readCompactGroupTimings: () =>
+        Object.fromEntries(entries.map(([, owner, seconds]) => [owner, seconds])),
+      readRuntimePlacementTimings: () => [],
+    }));
+    vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+      ...(await importOriginal<
+        typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
+      >()),
+      resolveVitestPretestBuildMode: () => undefined,
+    }));
+    try {
+      const { createSelectedNodeTestShardBundles: createSelected } =
+        await import("../../scripts/lib/ci-node-test-plan.mts");
+      const selected = expectDefined(
+        createSelected(targets, { runnerBackend: "blacksmith" }),
+        "selected infra plan",
+      );
+      // The selected 170/170/160 envelopes fit the aggregate limit but need 330 seconds together.
+      expect(selected).toHaveLength(2);
+      expect(selected.every((job) => job.planConcurrency === 2)).toBe(true);
+      expect(selected.every((job) => job.predictedTestSeconds! <= 300)).toBe(true);
+      expect(selected.map((job) => job.predictedTestSeconds!).toSorted((a, b) => a - b)).toEqual([
+        160, 170,
+      ]);
+      expect(selected.reduce((sum, job) => sum + job.predictedSeconds!, 0)).toBe(500);
+      expect(
+        selected.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
+      ).toEqual(targets.toSorted());
+    } finally {
+      vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
+      vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+      vi.doUnmock("../../scripts/lib/list-test-files.mts");
+      vi.doUnmock("../vitest/vitest.database-worker-core-paths.mjs");
+      vi.doUnmock("../vitest/vitest.test-shards.mjs");
+      vi.resetModules();
+    }
+  });
+
   it("packs serial groups within both the time and group-count budgets", () => {
     const groups = [34, 33, 33, 32, 32, 32, 10, 21, 17, 17, 15, 10, 8, 7, 7, 7, 6, 5, 5];
     const bins = packNodeTestGroups(
