@@ -11,14 +11,22 @@ function projectionConfig({
   telemetry: _telemetry,
   ui,
   gateway,
+  talk,
   ...config
 }: OpenClawConfig) {
   const { prefs: _prefs, ...uiConfig } = ui ?? {};
   const { auth, ...gatewayConfig } = gateway ?? {};
   const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
-  // Everything else remains significant, including plugin policy, sharing, models,
-  // session policy, roster and physical store selection.
-  return { ...config, ui: uiConfig, gateway: { ...gatewayConfig, auth: authConfig } };
+  const { realtime, ...talkConfig } = talk ?? {};
+  const { model: _realtimeModel, ...realtimeConfig } = realtime ?? {};
+  // Everything else remains significant, including plugin policy, sharing,
+  // session models and policy, roster, and physical store selection.
+  return {
+    ...config,
+    ui: uiConfig,
+    gateway: { ...gatewayConfig, auth: authConfig },
+    talk: { ...talkConfig, realtime: realtimeConfig },
+  };
 }
 
 function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {

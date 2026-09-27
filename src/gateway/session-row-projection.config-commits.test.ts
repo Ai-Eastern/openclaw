@@ -78,7 +78,6 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
         expect.soft(materializations, event).toBe(0);
         expect(projection.state.cfg).toBe(cfg);
       }
-      console.log(JSON.stringify(measurements));
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: "agent:main:config-0" },
         {
@@ -91,7 +90,43 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
         { agentId: "main", sessionKey: "agent:main:config-0" },
         { owner: { type: "agent", id: "main" }, assignedBy: { type: "system", id: "test" } },
       );
-      await listProjectedSessions({ projection, opts: { archived: "all", limit: 247 } });
+      const resident = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", limit: 247 },
+      });
+      const residentRows = resident.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row);
+      for (const [operation, model] of [
+        ["add", "unit-test/talk-a"],
+        ["change", "unit-test/talk-b"],
+        ["remove", undefined],
+      ] as const) {
+        const event = `talk.realtime.model:${operation}`;
+        const before = projection.materializedCount;
+        const started = performance.now();
+        cfg = { ...cfg, talk: { realtime: model === undefined ? {} : { model } } };
+        setRuntimeConfigSnapshot(cfg);
+        const dirtyRows = projection.dirtyRowCount;
+        const result = await listProjectedSessions({
+          projection,
+          opts: { archived: "all", limit: 247 },
+        });
+        const materializations = projection.materializedCount - before;
+        measurements.push({
+          event,
+          count,
+          dirtyRows,
+          materializations,
+          elapsedMs: performance.now() - started,
+        });
+        expect(result.totalCount).toBe(count);
+        expect(result.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row)).toEqual(
+          residentRows,
+        );
+        expect.soft(dirtyRows, event).toBe(0);
+        expect.soft(materializations, event).toBe(0);
+        expect(projection.state.cfg).toBe(cfg);
+      }
+      console.log(JSON.stringify(measurements));
       const beforeRename = projection.materializedCount;
       cfg = { ...cfg, agents: { entries: { main: { identity: { name: "After" } } } } };
       setRuntimeConfigSnapshot(cfg);
