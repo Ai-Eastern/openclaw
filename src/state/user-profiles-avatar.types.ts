@@ -1,9 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  isProfileDisplayRow,
-  type ProfileDisplayRow,
-  type UserProfile,
-  type UserProfileAvatarMime,
+import { isProfileDisplayRow } from "./user-profile-display-validation.js";
+import type {
+  ProfileDisplayRow,
+  UserProfile,
+  UserProfileAvatarMime,
 } from "./user-profiles.types.js";
 
 export type UserProfileAvatar = {

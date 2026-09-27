@@ -220,6 +220,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
           if (outcome === "reject") {
             return Promise.reject(failure);
           }
+          return undefined;
         },
       });
 

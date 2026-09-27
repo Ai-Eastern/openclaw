@@ -4,11 +4,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import {
-  isProfileDisplayRow,
-  type ProfileDisplayRow,
-  type UserProfileEmailBinding,
-} from "./user-profiles.types.js";
+import { isProfileDisplayRow } from "./user-profile-display-validation.js";
+import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
 
 export type UserProfileMutationChanges = {
   profiles: string[];

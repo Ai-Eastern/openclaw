@@ -82,6 +82,15 @@ function buildInboundReplyDispatchBase(params: {
 
 type BuildInboundReplyDispatchBaseParams = Parameters<typeof buildInboundReplyDispatchBase>[0];
 type RecordInboundSessionAndDispatchReplyParams = {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string;
+  agentId: string;
+  routeSessionKey: string;
+  storePath: string;
+  ctxPayload: FinalizedMsgContext;
+  recordInboundSession: RecordInboundSessionFn;
+  dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   deliver: (payload: OutboundReplyPayload) => Promise<void>;
   durable?: false | DurableInboundReplyDeliveryOptions;
   onRecordError: (err: unknown) => void;
