@@ -384,8 +384,11 @@ export async function runGlobalPackageUpdateSteps(params: {
     const stageNative = params.installTarget.manager !== "npm";
     let globalBinDir = pnpmPreflight.globalBinDir ?? undefined;
     if (stageNative && !globalBinDir) {
+      // Do not spread params: its accessors are gated on candidate admission.
       const bin = await runPnpmPreflightProbe({
-        ...params,
+        installTarget: params.installTarget,
+        runCommand: params.runCommand,
+        timeoutMs: params.timeoutMs,
         env: effectiveInstallEnv,
         args: params.installTarget.manager === "bun" ? ["pm", "bin", "-g"] : ["bin", "-g"],
         name: `${params.installTarget.manager}-staging-preflight`,
@@ -420,7 +423,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       ] as const) {
         const args = [probeName, "-g", ...stage.configArgs];
         const probe = await runPnpmPreflightProbe({
-          ...params,
+          installTarget: params.installTarget,
+          runCommand: params.runCommand,
+          timeoutMs: params.timeoutMs,
           args,
           cwd: stage.projectRoot,
           env: stage.env,
