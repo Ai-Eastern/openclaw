@@ -27,6 +27,36 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     prepareWorkspaceSkillsSpy.mockResolvedValue([]);
   });
 
+  it.each([false, true])(
+    "retains canonical source ownership unless materialized (sandbox=%s)",
+    async (workspaceOnly) => {
+      const workspaceDir = path.resolve("/synthetic/materialized");
+      const executionWorkspaceDir = path.resolve("/synthetic/canonical");
+      await resolveEmbeddedRunSkillEntries({
+        workspaceDir,
+        workspaceOnly,
+        config: {},
+        skillsSnapshot: {
+          prompt: "Hydrate selected skills",
+          skills: [],
+          promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+          skillRoots: {
+            agentWorkspaceDir: path.resolve("/synthetic/agent"),
+            executionWorkspaceDir,
+            executionWorkspaceFileHost: "gateway",
+          },
+        },
+      });
+      expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[0]).toBe(
+        workspaceOnly ? workspaceDir : path.resolve("/synthetic/agent"),
+      );
+      expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[1]).toMatchObject({
+        executionWorkspaceDir: workspaceOnly ? undefined : executionWorkspaceDir,
+        executionWorkspaceFileHost: workspaceOnly ? undefined : "gateway",
+      });
+    },
+  );
+
   it("threads agentId through live skill loading", async () => {
     await resolveEmbeddedRunSkillEntries({
       workspaceDir: "/tmp/workspace",
