@@ -54,7 +54,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 import type { CacheEntry } from "./web-shared.js";
-import { resolveWebFetchToolRuntimeContext } from "./web-tool-runtime-context.js";
+import { resolveWebToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
@@ -844,12 +844,17 @@ export function createWebFetchTool(options?: {
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebFetch } =
-        resolveWebFetchToolRuntimeContext({
-          config: options?.config,
-          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
-          runtimeWebFetch: options?.runtimeWebFetch,
-        });
+      const {
+        config,
+        preferRuntimeProviders,
+        providerSelectionId,
+        runtimeMetadata: runtimeWebFetch,
+      } = resolveWebToolRuntimeContext({
+        kind: "fetch",
+        config: options?.config,
+        lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+        runtimeMetadata: options?.runtimeWebFetch,
+      });
       const executionFetch = resolveFetchConfig(config);
       if (executionFetch?.enabled === false) {
         throw new Error("web_fetch is disabled.");

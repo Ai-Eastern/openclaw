@@ -27,13 +27,17 @@ import {
 import type { MediaGenerateActionResult } from "./media-generate-tool-actions-shared.js";
 import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import {
-  hasExplicitMediaModel,
   hasGenerationToolAvailability,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolSandboxConfig,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
-import { applyAgentDefaultModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  applyAgentDefaultModelConfig,
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 
 export type MediaGenerateToolOptions = {
   config?: OpenClawConfig;
@@ -133,8 +137,8 @@ export async function prepareMediaGenerationTask<
   >;
 }) {
   const { cfg, generationLabel, model, options, signal } = params;
-  const explicitModelConfig = hasExplicitMediaModel(
-    cfg.agents?.defaults?.mediaModels?.[generationLabel],
+  const explicitModelConfig = hasToolModelConfig(
+    coerceToolModelConfig(cfg.agents?.defaults?.mediaModels?.[generationLabel]),
   );
   const configuredModel =
     model || explicitModelConfig
@@ -227,7 +231,6 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   prompt: string;
   requestKey: string;
   providerId?: string;
-  config?: OpenClawConfig;
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
   onFailure: (message: string, meta?: Record<string, unknown>) => void;
@@ -288,7 +291,6 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
         handle,
         scheduleBackgroundWork: params.scheduleBackgroundWork,
         progressSummary,
-        config: params.config,
         toolName: `${title} generation`,
         onWakeFailure: params.onFailure,
         run: () => run(handle),
@@ -339,10 +341,6 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
     throw error;
   }
 }
-
-export type ImageGenerationTaskHandle = MediaGenerationTaskHandle;
-export type MusicGenerationTaskHandle = MediaGenerationTaskHandle;
-export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
 
 function createGenerationTaskLifecycle(
   kind: "image" | "music" | "video",

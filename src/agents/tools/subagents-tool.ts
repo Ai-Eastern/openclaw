@@ -1,8 +1,3 @@
-/**
- * subagents built-in tool.
- *
- * Lists and cancels background work in the caller's session tree.
- */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
 import { resolveAcpSessionControlOwner } from "../../acp/runtime/session-control-owner.js";
@@ -58,7 +53,6 @@ import {
 } from "./common.js";
 
 const SUBAGENT_ACTIONS = ["list", "wait", "cancel"] as const;
-type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 
 const SubagentsToolSchema = Type.Object({
   action: optionalStringEnum(SUBAGENT_ACTIONS),
@@ -376,7 +370,6 @@ function waitForSelectedTasks(params: {
   });
 }
 
-/** Creates the subagents list tool scoped to the caller's controlled session tree. */
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
   const readScope = () => {
     const cfg = opts.config ?? getRuntimeConfig();
@@ -433,7 +426,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const action = (readToolStringParam(params, "action") ?? "list") as SubagentAction;
+      const action = readToolStringParam(params, "action") ?? "list";
       const recentMinutesRaw = readPositiveIntegerParam(params, "recentMinutes");
       const recentMinutes =
         recentMinutesRaw === undefined

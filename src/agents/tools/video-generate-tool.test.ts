@@ -799,6 +799,25 @@ describe("createVideoGenerateTool", () => {
     expect(delivered.audioAsVoice).toBeUndefined();
   });
 
+  it("rejects an undeliverable video before saving any earlier assets", async () => {
+    mockGeneratedVideo({
+      videos: [videoAsset("valid", "valid.mp4"), { mimeType: "video/mp4" }],
+    });
+    const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
+    const tool = expectVideoGenerateTool(
+      createVideoGenerateTool({
+        config: configWithDefaults({
+          videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+        }),
+      }),
+    );
+
+    await expect(tool.execute("call-invalid-asset", { prompt: "two videos" })).rejects.toThrow(
+      "Provider qwen returned a video asset with neither buffer nor url — cannot deliver.",
+    );
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
   it("rolls back earlier video saves after sequential persistence fails", async () => {
     mockGeneratedVideo({
       videos: [
