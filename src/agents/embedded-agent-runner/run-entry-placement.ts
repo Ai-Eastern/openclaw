@@ -1,18 +1,24 @@
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import {
   prepareRequiredSessionPlacement,
   resolveSessionPlacementRuntimeOverride,
+  type LocalTurnPlacementClaim,
 } from "../session-placement-admission.js";
-import type { runEmbeddedAgentEntry } from "./run-entry.js";
 
 /** Prepare placement once, then retain its runtime selection across fallback candidates. */
-export async function prepareRunEntryPlacement(
-  params: Pick<
-    Parameters<typeof runEmbeddedAgentEntry>[0],
-    "selection" | "identity" | "harness" | "preparedRunAdmission" | "abortSignal"
-  >,
-) {
+export async function prepareRunEntryPlacement(params: {
+  selection: { cfg: OpenClawConfig; provider: string; model: string };
+  identity: LocalTurnPlacementClaim & { agentId: string };
+  harness: {
+    sessionKey?: string;
+    resolveRuntimeOverride: (provider: string, model: string) => string | undefined;
+  };
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+  abortSignal?: AbortSignal;
+}) {
   assertRequiredWorkerSelection(params.selection.cfg, {
     agentRuntime: params.harness.resolveRuntimeOverride(
       params.selection.provider,

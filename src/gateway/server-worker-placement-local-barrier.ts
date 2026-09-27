@@ -12,8 +12,8 @@ import {
   resolveWorkerPlacementSessionTarget,
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
-import type { GatewayWorkerPlacementRuntimeParams } from "./server-worker-placement-startup.js";
 import type { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
   const { preflightWorkerWorkspace } =
@@ -22,9 +22,10 @@ const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
 });
 
 /** Serialize local-to-worker ownership, retaining the held first input for required placement. */
-export function createGatewayWorkerPlacementLocalBarrier(
-  params: Pick<GatewayWorkerPlacementRuntimeParams, "placements" | "revokeSessionAuthority">,
-): NonNullable<Parameters<typeof createWorkerPlacementDispatchService>[0]["runLocalBarrier"]> {
+export function createGatewayWorkerPlacementLocalBarrier(params: {
+  placements: Pick<WorkerSessionPlacementStore, "get" | "waitForTurnClaimRelease">;
+  revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
+}): NonNullable<Parameters<typeof createWorkerPlacementDispatchService>[0]["runLocalBarrier"]> {
   return async ({
     sessionId,
     sessionKey,
