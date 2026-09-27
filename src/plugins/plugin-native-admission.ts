@@ -226,7 +226,7 @@ export function createPluginNativeAdmission(
     const root = createPluginNativeCaptureRoot();
     state.roots.add(root);
     snapshotOwners.set(root, new Set([state]));
-    const { fact } = capturePluginNativeNamespace({
+    const { fact, changed } = capturePluginNativeNamespace({
       sourceDirectory,
       boundary,
       managed,
@@ -240,6 +240,21 @@ export function createPluginNativeAdmission(
         (file): file is string => Boolean(file),
       ),
     });
+    // Overlapping managed namespaces share inodes; a new hardlink changes earlier captures too.
+    for (const namespace of state.namespaces.values()) {
+      for (const member of Object.values(namespace.members)) {
+        const identity = changed.get(member.source);
+        if (!identity) {
+          continue;
+        }
+        if (pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity)) {
+          member.sourceIdentity = identity;
+        }
+        if (pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity)) {
+          member.capturedIdentity = identity;
+        }
+      }
+    }
     state.namespaces.set(root.directory, fact);
     return fact;
   };

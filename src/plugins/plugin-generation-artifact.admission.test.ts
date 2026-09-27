@@ -434,6 +434,53 @@ it.each(["npm", "clawhub"] as const)(
   },
 );
 
+it("captures managed native packages that share a companion dependency", async () => {
+  await withOpenClawTestState({ label: "native-shared-companion" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    fs.rmSync(fixture.filename);
+    fs.writeFileSync(
+      path.join(fixture.root, "package.json"),
+      JSON.stringify({ dependencies: { "a-library": "1.0.0", "b-addon": "1.0.0" } }),
+    );
+    const files = {
+      "a-library/package.json": '{"name":"a-library","version":"1.0.0","main":"lib/helper.cjs"}',
+      "a-library/lib/library.so": "native library bytes",
+      "a-library/lib/helper.cjs": "module.exports = 'companion';",
+      "b-addon/package.json": JSON.stringify({
+        name: "b-addon",
+        main: "lib/addon.node",
+        dependencies: { "a-library": "1.0.0" },
+      }),
+      "b-addon/lib/addon.node": "native addon bytes",
+    };
+    for (const [name, content] of Object.entries(files)) {
+      const filename = path.join(fixture.root, "node_modules", name);
+      fs.mkdirSync(path.dirname(filename), { recursive: true });
+      fs.writeFileSync(filename, content);
+    }
+    const cache = createPluginCache();
+    preparePluginNativeAdmissions(fixture.index, cache);
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    try {
+      artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+      artifact.assertSourceCurrent();
+      const require = createRequire(path.join(artifact.rootDir, "index.js"));
+      expect(require("a-library")).toBe("companion");
+      expect(fs.readFileSync(require.resolve("a-library/lib/library.so"), "utf8")).toBe(
+        "native library bytes",
+      );
+      fs.writeFileSync(
+        path.join(fixture.root, "node_modules/a-library/lib/helper.cjs"),
+        "module.exports = 'modified!';",
+      );
+      expect(artifact.assertSourceCurrent).toThrow("Plugin source changed");
+    } finally {
+      await artifact?.disposeAsync();
+      await retirePluginCache(cache);
+    }
+  });
+});
+
 it("snapshots a mutable native edit once while retained generations keep their previous bytes", async () => {
   await withOpenClawTestState({ label: "native-admission-mutable" }, async (state) => {
     const fixture = createFixture(state.path("source"), false);
