@@ -300,7 +300,10 @@ class ChatComposerLayoutTest {
     val editor = composerEditor()
     val missing = mutableListOf<String>()
 
-    fun observe(name: String, placeholder: String) {
+    fun observe(
+      name: String,
+      placeholder: String,
+    ) {
       captureComposerProof(name)
       if (composeRule.onAllNodesWithText(placeholder, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) {
         missing += "$name: $placeholder"
