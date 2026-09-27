@@ -19,7 +19,7 @@ import {
   isCronSessionDisplayKey,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
-import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   projectSessionOwner,
@@ -51,6 +51,7 @@ export type SessionListFilteredEntries = {
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  activityPulse?: SessionActivityPulse;
   involvingProfileId?: string;
 };
 
@@ -224,6 +225,12 @@ export function* filterSessionEntries(
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
+  const since = opts.activityPulseSince;
+  const activityPulse: SessionActivityPulse | undefined =
+    since !== undefined && Number.isFinite(since) && since >= 0
+      ? { since, hours: Array.from({ length: 24 }, () => 0), sessions: 0, started: 0, running: 0 }
+      : undefined;
+  const pulsePeople = activityPulse && opts.includePeople ? new Set<string>() : undefined;
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
@@ -380,6 +387,8 @@ export function* filterSessionEntries(
     if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
       continue;
     }
+    const activityTs = activityPulse ? sessionActivityTimestamp(entry) : 0;
+    const inPulse = activityPulse !== undefined && activityTs >= activityPulse.since;
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
@@ -403,6 +412,21 @@ export function* filterSessionEntries(
           continue;
         }
       }
+      if (inPulse && pulsePeople) {
+        for (const person of associated) {
+          pulsePeople.add(person.identity.id);
+        }
+      }
+    }
+    if (inPulse) {
+      const hour = Math.min(23, Math.floor((activityTs - activityPulse.since) / 3_600_000));
+      activityPulse.hours[hour] = (activityPulse.hours[hour] ?? 0) + 1;
+      activityPulse.sessions += 1;
+      activityPulse.started += Number((entry.createdAt ?? -1) >= activityPulse.since);
+      const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      activityPulse.running += Number(
+        params.projectActiveRun?.(key, entry, agentId)?.active === true,
+      );
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&
@@ -417,12 +441,16 @@ export function* filterSessionEntries(
     people.values(),
     selectedProfileId,
   );
+  if (activityPulse && pulsePeople) {
+    activityPulse.people = pulsePeople.size;
+  }
   return {
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
     // Empty time/search windows do not invalidate a resolved person link.
     involvingProfileId: selectedProfileId,
+    ...(activityPulse ? { activityPulse } : {}),
     ...(opts.includePeople
       ? {
           people: visiblePeople,

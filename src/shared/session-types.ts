@@ -43,6 +43,16 @@ export type GatewayAgentRow = Pick<
   | "defaultPermissionMode"
 >;
 
+export type SessionActivityPulse = {
+  since: number;
+  /** Exactly 24 hourly buckets; activity beyond the window counts in the last bucket. */
+  hours: number[];
+  sessions: number;
+  started: number;
+  running: number;
+  people?: number;
+};
+
 /** Generic base for paged session-list responses. */
 export type SessionsListResultBase<TDefaults, TRow> = {
   ts: number;
@@ -58,6 +68,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   people?: SessionPerson[];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  /** Hourly activity since `activityPulseSince`, over the same filtered set as `totalCount`. */
+  activityPulse?: SessionActivityPulse;
   /** Canonical profile selected by the person-association filter. */
   involvingProfileId?: string;
   defaults: TDefaults;

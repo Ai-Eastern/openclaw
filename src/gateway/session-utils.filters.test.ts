@@ -1,15 +1,19 @@
 import { Value } from "typebox/value";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   SessionsListParamsSchema,
   type SessionsListParams,
 } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runSynchronousWork } from "../shared/synchronous-work.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import * as sessionIdentity from "./session-identity-projection.js";
+import { filterSessionEntries } from "./session-list-filters.js";
 import { listSessionFixture } from "./session-list.test-support.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
+import { prepareSessionRowSelection } from "./session-utils-list.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
@@ -37,6 +41,7 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
       workspaceDir: "/workspace/task",
       group: "",
       pinned: false,
+      activityPulseSince: 0,
       profileRelation: { profileId: "profile-ada", relationship: "involving" },
     }),
   ).toBe(true);
@@ -45,10 +50,118 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
     { workspaceDir: "" },
     { group: false },
     { pinned: "false" },
+    { activityPulseSince: -1 },
+    { activityPulseSince: "0" },
     { profileRelation: { profileId: "", relationship: "involving" } },
   ]) {
     expect(Value.Check(SessionsListParamsSchema, invalid), JSON.stringify(invalid)).toBe(false);
   }
+});
+
+it("aggregates activity after person filtering and before pagination using the activity clock", async () => {
+  const since = Date.UTC(2026, 8, 27);
+  const person = (id: string) => ({ identity: { type: "profile" as const, id } });
+  const result = await listSessionFixture({
+    cfg,
+    storePath,
+    store: {
+      "agent:main:midnight": entry({
+        lastActivityAt: since,
+        createdAt: since - 1,
+        participants: [person("profile-ada")],
+      }),
+      "agent:main:morning": entry({
+        lastActivityAt: since + 3_600_000,
+        lastInteractionAt: since + 2 * 3_600_000,
+        createdAt: since,
+        participants: [person("profile-merged-ada"), person("profile-bob")],
+      }),
+      "agent:main:clock-skew": entry({
+        lastActivityAt: since + 25 * 3_600_000,
+        createdAt: since + 24 * 3_600_000,
+        participants: [person("profile-ada")],
+      }),
+      "agent:main:yesterday": entry({
+        lastActivityAt: since - 1,
+        updatedAt: since + 30 * 3_600_000,
+        participants: [person("profile-ada"), person("profile-yesterday")],
+      }),
+      "agent:main:other-person": entry({
+        lastActivityAt: since + 5 * 3_600_000,
+        createdAt: since,
+        participants: [person("profile-carol")],
+      }),
+    },
+    opts: {
+      activityPulseSince: since,
+      includePeople: true,
+      involvingProfileId: "profile-ada",
+      sortBy: "activity",
+      limit: 1,
+    },
+  });
+  expect(result.sessions).toHaveLength(1);
+  expect(result.totalCount).toBe(4);
+  expect(result.activityPulse).toEqual({
+    since,
+    hours: [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    sessions: 3,
+    started: 2,
+    running: 0,
+    people: 2,
+  });
+});
+
+it("counts current runs through the owning agent projector only for today's sessions", () => {
+  const since = 100;
+  const projection = createSessionRowProjectionFixture({
+    cfg: { agents: { entries: { worker: {} } } },
+    store: {
+      "agent:worker:live": entry({ sessionId: "running", lastActivityAt: since }),
+      "agent:worker:old": entry({ sessionId: "running", lastActivityAt: since - 1 }),
+      "agent:worker:idle": entry({ sessionId: "idle", lastActivityAt: since + 1 }),
+    },
+  });
+  onTestFinished(projection.dispose);
+  const result = runSynchronousWork(
+    filterSessionEntries({
+      ...prepareSessionRowSelection(projection, { activityPulseSince: since }),
+      projectActiveRun: (key, row, agentId) => ({
+        active:
+          key.startsWith("agent:worker:") && row.sessionId === "running" && agentId === "worker",
+      }),
+    }),
+  );
+  expect(result.activityPulse).toMatchObject({ sessions: 2, running: 1 });
+});
+
+it.each([undefined, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+  "omits the activity pulse for an absent or invalid start: %s",
+  async (activityPulseSince) => {
+    const result = await listSessionFixture({
+      cfg,
+      storePath,
+      store: { "agent:main:one": entry() },
+      opts: { activityPulseSince },
+    });
+    expect(result).not.toHaveProperty("activityPulse");
+  },
+);
+
+it("accepts epoch zero and omits pulse people unless requested", async () => {
+  const result = await listSessionFixture({
+    cfg,
+    storePath,
+    store: {
+      "agent:main:one": entry({
+        createdAt: 0,
+        participants: [{ identity: { type: "profile", id: "profile-ada" } }],
+      }),
+    },
+    opts: { activityPulseSince: 0 },
+  });
+  expect(result.activityPulse).toMatchObject({ since: 0, sessions: 1, started: 1, running: 0 });
+  expect(result.activityPulse).not.toHaveProperty("people");
 });
 
 it("keeps system provenance and named conversations distinct in projected lists", async () => {
