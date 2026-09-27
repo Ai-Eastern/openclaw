@@ -254,29 +254,24 @@ async function toSessionFileEntry(
   if (!opts.includeContent) {
     return entry;
   }
-  if (stat.size <= MAX_PREVIEW_BYTES) {
-    const read = await readWorkspaceFile(root!, browserPath);
-    if (!read) {
-      return { ...base, missing: true };
-    }
-    if (read === "too-large") {
-      return entry;
-    }
-    entry.workspacePath = read.canonicalPath;
-    entry.size = read.stat.size;
-    entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
-    await populateSessionFilePreview(entry, read.buffer);
-    return entry;
-  }
-  const prefix = await readWorkspaceFilePrefix(root!, browserPath, MIME_SNIFF_PREFIX_BYTES);
-  if (!prefix) {
+  const inline = stat.size <= MAX_PREVIEW_BYTES;
+  const read = inline
+    ? await readWorkspaceFile(root!, browserPath)
+    : await readWorkspaceFilePrefix(root!, browserPath, MIME_SNIFF_PREFIX_BYTES);
+  if (!read) {
     return { ...base, missing: true };
   }
-  entry.workspacePath = prefix.canonicalPath;
-  entry.size = prefix.stat.size;
-  entry.updatedAtMs = toUpdatedAtMs(prefix.stat.mtimeMs);
-  const mimeType = await detectMime({ buffer: prefix.buffer });
-  applyOversizedFileMetadata(entry, prefix.buffer, mimeType);
+  if (read === "too-large") {
+    return entry;
+  }
+  entry.workspacePath = read.canonicalPath;
+  entry.size = read.stat.size;
+  entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
+  if (inline) {
+    await populateSessionFilePreview(entry, read.buffer);
+  } else {
+    applyOversizedFileMetadata(entry, read.buffer, await detectMime({ buffer: read.buffer }));
+  }
   return entry;
 }
 
@@ -313,20 +308,13 @@ function toBrowserEntry(
   };
 }
 
-function matchesSearch(entryPath: string, name: string, query: string): boolean {
-  const normalizedQuery = query.toLowerCase();
-  return (
-    name.toLowerCase().includes(normalizedQuery) ||
-    entryPath.toLowerCase().includes(normalizedQuery)
-  );
-}
-
 async function searchBrowserEntries(params: {
   root: string | WorkspaceRoot;
   query: string;
   relevance: ReadonlyMap<string, SessionFileRelevance>;
 }): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: boolean }> {
   const entries: SessionFileBrowserEntry[] = [];
+  const query = params.query.toLowerCase();
   let visitedEntries = 0;
   let truncated = false;
   const shouldStop = (): boolean => {
@@ -350,7 +338,7 @@ async function searchBrowserEntries(params: {
       }
       visitedEntries += 1;
       const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-      if (matchesSearch(browserPath, dirent.name, params.query)) {
+      if (browserPath.toLowerCase().includes(query)) {
         const entry = toBrowserEntry(browserPath, dirent, params.relevance);
         if (entry) {
           entries.push(entry);

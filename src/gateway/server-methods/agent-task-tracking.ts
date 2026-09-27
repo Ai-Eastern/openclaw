@@ -113,10 +113,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
 }): GatewayAgentTaskTrackingMode {
   // Model probes are stateless one-shot work. A terminal CLI task row would
   // outlive the probe even when its session/transcript effects are internal.
-  if (params.modelRun === true) {
-    return "none";
-  }
-  if (!params.sessionKey?.trim()) {
+  if (params.modelRun === true || !params.sessionKey?.trim()) {
     return "none";
   }
   const existingTask = params.existingTask;
@@ -170,15 +167,8 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   if (runTaskOwner === "native_subagent") {
     return "none";
   }
-  // A confirmed ACP manual-spawn child turn already owns its requester-visible
-  // `acp` task row from the spawn control plane (src/agents/subagents/spawn/acp-spawn.ts). The
-  // Gateway CLI path runs that same childRunId, so tracking it here would emit a
-  // duplicate row for one run. Suppress only the CLI branch; plugin-subagent and
-  // normal CLI tracking stay intact.
-  if (params.confirmedAcpManualSpawn) {
-    return "none";
-  }
-  return "cli";
+  // ACP manual-spawn already owns the same run's task row in the spawn control plane.
+  return params.confirmedAcpManualSpawn ? "none" : "cli";
 }
 
 function isTrustedBackendAcpSpawnClient(client: GatewayRequestHandlerOptions["client"]): boolean {
@@ -241,12 +231,8 @@ export async function registerPluginSubagentRunFromGateway(params: {
   const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
     await import("../../agents/subagents/registry/subagent-registry.js");
   params.assertAdmissionCurrent();
-  // A follow-up aimed at a session paused by sessions_yield continues that run.
-  // Registering a sibling row here would reassign the requester to this agent's
-  // own main session and leave the original requester waiting behind a row that
-  // can no longer announce. A follow-up that names its own requester is opting
-  // into its own delivery, so it registers normally rather than silently
-  // inheriting the paused row's audience.
+  // Resume a yielded run with its original audience unless the follow-up names
+  // a requester and therefore owns a separate delivery.
   if (
     !params.requester &&
     adoptPausedSubagentRunForFollowUp({

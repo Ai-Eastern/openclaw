@@ -1,8 +1,10 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { defaultRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
 import { createAdmittedWizardSession, respondSetupAdmissionBusy } from "./setup-admission.js";
-import { activateGatewaySetupInference } from "./system-agent-execution.js";
+import {
+  activateGatewaySetupInference,
+  createSystemAgentGatewayRuntime,
+} from "./system-agent-execution.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 export function rejectExistingSetupWizardSession(params: {
@@ -50,12 +52,7 @@ export async function startSetupActivationWizard(params: {
             ...params.activation,
             surface: "gateway",
             isRemoteProviderAuth: params.isLocalClient !== true,
-            runtime: {
-              ...defaultRuntime,
-              exit: (code: number | undefined): never => {
-                throw new Error(`setup step exited with code ${String(code)}`);
-              },
-            },
+            runtime: createSystemAgentGatewayRuntime(),
             prompter,
             signal,
             isCancelled: () => signal.aborted,

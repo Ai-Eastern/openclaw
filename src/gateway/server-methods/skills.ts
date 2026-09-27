@@ -4,8 +4,6 @@ import {
   buildClawHubTrustErrorDetails,
   ErrorCodes,
   errorShape,
-  type SkillsInstallParams,
-  type SkillsUpdateParams,
   validateSkillsBinsParams,
   validateSkillsDetailParams,
   validateSkillsInstallParams,
@@ -300,8 +298,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     try {
       const results = await searchSkillsFromClawHub({
-        query: (params as { query?: string }).query,
-        limit: (params as { limit?: number }).limit,
+        query: params.query,
+        limit: params.limit,
       });
       registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
       respond(true, { results }, undefined);
@@ -316,7 +314,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       // Same reference grammar as skills.install, so a client cannot review one publisher's
       // card and then install another's.
-      const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
+      const requested = parseRequestedClawHubSkillRef(params.slug);
       if (requested.requestedReference) {
         // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
         // show a same-slug registry skill while install resolves the external artifact.
@@ -530,7 +528,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSkillsInstallParams, "skills.install", respond)) {
       return;
     }
-    const p: SkillsInstallParams = params;
+    const p = params;
     const resolved = resolveSkillsAgentWorkspace(params, context);
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
@@ -622,7 +620,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSkillsUpdateParams, "skills.update", respond)) {
       return;
     }
-    const p: SkillsUpdateParams = params;
+    const p = params;
     if ("source" in p) {
       if (!p.slug && !p.all) {
         respond(

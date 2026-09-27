@@ -172,19 +172,22 @@ function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIde
   };
 }
 
-function receiptMatchesIdentity(
+function validateReceipt(
   receipt: NodeWorkerSupervisorReceipt,
   expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
+): NodeWorkerSupervisorReceipt {
+  if (
+    receipt.launchId !== expected.launchId ||
+    receipt.planHash !== expected.planHash ||
+    receipt.environmentId !== expected.environmentId ||
+    receipt.sessionId !== expected.sessionId ||
+    receipt.ownerEpoch !== expected.ownerEpoch ||
+    receipt.placementGeneration !== expected.placementGeneration ||
+    receipt.runId !== expected.runId
+  ) {
+    throw new Error("node worker supervisor receipt identity mismatch");
+  }
+  return receipt;
 }
 
 function parseInvokeReceipt(
@@ -383,16 +386,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     } finally {
       clearTimeout(rpcTimer);
     }
-  };
-
-  const validateReceipt = (
-    receipt: NodeWorkerSupervisorReceipt,
-    expected: NodeWorkerSupervisorIdentity,
-  ): NodeWorkerSupervisorReceipt => {
-    if (!receiptMatchesIdentity(receipt, expected)) {
-      throw new Error("node worker supervisor receipt identity mismatch");
-    }
-    return receipt;
   };
 
   const waitBeforeRetry = async (params: {

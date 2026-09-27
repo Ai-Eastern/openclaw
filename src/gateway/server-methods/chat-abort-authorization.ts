@@ -1,13 +1,19 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Authorization and pending-run state transitions for chat cancellation.
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { listQueuedChatTurnsForSession } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
-import { pendingChatSendDedupeKey, PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import {
+  pendingChatSendDedupeKey,
+  PENDING_CHAT_SEND_DEDUPE_PREFIX,
+  type DedupeEntry,
+} from "../server-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 export type ChatAbortRequester = {
@@ -82,7 +88,7 @@ export function canRequesterAbortChatRun(
 }
 
 export function readPreRegisteredAgentDedupePayloadForSession(params: {
-  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  entry: DedupeEntry | undefined;
   runId: string;
   sessionKey: string;
   agentId?: string;
@@ -140,7 +146,7 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
 
 export function readPreRegisteredRun(params: {
   key: string;
-  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  entry: DedupeEntry | undefined;
   keyPrefix: string;
   includeHidden?: boolean;
 }): PreRegisteredAgentRun | undefined {
@@ -325,11 +331,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
 }) {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalString(sessionKey)).filter(
-      (sessionKey): sessionKey is string => Boolean(sessionKey),
-    ),
-  );
+  const sessionKeys = new Set(normalizeTrimmedStringList([...params.sessionKeys]));
   const selection = createChatAbortRunSelection<PreRegisteredAgentRun>();
   for (const [key, entry] of params.context.dedupe) {
     const run = readPreRegisteredRun({
@@ -394,16 +396,8 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
 }) {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalString(sessionKey)).filter(
-      (sessionKey): sessionKey is string => Boolean(sessionKey),
-    ),
-  );
-  const sessionIds = new Set(
-    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalString(sessionId)).filter(
-      (sessionId): sessionId is string => Boolean(sessionId),
-    ),
-  );
+  const sessionKeys = new Set(normalizeTrimmedStringList([...params.sessionKeys]));
+  const sessionIds = new Set(normalizeTrimmedStringList([...(params.sessionIds ?? [])]));
   const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
   const selection = createChatAbortRunSelection<{
     runId: string;

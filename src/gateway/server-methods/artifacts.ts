@@ -1,5 +1,3 @@
-// Artifact gateway methods collect generated artifacts from session transcripts
-// and expose list/get/download RPCs scoped by session, run, task, or agent.
 import {
   ErrorCodes,
   errorShape,
@@ -85,7 +83,6 @@ function artifactError(type: string, message: string, details?: Record<string, u
   });
 }
 
-/** Loads artifacts from the transcript selected by sessionKey, runId, or taskId. */
 async function loadArtifacts(
   query: ArtifactsListParams,
   getRuntimeConfig: () => OpenClawConfig | undefined,
@@ -310,7 +307,6 @@ async function respondManagedArtifactDownload(
   });
 }
 
-/** Gateway handlers for listing, summarizing, and downloading transcript artifacts. */
 export const artifactsHandlers: GatewayRequestHandlers = {
   "artifacts.list": async (request) => {
     const { params, client } = request;

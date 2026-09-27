@@ -114,12 +114,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
     }
   }
   return resolveDirectOperatorAuthority({
-    runId: params.runId,
-    resolvedSessionKey: params.resolvedSessionKey,
-    spawnedBy: params.spawnedBy,
-    client: params.client,
-    isCurrent: params.isCurrent,
-    inputProvenance: params.inputProvenance,
+    ...params,
     disallowed:
       params.hasRestoredCronContinuation ||
       params.isOneShotModelRun ||
@@ -157,11 +152,7 @@ type GatewayChatUserTurn = {
 /** Current external user input, independently of the permission being admitted. */
 export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolean {
   return isDirectGatewayUserTurn({
-    runId: params.runId,
-    resolvedSessionKey: params.resolvedSessionKey,
-    spawnedBy: params.spawnedBy,
-    client: params.client,
-    inputProvenance: params.inputProvenance,
+    ...params,
     disallowed:
       !params.isDirectExternalUser ||
       params.hasExplicitOrigin ||
