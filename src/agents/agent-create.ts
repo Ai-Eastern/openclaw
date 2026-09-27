@@ -115,6 +115,8 @@ type CreateAgentParams = {
   transformConfig?: typeof transformConfigFileWithRetry;
   /** Revalidate delegated authority before each new persistent effect. */
   beforePersistentApply?: () => void;
+  /** Admit new identity input until its first successful publication. */
+  assertIdentityInputAllowed?: () => void;
   /** Prepare guided staged state at the last reversible edge before config publication. */
   prepareConfigCommit?: () => Promise<ConfigCommitReceipt | void>;
   /** Observe published config before post-commit bookkeeping that may still fail. */
@@ -286,6 +288,7 @@ async function writeIdentityFile(params: {
     }
   }
   const content = mergeIdentityMarkdownContent(existing, params.identity);
+  params.beforePersistentApply?.();
   // Root.write rechecks after its own async preparation and before each mutation.
   await workspaceRoot.write(DEFAULT_IDENTITY_FILENAME, content, {
     encoding: "utf8",
@@ -333,6 +336,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
   let configCommitReceipt: ConfigCommitReceipt | undefined;
   let creating = false;
+  let identityPublished = false;
   let held: HeldAgentDatabase[] = [];
   const readCurrentHolds = () =>
     withExistingOpenClawStateDatabaseCurrentReadOnly(readAgentDeletionRecoveryHolds) ?? [];
@@ -360,6 +364,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     automaticBootstrap && readCurrentHolds().some((entry) => entry.agentId === agentId);
   const beforePersistentApply = () => {
     params.beforePersistentApply?.();
+    if (!identityPublished) {
+      params.assertIdentityInputAllowed?.();
+    }
     assertRecoveryCurrent();
   };
 
@@ -610,6 +617,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
               identity,
               beforePersistentApply,
             });
+            // Publish the config projection of these accepted bytes even if new
+            // uploads close; delegated and recovery authority remain live above.
+            identityPublished = true;
           }
           // The receipt owns compensation until the config transform publishes this result.
           beforePersistentApply();

@@ -252,7 +252,10 @@ that carry new upload bytes are also rejected; existing-media transfers remain
 available. OpenAI-compatible requests containing image or file
 content parts are rejected, including URL-backed parts, before fetching or
 decoding them. Text-only requests still work. A disabled upload is rejected as
-a whole; its attachments are not silently removed.
+a whole; its attachments are not silently removed. Already accepted writes finish
+settling: for example, an avatar persisted before the switch changes still gets
+its matching agent configuration update. Disabling uploads does not undo existing
+bytes or turn that completed upload into a denial.
 
 Downloads, existing media, agent-generated images/files, ordinary text editing,
 server-local memory migration, channel-inbound media, and internal worker file

@@ -142,7 +142,7 @@ it.each(["agents.create", "agents.update"] as const)(
 );
 
 it.each(["agents.create", "agents.update"] as const)(
-  "%s rechecks inline avatar policy at native config preparation",
+  "%s settles an accepted avatar at native config preparation",
   async (method) => {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
@@ -152,7 +152,6 @@ it.each(["agents.create", "agents.update"] as const)(
       await resume.promise;
       return await prepare(params);
     });
-    const originalConfig = await fs.readFile(state.configPath, "utf8");
     const pending = call(method);
     try {
       await Promise.race([
@@ -161,14 +160,14 @@ it.each(["agents.create", "agents.update"] as const)(
           throw new Error("handler did not reach config preparation");
         }),
       ]);
-      // Identity completed while uploads were enabled. Revocation blocks the next
-      // effect, not rollback of an already admitted identity write.
+      // These exact bytes already passed publication admission. Finish their config
+      // projection instead of reporting a denial with a hidden durable identity write.
       const admittedIdentity = await fs.readFile(identityPath, "utf8");
       expect(admittedIdentity).toContain(inlineAvatar);
       disableUploads();
       resume.resolve();
-      expectDisabled(await pending);
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+      expect(await pending).toHaveBeenCalledExactlyOnceWith(true, expect.anything(), undefined);
+      expect(await fs.readFile(state.configPath, "utf8")).toContain(inlineAvatar);
       expect(await fs.readFile(identityPath, "utf8")).toBe(admittedIdentity);
     } finally {
       resume.resolve();
@@ -250,4 +249,48 @@ it("allows text-only edits to an existing inline avatar while uploads are disabl
   expect(await fs.readFile(identityPath, "utf8")).toContain("- Name: Text Only");
   expect(await fs.readFile(identityPath, "utf8")).toContain(inlineAvatar);
   expect(await fs.readFile(state.configPath, "utf8")).toContain(inlineAvatar);
+});
+
+it("agents.create still rejects at config preparation when no identity was published", async () => {
+  vi.mocked(workspaceOwner.ensureAgentWorkspace).mockResolvedValue({
+    dir: workspace,
+    identityPathCreated: false,
+    bootstrapPending: true,
+  });
+  const prepare = configBackup.prepareConfigFileWrite;
+  vi.spyOn(configBackup, "prepareConfigFileWrite").mockImplementation(async (params) => {
+    expect(await fs.readFile(identityPath, "utf8")).toBe(originalIdentity);
+    disableUploads();
+    return await prepare(params);
+  });
+  const originalConfig = await fs.readFile(state.configPath, "utf8");
+  expectDisabled(await call("agents.create"));
+  expect(await fs.readFile(identityPath, "utf8")).toBe(originalIdentity);
+  expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+});
+
+it("agents.update settles an accepted remote avatar when its write acknowledgment yields", async () => {
+  const writeFile = vi.fn(async (params: { data: string | Uint8Array }) => {
+    await fs.writeFile(identityPath, params.data);
+    disableUploads();
+  });
+  const release = registerAgentWorkspaceAccess(workspace, {
+    bridge: {
+      readFile: async () => await fs.readFile(identityPath),
+      writeFile,
+      stat: vi.fn(),
+    },
+  });
+  try {
+    expect(await call("agents.update")).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { ok: true, agentId: "existing" },
+      undefined,
+    );
+    expect(writeFile).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(identityPath, "utf8")).toContain(inlineAvatar);
+    expect(await fs.readFile(state.configPath, "utf8")).toContain(inlineAvatar);
+  } finally {
+    release();
+  }
 });

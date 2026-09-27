@@ -1,16 +1,17 @@
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import type { registerChatAbortController } from "../chat-abort.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
@@ -119,13 +120,12 @@ export function createChatSendGoalCommitGuard(
     GatewayRequestHandlerOptions,
     "client" | "context" | "sessionMutationAuthorization" | "sessionMutationCommitGuard"
   > & {
-    admission: Pick<
-      AdmittedChatSend,
-      | "initialSessionEntry"
-      | "assertInitialSkillSelection"
-      | "activeRunAbort"
-      | "lifecycleGeneration"
-    >;
+    admission: {
+      initialSessionEntry?: SessionEntry;
+      assertInitialSkillSelection?: () => void;
+      activeRunAbort: Pick<ReturnType<typeof registerChatAbortController>, "controller">;
+      lifecycleGeneration: ReturnType<typeof getAgentEventLifecycleGeneration>;
+    };
     session: Pick<
       PreparedChatSendSession,
       | "agentId"

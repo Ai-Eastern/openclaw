@@ -462,7 +462,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         model: params.model,
         emoji: params.emoji,
         avatar: params.avatar,
-        beforePersistentApply: captureGatewayClientUploadCommitGuard({
+        assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
           method: "agents.create",
           requestParams: params,
           client,
@@ -497,12 +497,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const assertUploadAllowed = captureGatewayClientUploadCommitGuard({
+    const assertUploadCurrent = captureGatewayClientUploadCommitGuard({
       method: "agents.update",
       requestParams: params,
       client,
       context,
     });
+    let identityPublished = false;
+    const assertUploadAllowed = () => {
+      if (!identityPublished) {
+        assertUploadCurrent?.();
+      }
+    };
     const cfg = context.getRuntimeConfig();
     const normalized = normalizeAgentIdStrict(params.agentId);
     if (!normalized.ok) {
@@ -602,6 +608,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ) {
           return;
         }
+        // The write accepted these exact bytes. Settle their config projection,
+        // without retiring workspace authority or admitting another upload.
+        identityPublished = true;
         assertWorkspaceAccessCurrent();
       }
 

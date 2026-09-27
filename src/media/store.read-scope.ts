@@ -109,11 +109,11 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     get key() {
       return finalId ? path.join(params.dir, finalId) : temporaryPath;
     },
-    onDelegated: (assertCurrent?: () => void) => {
+    onDelegated: (assertDelegatedCustody?: () => void) => {
       const previous = assertCustody;
       assertCustody = () => {
         previous?.();
-        assertCurrent?.();
+        assertDelegatedCustody?.();
       };
       // A native metadata commit may outlive the ordinary reply or process exit.
       if (cleanupAtExit) {
