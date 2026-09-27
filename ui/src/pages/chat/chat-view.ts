@@ -477,7 +477,8 @@ export function renderChat(props: ChatProps) {
   const transcriptEmpty =
     !runWorking &&
     props.messages.length === 0 &&
-    (pendingInputs?.page.items.length ?? 0) === 0 &&
+    inputDisplay.pendingInputs.length === 0 &&
+    inputDisplay.queuedInputs.length === 0 &&
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&
     !props.stream &&

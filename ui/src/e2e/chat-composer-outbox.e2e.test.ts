@@ -102,6 +102,7 @@ suite.define(() => {
 
       const cancelRunId = "server-queued-other-client";
       const cancelPrompt = "upgrade-notes.pdf";
+      const cancelText = "Review these upgrade notes after the current task.";
       const cancelInput = {
         ...pending,
         id: "other-client-input",
@@ -109,6 +110,7 @@ suite.define(() => {
         message: {
           role: "user",
           content: [
+            { type: "text", text: cancelText },
             {
               type: "attachment",
               attachment: {
@@ -120,7 +122,7 @@ suite.define(() => {
           ],
         },
       };
-      const olderText = "An earlier cancelled request.";
+      const olderText = "An earlier interrupted request.";
       const olderHistory = {
         ...history,
         pendingInputs: {
@@ -130,7 +132,7 @@ suite.define(() => {
               id: "earlier-input",
               runId: "earlier-run",
               queued: undefined,
-              state: "cancelled",
+              state: "interrupted",
               message: { role: "user", content: olderText },
             },
           ],
@@ -185,13 +187,13 @@ suite.define(() => {
       });
       await page.locator('[data-chat-queue-item="pending-input:other-client-input"]').waitFor();
       await page.screenshot({ path: suite.artifactDir + "/queued-attachment.png" });
-      await queue.getByText(cancelPrompt, { exact: true }).waitFor();
+      await queue.getByText(cancelText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
       await page.getByRole("button", { name: "Show earlier messages", exact: true }).click();
       await page.locator(".chat-group.user").getByText(olderText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
       expect(await queue.getByText(prompt, { exact: true }).count()).toBe(1);
-      expect(await queue.getByText(cancelPrompt, { exact: true }).count()).toBe(1);
+      expect(await queue.getByText(cancelText, { exact: true }).count()).toBe(1);
       expect(
         await page.locator(".chat-group.user").getByText(prompt, { exact: true }).count(),
       ).toBe(0);
@@ -254,32 +256,61 @@ suite.define(() => {
 
       await gateway.deferNext("chat.abort");
       await queue
-        .filter({ hasText: cancelPrompt })
+        .filter({ hasText: cancelText })
         .getByRole("button", { name: "Remove queued message" })
         .click();
       const cancellation = await gateway.waitForRequest("chat.abort");
       expect(cancellation.params).toMatchObject({ sessionKey, runId: cancelRunId });
       expect(await queue.count()).toBe(1);
-      await gateway.setMethodResponse(
-        "chat.history",
-        historyResponses({
-          ...history,
-          messages: [promoted],
-          pendingInputs: {
-            items: [{ ...cancelInput, queued: undefined, state: "cancelled" }],
-            total: 2,
-            nextBefore: 21,
-            queuedCount: 0,
-          },
-          inputReceipts: [{ runId: cancelRunId, state: "pending" }],
-        }),
-      );
+      const cancelledHistory = {
+        ...history,
+        messages: [promoted],
+        pendingInputs: {
+          items: [{ ...cancelInput, queued: undefined, state: "cancelled" }],
+          total: 2,
+          nextBefore: 21,
+          queuedCount: 0,
+        },
+        inputReceipts: [{ runId: cancelRunId, state: "pending" }],
+      };
+      await gateway.setMethodResponse("chat.history", historyResponses(cancelledHistory));
       await gateway.resolveDeferred("chat.abort", { aborted: true, runIds: [cancelRunId] });
       await queue.waitFor({ state: "detached" });
       await page.getByRole("button", { name: "Show latest messages", exact: true }).click();
-      await page.locator(".chat-group.user").getByText(cancelPrompt, { exact: true }).waitFor();
-      expect(await queue.count()).toBe(0);
+      await page
+        .getByRole("button", { name: "Show latest messages", exact: true })
+        .waitFor({ state: "detached" });
+      const expectRemoved = async () => {
+        await page
+          .locator('.chat-bubble[data-entry-id="composer-queued-input"]')
+          .getByText(prompt, { exact: true })
+          .waitFor();
+        expect(await queue.count()).toBe(0);
+        expect(await page.getByText(cancelText, { exact: true }).count()).toBe(0);
+        expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
+        expect(
+          await page
+            .getByText(
+              "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+              { exact: true },
+            )
+            .count(),
+        ).toBe(0);
+      };
+      await expectRemoved();
+      await page.screenshot({ path: suite.artifactDir + "/removed-message.png" });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+      await gateway.setMethodResponse("chat.startup", cancelledHistory);
+      await reconnectMockGateway(page, gateway);
+      await expectRemoved();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+      await page.reload();
+      await gateway.waitForRequest("chat.startup");
+      await expectRemoved();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });
     });
   });
 });
