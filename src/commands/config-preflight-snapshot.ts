@@ -1,7 +1,11 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { createConfigIO } from "../config/io.factory.js";
-import { isConfigReadFailure } from "../config/io.invalid-config.js";
+import {
+  createConfigReadError,
+  formatInvalidConfigDetails,
+  isConfigReadFailure,
+} from "../config/io.invalid-config.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -321,6 +325,11 @@ export function assertPreflightConfigUnchanged(
   before: ConfigFileSnapshot,
   after: ConfigFileSnapshot,
 ): void {
+  // Unavailable bytes cannot prove input drift or authorize a terminal refusal.
+  const unreadable = [before, after].find(isConfigReadFailure);
+  if (unreadable) {
+    throw createConfigReadError(unreadable.path, formatInvalidConfigDetails(unreadable.issues));
+  }
   const change = describeConfigSnapshotInputChange(before, after);
   if (change) {
     throwStartupMigrationIdentityChanged(change);

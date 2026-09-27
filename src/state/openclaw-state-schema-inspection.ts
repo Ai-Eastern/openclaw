@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   collectSqliteSchemaIssues,
   createSqliteTableContractReader,
@@ -7,7 +6,6 @@ import {
 } from "../infra/sqlite-schema-contract.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
-import type { DB } from "./openclaw-state-db.generated.js";
 import {
   getOpenClawStateRuntimeSchema,
   isOpenClawStateFirstUseSchemaIssue,
@@ -30,15 +28,7 @@ export function inspectCurrentStateStartupSchema(
   databasePath: string,
   foundVersion: number,
 ) {
-  assertOpenClawStateDatabaseOwner(database, { pathname: databasePath });
-  const metadata = executeSqliteQueryTakeFirstSync(
-    database,
-    getNodeSqliteKysely<Pick<DB, "schema_meta">>(database)
-      .selectFrom("schema_meta")
-      .select("schema_version")
-      .where("meta_key", "=", "primary")
-      .limit(1),
-  );
+  const metadata = assertOpenClawStateDatabaseOwner(database, { pathname: databasePath });
   if (metadata?.schema_version !== foundVersion) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${databasePath} metadata schema version ${typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid"} does not match ${foundVersion}.`,

@@ -2,29 +2,33 @@
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { ExitError } from "../runtime.js";
 import { isAgentDatabaseOwnershipMismatchError } from "../state/agent-database-admission.js";
-import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 
-/** Classify settled startup failures; admission, preparation and cleanup share one policy. */
-export function rethrowStartupConfigFailure(error: unknown): never {
+/** Admission, final reads and in-process restarts share the same terminal refusal facts. */
+export function isStartupConfigRefusal(error: unknown): boolean {
   // Only explicit maintenance or a known storage/ownership refusal can park a managed Gateway.
   // Unavailable reads, scratch allocation, and cleanup retain their ordinary failure.
-  if (
-    error instanceof ExitError ||
-    (!findStartupMaintenanceRequiredError(error) &&
-      !isAgentDatabaseOwnershipMismatchError(error) &&
-      !collectNestedErrorCandidates(error).some(
-        (failure) =>
-          failure instanceof Error &&
-          (failure instanceof OpenClawStateOwnershipError ||
-            isSqliteSchemaMismatchError(failure) ||
-            isTerminalSqliteIntegrityError(failure) ||
-            failure.name === "SqliteRepairableForeignKeyError"),
-      ))
-  ) {
+  return (
+    Boolean(findStartupMaintenanceRequiredError(error)) ||
+    isAgentDatabaseOwnershipMismatchError(error) ||
+    collectNestedErrorCandidates(error).some(
+      (failure) =>
+        failure instanceof Error &&
+        (failure instanceof OpenClawStateOwnershipError ||
+          isSqliteSchemaMismatchError(failure) ||
+          isTerminalSqliteIntegrityError(failure) ||
+          failure.name === "SqliteRepairableForeignKeyError"),
+    )
+  );
+}
+
+/** Preserve explicit exits and operational failures after the caller's cleanup has settled. */
+export function rethrowStartupConfigFailure(error: unknown): never {
+  if (error instanceof ExitError || !isStartupConfigRefusal(error)) {
     throw error;
   }
   return throwStartupMigrationRefusal(formatErrorMessage(error), error);

@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migration-refusal.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthMode,
@@ -81,7 +82,10 @@ import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
-import { resolveGatewayStartupMaintenanceReason } from "./startup-maintenance.js";
+import {
+  resolveGatewayStartupFailureExitCode,
+  resolveGatewayStartupMaintenanceReason,
+} from "./startup-maintenance.js";
 import { createGatewayCliStartupTrace } from "./startup-trace.js";
 import { triageGatewayStartupFailure } from "./startup-triage.js";
 
@@ -339,15 +343,6 @@ class SupervisedGatewayLockError extends GatewayLockError {
 
 function resolveGatewayLockErrorExitCode(err: unknown): number {
   return err instanceof SupervisedGatewayLockError ? err.exitCode : 1;
-}
-
-function resolveGatewayStartupFailureExitCode(err: unknown): number {
-  return isInvalidConfigError(err) ||
-    isTailscaleRouteOwnershipConflictError(err) ||
-    isGatewayEffectiveConfigConflictError(err) ||
-    resolveGatewayStartupMaintenanceReason(err)
-    ? EXIT_CONFIG_ERROR
-    : 1;
 }
 
 function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
@@ -1090,7 +1085,7 @@ export async function runGatewayCommand(
     await runGatewayCommandOnce(opts, hooks);
   } catch (error) {
     if (!isInvalidConfigError(error)) {
-      throw error;
+      rethrowStartupConfigFailure(error);
     }
     defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(error)}`);
     if (opts.allowUnconfigured || !isDoctorRecoverableInvalidConfigError(error)) {

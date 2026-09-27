@@ -23,7 +23,11 @@ import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
-import { failedGatewayRunConfigSnapshot } from "./run-config.test-support.js";
+import {
+  failedGatewayRunConfigSnapshot,
+  gatewayRunReadFailures,
+  type RuntimeDotEnvLoadResult,
+} from "./run-config.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -66,11 +70,6 @@ const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinConfigDir = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinRuntimePaths = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const detectRespawnSupervisor = vi.fn(() => null as "systemd" | null);
-type RuntimeDotEnvLoadResult = {
-  dotenvPresentKeys: string[];
-  gatewayEnvAppliedKeys: string[];
-  stateEnvAppliedKeys: string[];
-};
 const loadGlobalRuntimeDotEnvFiles = vi.fn<
   (_opts?: unknown) => RuntimeDotEnvLoadResult | undefined
 >(() => undefined);
@@ -2221,31 +2220,33 @@ describe("gateway run option collisions", () => {
     expect(readBestEffortConfig).not.toHaveBeenCalled();
   });
 
-  it.each(["rejected", "unavailable"])(
-    "preserves a %s final read before mode validation",
-    async (kind) => {
-      const failure = Object.assign(new Error("configuration storage unavailable"), {
-        code: "ENOSPC",
+  it.each(gatewayRunReadFailures())("preserves $label", async (fixture) => {
+    if (fixture.stage === "runtime") {
+      const config: OpenClawConfig = { gateway: { mode: "local", auth: { mode: "none" } } };
+      configState.snapshot = { config, exists: true, sourceConfig: config, valid: true };
+      runGatewayLoop.mockImplementationOnce(async ({ start }: GatewayLoopParams) => {
+        await start();
+        await start();
       });
-      if (kind === "rejected") {
-        readConfigFileSnapshotWithPluginMetadata.mockRejectedValueOnce(failure);
-      } else {
-        readConfigFileSnapshotWithPluginMetadata.mockResolvedValueOnce({
-          snapshot: failedGatewayRunConfigSnapshot([
-            { path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" },
-          ]),
-        });
-      }
-      const error = await runGatewayCli(["gateway", "run"]).catch((caught: unknown) => caught);
-      if (kind === "rejected") {
-        expect(error).toBe(failure);
-      } else {
-        expect(error).toMatchObject({ code: "CONFIG_READ_FAILED" });
-      }
-      expect(startGatewayServer).not.toHaveBeenCalled();
-      expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
-    },
-  );
+      startGatewayServer
+        .mockResolvedValueOnce({ close: vi.fn(async () => {}) })
+        .mockRejectedValueOnce(fixture.failure);
+    } else if (fixture.stage === "read") {
+      readConfigFileSnapshotWithPluginMetadata.mockRejectedValueOnce(fixture.failure);
+    } else {
+      readConfigFileSnapshotWithPluginMetadata.mockResolvedValueOnce({
+        snapshot: fixture.snapshot,
+      });
+    }
+    const error = await runGatewayCli(["gateway", "run"]).catch((caught: unknown) => caught);
+    if (fixture.exact) {
+      expect(error).toBe(fixture.expected);
+    } else {
+      expect(error).toMatchObject(fixture.expected);
+    }
+    expect(startGatewayServer).toHaveBeenCalledTimes(fixture.stage === "runtime" ? 2 : 0);
+    expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])(
     "allows explicit invalid-config startup (dev reset: %s)",

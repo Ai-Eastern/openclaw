@@ -57,6 +57,18 @@ describe("startup legacy store classification", () => {
     },
     {
       database: true,
+      reason: "schema_meta is missing required columns",
+      mutation: "ALTER TABLE schema_meta RENAME COLUMN agent_id TO retired_agent_id",
+      shared: false,
+    },
+    {
+      database: true,
+      reason: "schema_meta is missing required columns",
+      mutation: "ALTER TABLE schema_meta RENAME COLUMN role TO retired_role",
+      shared: true,
+    },
+    {
+      database: true,
       reason: "metadata schema version 0",
       mutation: "UPDATE schema_meta SET schema_version = 0 WHERE meta_key = 'primary'",
       shared: false,
@@ -89,7 +101,7 @@ describe("startup legacy store classification", () => {
       recovery: "openclaw database ownership claim",
     },
   ])(
-    "preserves unused legacy state but refuses an unsafe required store ($reason)",
+    "preserves unused legacy state but refuses an unsafe required store ($reason, shared=$shared)",
     async ({ database, reason, mutation, shared, recovery = STARTUP_RECOVERY }) => {
       const root = fs.realpathSync(tempDirs.createTempDir("openclaw-legacy-owner-refusal-"));
       const stateDir = path.join(root, "state");
@@ -129,6 +141,7 @@ describe("startup legacy store classification", () => {
         );
       }
       const before = fs.readFileSync(legacyPath);
+      const configBefore = fs.readFileSync(configPath);
       const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href;
       const script = `
         const { runStartupConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
@@ -170,6 +183,7 @@ describe("startup legacy store classification", () => {
         );
       }
       expect(fs.readFileSync(legacyPath)).toEqual(before);
+      expect(fs.readFileSync(configPath)).toEqual(configBefore);
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     },
     75_000,

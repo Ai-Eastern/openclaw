@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -25,7 +26,12 @@ import {
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
   withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
-import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import {
+  classifySqliteTableReadError,
+  ensureColumn,
+  tableExists,
+  tableHasColumn,
+} from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import {
   assertSupportedStateSchemaVersion,
@@ -34,10 +40,7 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import {
-  assertOpenClawStateWriteAllowed,
-  OpenClawStateOwnershipError,
-} from "./openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
@@ -179,21 +182,34 @@ type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSIN
 export function assertOpenClawStateDatabaseOwner(
   database: DatabaseSync,
   options: { pathname: string },
-): void {
+): { schema_version?: unknown } {
   const hasMetadataTable = database
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta' LIMIT 1")
     .get();
-  const metadata = hasMetadataTable
-    ? (database.prepare("SELECT role FROM schema_meta WHERE meta_key = 'primary' LIMIT 1").get() as
-        | { role?: unknown }
-        | undefined)
-    : undefined;
+  let metadata;
+  try {
+    metadata = hasMetadataTable
+      ? database
+          .prepare(
+            "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get()
+      : undefined;
+  } catch (error) {
+    throw classifySqliteTableReadError(
+      database,
+      "schema_meta",
+      ["meta_key", "role", "schema_version"],
+      error,
+    );
+  }
   if (metadata?.role !== "global") {
     const role = typeof metadata?.role === "string" ? metadata.role : "missing";
     throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} has schema role ${role}; expected global. Run openclaw doctor --fix to inspect and repair its ownership.`,
     );
   }
+  return metadata;
 }
 
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
@@ -209,10 +225,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
     );
   }
 
-  assertOpenClawStateDatabaseOwner(database, options);
-  const metadata = database
-    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-    .get() as { schema_version?: unknown } | undefined;
+  const metadata = assertOpenClawStateDatabaseOwner(database, options);
   if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
@@ -239,10 +252,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected ${options.version} before migrating it.`,
     );
   }
-  assertOpenClawStateDatabaseOwner(database, options);
-  const metadata = database
-    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-    .get() as { schema_version?: unknown } | undefined;
+  const metadata = assertOpenClawStateDatabaseOwner(database, options);
   if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";

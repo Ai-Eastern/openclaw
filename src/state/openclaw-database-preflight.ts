@@ -14,7 +14,6 @@ import { readSqliteWriterAppVersion as readWriterAppVersion } from "../infra/sql
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { hasStateDatabaseSourceExclusion } from "../infra/state-database-coordinator.js";
 import {
   AgentDatabaseAdmissionError,
   canIsolateAgentDatabase,
@@ -143,10 +142,11 @@ export async function assertOpenClawDatabasesReady(
       }),
     );
   }
-  if (failures.length > 0) {
+  const [failure] = failures;
+  if (failure) {
     // A failed read must not hide another required store's proven repair or version refusal.
     throw failures.length === 1
-      ? failures[0]
+      ? failure
       : new AggregateError(failures, "Required OpenClaw databases failed startup admission.");
   }
   if (schemas.indeterminate.length === 0) {
@@ -527,7 +527,7 @@ export async function preflightOpenClawDatabaseSchemas(
             : undefined,
         };
         // Unprepared agents use the slot's reader, including header-only Doctor checks.
-        if (!schemaInspection && !hasStateDatabaseSourceExclusion(realAgentPath)) {
+        if (!schemaInspection) {
           schemaInspection = await inspectSchema(schemaInput, options.signal);
         }
         if (!schemaInspection) {

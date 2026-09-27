@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
+import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
@@ -52,6 +53,7 @@ it("preserves a proven schema failure from the full config snapshot", async () =
 it.each([
   "SQLite inspection",
   "initial config read",
+  "full config read",
   "invalid authored JSON",
   "invalid include directive",
   "inspection with offline maintenance",
@@ -142,12 +144,30 @@ it.each([
     const read = readAdmittedConfigSnapshot({
       env: process.env,
       readSnapshot: async () => {
+        if (phase === "full config read") {
+          const reader = createConfigIO({
+            configPath,
+            observe: false,
+            fs: {
+              ...fs,
+              readFileSync() {
+                throw Object.assign(new Error("configuration read failed: EIO"), { code: "EIO" });
+              },
+            },
+          });
+          return { snapshot: await reader.readConfigFileSnapshot() };
+        }
         throw failure;
       },
     });
     if (phase === "invalid authored JSON" || phase === "invalid include directive") {
       await expect(read).resolves.toMatchObject({
         snapshot: { valid: false, issues: [{ errorCode: "CONFIG_SOURCE_INVALID" }] },
+      });
+    } else if (phase === "full config read") {
+      await expect(read).rejects.toMatchObject({
+        code: "CONFIG_READ_FAILED",
+        message: expect.stringContaining("EIO"),
       });
     } else if (phase === "initial config read") {
       await expect(read).resolves.toMatchObject({

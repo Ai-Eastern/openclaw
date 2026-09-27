@@ -126,9 +126,7 @@ describe("agent database admission", () => {
       );
       const failure = new AgentDatabaseAdmissionError(refusal);
       expect(findStartupMaintenanceRequiredError(failure)).toBe(maintenance);
-      expect(
-        Value.Check(AgentDatabaseAdmissionRefusalSchema, JSON.parse(JSON.stringify(refusal))),
-      ).toBe(true);
+      expect(Value.Check(AgentDatabaseAdmissionRefusalSchema, refusal)).toBe(true);
       expect(() => captureAgentDatabaseAdmission("main", { env })()).toThrow(
         expect.objectContaining({ cause: failure.cause }),
       );
