@@ -25,7 +25,8 @@ final class GatewayBrowserSignInCoordinator {
         self.periodicCheck = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.checkForRenewal()
-                do { try await Task.sleep(for: .seconds(60 * 60)) } catch { return }
+                // A third of the shortest (15-minute) window, which also catches a return from idle.
+                do { try await Task.sleep(for: .seconds(5 * 60)) } catch { return }
             }
         }
     }
