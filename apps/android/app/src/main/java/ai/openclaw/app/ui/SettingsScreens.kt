@@ -1720,7 +1720,7 @@ private fun GatewaySettingsScreen(
   }
 
   pairedGateways.firstOrNull { it.stableId == pendingRenameStableId }?.let { entry ->
-    var name by rememberSaveable(entry.stableId) { mutableStateOf(entry.localName ?: entry.name) }
+    var name by rememberSaveable(entry.stableId) { mutableStateOf(entry.localName.orEmpty()) }
     var saving by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     FoldAwarePrompt(
@@ -1842,7 +1842,7 @@ private fun GatewaySettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric(nativeString("Gateway"), pairedGateways.firstOrNull { it.stableId == activeGatewayStableId }?.displayName ?: serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
+          SettingsMetric(nativeString("Gateway"), pairedGateways.firstOrNull { it.stableId == activeGatewayStableId }?.localName ?: serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
           SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
           SettingsMetric(nativeString("Status"), gatewayStatusLabel(gatewayConnectionDisplay)),
         ),
