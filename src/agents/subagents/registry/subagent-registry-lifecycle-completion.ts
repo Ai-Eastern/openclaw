@@ -242,7 +242,7 @@ export async function completeSubagentRunAttempt(
           endedAt,
           outcome,
           interruptedAt: undefined,
-          interruptionReason: undefined,
+          interruptionReason: "gateway-restart",
           suppressSessionEffects: suppressSessionEffects ? true : undefined,
         };
         entry.completion = {
@@ -499,10 +499,12 @@ export async function completeSubagentRunAttempt(
     const retainedRestartRecovery = suppressSessionEffects
       ? entry.execution.restartRecovery
       : undefined;
+    const interruptionReason = recoveryRequested ? "gateway-restart" : undefined;
     if (
       entry.execution.status !== "terminal" ||
       entry.execution.endedAt !== endedAt ||
       entry.execution.outcome !== executionOutcome ||
+      entry.execution.interruptionReason !== interruptionReason ||
       entry.execution.restartRecovery !== retainedRestartRecovery ||
       entry.execution.suppressSessionEffects !== (suppressSessionEffects ? true : undefined)
     ) {
@@ -512,7 +514,7 @@ export async function completeSubagentRunAttempt(
         endedAt,
         outcome: executionOutcome,
         interruptedAt: undefined,
-        interruptionReason: undefined,
+        interruptionReason,
         restartRecovery: retainedRestartRecovery,
         suppressSessionEffects: suppressSessionEffects ? true : undefined,
       };

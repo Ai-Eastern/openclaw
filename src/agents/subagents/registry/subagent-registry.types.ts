@@ -67,7 +67,6 @@ type SubagentExecutionState = SubagentRunReadRecord["execution"] & {
   suppressSessionEffects?: true;
   acceptedAt?: number;
   interruptedAt?: number;
-  interruptionReason?: "gateway-restart";
   transcriptTarget?: AgentRunSessionTarget;
 };
 

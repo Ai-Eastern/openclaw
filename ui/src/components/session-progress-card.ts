@@ -97,6 +97,7 @@ const ACTIVITY_LABEL_KEYS: Record<SessionRunStatus, Parameters<typeof t>[0]> = {
   running: "sessionProgressCard.activity.updated",
   done: "sessionProgressCard.activity.completed",
   failed: "sessionProgressCard.activity.failed",
+  interrupted: "sessionProgressCard.activity.updated",
   killed: "sessionProgressCard.activity.stopped",
   timeout: "sessionProgressCard.activity.failed",
 };
