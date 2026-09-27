@@ -172,6 +172,32 @@ describe("native conversation contract", () => {
     expect(f.navigateAndWait).not.toHaveBeenCalled();
   });
 
+  it("binds same-requestId results to their originating documents", async () => {
+    const f = fixture();
+    const payload = { visible: false, active: false };
+    for (const documentId of ["retired-document", f.documentId, "retired-document", f.documentId]) {
+      f.command("presentation", payload, { documentId });
+    }
+    await flush();
+    expect(f.messages.filter((message) => message.type === "command-result")).toEqual([
+      {
+        contract: 1,
+        documentId: "retired-document",
+        type: "command-result",
+        requestId: "request-1",
+        ok: false,
+        error: "stale-document",
+      },
+      {
+        contract: 1,
+        documentId: f.documentId,
+        type: "command-result",
+        requestId: "request-1",
+        ok: true,
+      },
+    ]);
+  });
+
   it("switches through the in-page owner once and publishes state before answering once", async () => {
     const f = fixture();
     const gate = createDeferred();

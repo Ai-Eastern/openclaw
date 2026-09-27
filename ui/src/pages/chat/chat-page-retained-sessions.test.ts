@@ -107,6 +107,61 @@ describe("chat page retained sessions", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["web", "visible", "active"] as const)(
+    "suspends once per effective %s presentation transition",
+    async (mode) => {
+      const page = new ChatPage();
+      const { context } = setNavigationContext(page);
+      const presentation = { visible: true, active: true };
+      let notify = () => {};
+      if (mode !== "web") {
+        Object.assign(context, {
+          nativeConversation: {
+            presentation,
+            subscribe(listener: () => void) {
+              notify = listener;
+              return () => {};
+            },
+          },
+        });
+      }
+      page.data = { sessionKey: "agent:main:main" };
+      document.body.append(page);
+      await page.updateComplete;
+      const owner = page as unknown as {
+        retainedSessions: { suspend(): void };
+        clearDropIndicator(): void;
+      };
+      const suspend = vi.spyOn(owner.retainedSessions, "suspend");
+      const clearDrop = vi.spyOn(owner, "clearDropIndicator");
+      const present = async (value: boolean) => {
+        if (mode === "web") {
+          page.presented = value;
+        } else {
+          presentation[mode] = value;
+          notify();
+        }
+        await page.updateComplete;
+      };
+      try {
+        await present(false);
+        for (let update = 0; update < 3; update++) {
+          page.requestUpdate();
+          await page.updateComplete;
+        }
+        expect(suspend).toHaveBeenCalledTimes(1);
+        expect(clearDrop).toHaveBeenCalledTimes(1);
+        await present(true);
+        await present(false);
+        expect(suspend).toHaveBeenCalledTimes(2);
+        expect(clearDrop).toHaveBeenCalledTimes(2);
+      } finally {
+        suspend.mockRestore();
+        clearDrop.mockRestore();
+      }
+    },
+  );
+
   it("synchronizes a route selected while the native conversation is hidden", async ({
     onTestFinished,
   }) => {

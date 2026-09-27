@@ -394,9 +394,10 @@ the settings embed described above.
 The host installs `window.webkit.messageHandlers.openclawConversation.postMessage`
 with Promise replies `{ ok: true }` or `{ ok: false, error }`. The lazy bridge
 publishes `__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__ = { contract: 1, documentId }`
-before sending `ready`. All messages carry that contract and document ID. The host
-must verify the current document's ID before adopting readiness and clear its
-binding on navigation, reload, or process termination.
+before sending `ready`. Messages carry the contract and a document ID. Command
+results echo the originating request's document ID, including `stale-document`
+rejections, so they cannot match another document's request. The host must verify
+the current document's ID before adopting readiness and clear its binding on navigation, reload, or process termination.
 
 Native commands use the `openclaw:native-conversation-command` window event with
 `detail: { contract: 1, documentId, requestId, type, payload }`. Supported commands

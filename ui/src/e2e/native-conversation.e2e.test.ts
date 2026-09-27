@@ -46,6 +46,16 @@ async function command(page: Page, type: string, payload: unknown, requestId: st
     .toMatchObject({ ok: true });
 }
 
+async function headerLeadingInset(page: Page) {
+  return page.locator(".chat-pane-cache__pane--visible .chat-pane__header").evaluate((header) => {
+    const leading = header.querySelector(".chat-pane__header-leading");
+    if (!leading) {
+      throw new Error("Chat header leading region is missing");
+    }
+    return leading.getBoundingClientRect().left - header.getBoundingClientRect().left;
+  });
+}
+
 suite.define(() => {
   it("keeps a single web conversation with in-page native navigation and Dashboard handoff", async () => {
     await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
@@ -127,6 +137,7 @@ suite.define(() => {
       expect(await page.locator(".chat-split-view__cell").count()).toBe(1);
       expect(await pane.locator(".chat-pane__header").isVisible()).toBe(true);
       expect(await pane.locator(".chat-thread").isVisible()).toBe(true);
+      expect(await headerLeadingInset(page)).toBe(12);
       const first = (await messages(page))[0];
       expect(first).toMatchObject({ type: "ready", contract: 1, surface: "conversation" });
       const documentId = first?.documentId;
@@ -198,6 +209,7 @@ suite.define(() => {
       await expect.poll(() => pane.getAttribute("aria-hidden")).toBe("false");
       await command(page, "focus-composer", {}, "focus");
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await headerLeadingInset(page)).toBe(12);
       if (captureUiProofEnabled) {
         await page.screenshot({ path: ".artifacts/pr-proof/conversation-navigated.png" });
       }
@@ -232,6 +244,7 @@ suite.define(() => {
             .waitFor();
           expect(new URL(page.url()).pathname).toBe("/settings");
         } else {
+          expect(await headerLeadingInset(page)).toBe(12);
           expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(true);
         }
       });

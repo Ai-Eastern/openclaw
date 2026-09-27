@@ -70,6 +70,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   @state() private mergedChrome = false;
   @state() private dropIndicator: DropIndicator | null = null;
 
+  private wasConversationPresented = false;
   private readonly nativeConversation = nativeEmbedHost()?.surface === "conversation";
 
   private get conversationPresented(): boolean {
@@ -154,6 +155,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
 
   override connectedCallback() {
     super.connectedCallback();
+    this.toggleAttribute("data-native-conversation", this.nativeConversation);
     this.snapshotStore.connect();
     observeChatCache(this.messageCache, this.snapshotStore);
     this.routeHref = window.location.href;
@@ -209,11 +211,15 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
+    // Cancelling retained previews republishes pane state; suspend only on a hiding edge.
+    if (this.wasConversationPresented && !this.conversationPresented) {
+      this.retainedSessions.suspend();
+      this.clearDropIndicator();
+    }
+    this.wasConversationPresented = this.conversationPresented;
     if (!this.conversationPresented || this.pendingCreate) {
       this.closeFocus.clear();
       this.viewerPresence.dispose();
-      this.retainedSessions.suspend();
-      this.clearDropIndicator();
       return;
     }
     const layout = this.layout ?? this.classicLayout();
@@ -611,19 +617,14 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.updateRoute(sessionKey, false, face);
   };
 
-  private readonly openSplitView = () => {
-    const sessionKey = ownedChatPaneRouteData(this.context, this.data)?.sessionKey?.trim();
-    if (sessionKey) {
-      this.persistLayout(
-        insertPane(this.classicLayout(sessionKey), this.classicPaneId, sessionKey, "right"),
-      );
-    }
-  };
+  private readonly openSplitView = () => this.handleSplit(this.classicPaneId, "right");
 
   private handleSplit(paneId: string, direction: "right" | "down") {
-    const layout = this.layout;
-    const pane = layout ? findPane(layout, paneId)?.pane : null;
-    if (!layout || !pane) {
+    const layout =
+      this.layout ??
+      this.classicLayout(ownedChatPaneRouteData(this.context, this.data)?.sessionKey?.trim());
+    const pane = findPane(layout, paneId)?.pane;
+    if (!pane?.sessionKey) {
       return;
     }
     this.persistLayout(insertPane(layout, paneId, pane.sessionKey, direction));

@@ -44,6 +44,7 @@ const envelope = z.object({
   type: z.string(),
   payload: z.unknown(),
 });
+const commandIdentity = envelope.pick({ documentId: true, requestId: true });
 const navigatePayload = z.object({ agentId: identifier, sessionKey: identifier }).strict();
 const presentationPayload = z.object({ visible: z.boolean(), active: z.boolean() }).strict();
 const emptyPayload = z.object({}).strict();
@@ -315,11 +316,12 @@ export function createNativeConversationBridge(
   };
   const onCommand = (event: Event) => {
     const detail: unknown = event instanceof CustomEvent ? event.detail : null;
-    if (!isRecord(detail) || !identifier.safeParse(detail.requestId).success) {
-      return; // Without a correlation ID there is no command to answer.
+    const identity = commandIdentity.safeParse(detail);
+    if (!identity.success) {
+      return; // A result requires the originating document and request binding.
     }
-    const requestId = String(detail.requestId);
-    const key = JSON.stringify([detail.documentId, requestId]);
+    const { documentId, requestId } = identity.data;
+    const key = JSON.stringify([documentId, requestId]);
     if (requests.has(key)) {
       return;
     }
@@ -335,6 +337,8 @@ export function createNativeConversationBridge(
       void send({
         ...binding,
         type: "command-result",
+        // A stale rejection must never collide with a current document's request.
+        documentId,
         requestId,
         ok: error === undefined,
         ...(error ? { error } : {}),
