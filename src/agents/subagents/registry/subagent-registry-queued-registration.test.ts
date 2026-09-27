@@ -82,7 +82,6 @@ beforeEach(() => {
       assertCurrent: () => {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
   };
   schedulerTesting.reset();
 });

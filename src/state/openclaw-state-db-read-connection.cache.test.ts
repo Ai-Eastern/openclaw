@@ -8,7 +8,6 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
@@ -60,18 +59,14 @@ function fixture() {
     operation: (database: OpenClawStateReadOnlyDatabase) => T,
     location = pathname,
   ) =>
-    withStateDatabaseCoordinatorRuntimeDirectory(
-      { directory: path.join(root, "locks"), keepAlive: false },
-      () =>
-        withOpenClawStateReadOnlyLocation(
-          operation,
-          pathname,
-          location,
-          undefined,
-          undefined,
-          undefined,
-          true,
-        ),
+    withOpenClawStateReadOnlyLocation(
+      operation,
+      pathname,
+      location,
+      undefined,
+      undefined,
+      undefined,
+      true,
     );
   const value = () => read(({ db }) => db.prepare("SELECT value FROM sample").get()?.value);
   const countOpens = () => opens.mock.calls.filter(([location]) => location === pathname).length;
@@ -79,7 +74,6 @@ function fixture() {
     worker.read({
       context: {
         environment: { OPENCLAW_STATE_DIR: root },
-        coordinatorRuntime: { directory: path.join(root, "locks"), keepAlive: false },
       },
       databasePath: pathname,
       location: pathname,

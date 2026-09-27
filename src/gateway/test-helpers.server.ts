@@ -462,7 +462,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   resetLogger();
   if (tempHome) {
     // Join native borrowers before closing the fixture databases.
-    await closeGatewayTestHomeDatabases(tempHome, options);
+    await closeGatewayTestHomeDatabases(tempHome);
   }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();

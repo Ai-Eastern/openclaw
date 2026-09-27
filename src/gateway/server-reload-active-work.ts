@@ -37,35 +37,18 @@ export function createGatewayActiveWorkTracker(options: {
   };
   const getActiveCounts = () => createGatewayActiveWorkSnapshot().counts;
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
-    const details = [];
-    if (counts.queueSize > 0) {
-      details.push(`${counts.queueSize} operation(s)`);
-    }
-    if (counts.pendingReplies > 0) {
-      details.push(`${counts.pendingReplies} reply(ies)`);
-    }
-    if (counts.embeddedRuns > 0) {
-      details.push(`${counts.embeddedRuns} embedded run(s)`);
-    }
-    if (counts.backgroundExecSessions > 0) {
-      details.push(`${counts.backgroundExecSessions} background exec session(s)`);
-    }
-    if (counts.rootRequests > 0) {
-      details.push(`${counts.rootRequests} gateway request(s)`);
-    }
-    if (counts.agentRuns > 0) {
-      details.push(`${counts.agentRuns} admitted agent run(s)`);
-    }
-    if (counts.acpRuns > 0) {
-      details.push(`${counts.acpRuns} ACP turn(s)`);
-    }
-    if (counts.mediaRuns > 0) {
-      details.push(`${counts.mediaRuns} media generation(s)`);
-    }
-    if (counts.cronRuns > 0) {
-      details.push(`${counts.cronRuns} cron run(s)`);
-    }
-    return details;
+    const details = [
+      [counts.queueSize, "operation(s)"],
+      [counts.pendingReplies, "reply(ies)"],
+      [counts.embeddedRuns, "embedded run(s)"],
+      [counts.backgroundExecSessions, "background exec session(s)"],
+      [counts.rootRequests, "gateway request(s)"],
+      [counts.agentRuns, "admitted agent run(s)"],
+      [counts.acpRuns, "ACP turn(s)"],
+      [counts.mediaRuns, "media generation(s)"],
+      [counts.cronRuns, "cron run(s)"],
+    ] as const;
+    return details.filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
   };
   const formatDeferredWorkStatus = (status: "active" | "still active") => {
     try {

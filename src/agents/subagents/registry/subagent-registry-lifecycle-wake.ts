@@ -194,10 +194,10 @@ function releaseRequesterSettleWakeBatch(
   }
   for (const entry of entries) {
     const { runId } = entry;
-    const retryTimer = context.getRequesterSettleWakeTimer(runId);
+    const retryTimer = context.scheduledRequesterSettleWakeTimers.get(runId);
     if (retryTimer?.entry === entry && retryTimer.rearmGeneration === rearmGeneration) {
       clearTimeout(retryTimer.timer);
-      context.deleteRequesterSettleWakeTimer(runId);
+      context.scheduledRequesterSettleWakeTimers.delete(runId);
     }
     if (entry.requesterSettleWake === undefined || !params.runs.has(runId)) {
       context.pendingRequesterSettleWakeCommits.delete(entry);
@@ -283,8 +283,8 @@ export async function cancelRequesterSettleWake(
       if (pendingCommit?.isCurrent(entry)) {
         context.pendingRequesterSettleWakeCommits.set(entry, pendingCommit);
       }
-      if (context.hasScheduledRequesterSettleWakeRun(entry)) {
-        context.markRequesterSettleWakeRearm(entry);
+      if (context.scheduledRequesterSettleWakeRuns.has(entry)) {
+        context.pendingRequesterSettleWakeRearms.add(entry);
       } else {
         scheduleRequesterSettleWake(context, entry.runId, entry);
       }
@@ -342,7 +342,7 @@ function retainScheduledRequesterSettleWakeTimer(
   entry: SubagentRunRecord,
   deadline: number,
 ): boolean {
-  const scheduled = context.getRequesterSettleWakeTimer(entry.runId);
+  const scheduled = context.scheduledRequesterSettleWakeTimers.get(entry.runId);
   if (!scheduled) {
     return false;
   }
@@ -355,7 +355,7 @@ function retainScheduledRequesterSettleWakeTimer(
     return true;
   }
   clearTimeout(scheduled.timer);
-  context.deleteRequesterSettleWakeTimer(entry.runId);
+  context.scheduledRequesterSettleWakeTimers.delete(entry.runId);
   return false;
 }
 
@@ -376,10 +376,10 @@ function scheduleRequesterSettleWakeRetry(
   }
   const timer = setTimeout(
     () => {
-      if (context.getRequesterSettleWakeTimer(runId)?.timer !== timer) {
+      if (context.scheduledRequesterSettleWakeTimers.get(runId)?.timer !== timer) {
         return;
       }
-      context.deleteRequesterSettleWakeTimer(runId);
+      context.scheduledRequesterSettleWakeTimers.delete(runId);
       const current = params.runs.get(runId);
       if (current === entry && current.requesterSettleWake) {
         scheduleRequesterSettleWake(context, runId, current);
@@ -388,7 +388,7 @@ function scheduleRequesterSettleWakeRetry(
     Math.max(0, nextAttemptAt - Date.now()),
   );
   timer.unref?.();
-  context.setRequesterSettleWakeTimer(runId, {
+  context.scheduledRequesterSettleWakeTimers.set(runId, {
     entry,
     timer,
     deadline: nextAttemptAt,
@@ -416,7 +416,7 @@ export function scheduleRequesterSettleWake(
     !hasSubagentRunEnded(entry) ||
     !requesterSessionKey ||
     (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
-    context.hasScheduledRequesterSettleWakeRun(entry)
+    context.scheduledRequesterSettleWakeRuns.has(entry)
   ) {
     return;
   }
@@ -435,7 +435,7 @@ export function scheduleRequesterSettleWake(
     const member = params.runs.get(id);
     return member ? [member] : [];
   });
-  context.markRequesterSettleWakeRunScheduled(entry);
+  context.scheduledRequesterSettleWakeRuns.add(entry);
   // Wake turns outlive their spawning attempt; clear its owner before both
   // dispatch and chained re-arms so transcript writes acquire a fresh lock.
   runWithoutOwnedSessionTranscriptWrites(() => {
@@ -545,7 +545,7 @@ export function scheduleRequesterSettleWake(
       })
       .finally(() => {
         context.unmarkRequesterSettleWakeRunScheduled(entry);
-        const wasRearmedWhileRunning = context.takeRequesterSettleWakeRearm(entry);
+        const wasRearmedWhileRunning = context.pendingRequesterSettleWakeRearms.delete(entry);
         const current = params.runs.get(runId);
         if (current === entry && current.requesterSettleWake) {
           if (wasRearmedWhileRunning) {

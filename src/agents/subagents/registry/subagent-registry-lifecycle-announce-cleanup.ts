@@ -75,7 +75,7 @@ export const resumeAncestorCleanup = (
       typeof entry.execution.endedAt !== "number" ||
       entry.cleanupCompletedAt ||
       entry.cleanupHandled ||
-      context.hasCleanupFailure(entry) ||
+      context.cleanupFailureCounts.has(entry) ||
       isDeliverySuspended(entry) ||
       params.suppressAnnounceForSteerRestart(entry)
     ) {
@@ -128,17 +128,10 @@ const finalizeSubagentCleanup = async (
   }
   const skipRequesterDelivery =
     options?.skipRequesterDelivery === true || entry.suppressCompletionDelivery === true;
-  if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
-    const intentionalNonDelivery = entry.delivery?.disposition === "intentional_non_delivery";
-    clearSubagentPendingDelivery(entry);
-    if (skipRequesterDelivery) {
-      const delivery = ensureDeliveryState(entry);
-      delivery.status = "not_required";
-      // Preserve the lifecycle owner's terminal fact after cleanup clears retry state.
-      delivery.disposition = intentionalNonDelivery ? "intentional_non_delivery" : undefined;
-      entry.suppressCompletionDelivery = undefined;
-    }
-    entry.wakeOnDescendantSettle = undefined;
+  const finishCleanup = async (
+    skipRequesterSettleWake: boolean,
+    completionReason?: ReturnType<typeof resolveCleanupCompletionReason>,
+  ) => {
     if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
       await safeRemoveAttachmentsDir(entry);
     }
@@ -151,18 +144,33 @@ const finalizeSubagentCleanup = async (
       entry,
       cleanup,
       completedAt: Date.now(),
-      skipRequesterSettleWake: skipRequesterDelivery,
+      skipRequesterSettleWake,
     });
+    // Hook loading is best-effort; durable delivery and cleanup must already
+    // be terminal before plugin code can fail or stall.
     if (!context.shouldSuppressSessionEffects(entry)) {
       await emitCompletionEndedHookIfNeeded(
         params,
         entry,
-        resolveCleanupCompletionReason(entry),
+        completionReason ?? resolveCleanupCompletionReason(entry),
         () =>
           context.isEndedHookOwnerCurrent(runId, entry) &&
           !context.shouldSuppressSessionEffects(entry),
       );
     }
+  };
+  if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
+    const intentionalNonDelivery = entry.delivery?.disposition === "intentional_non_delivery";
+    clearSubagentPendingDelivery(entry);
+    if (skipRequesterDelivery) {
+      const delivery = ensureDeliveryState(entry);
+      delivery.status = "not_required";
+      // Preserve the lifecycle owner's terminal fact after cleanup clears retry state.
+      delivery.disposition = intentionalNonDelivery ? "intentional_non_delivery" : undefined;
+      entry.suppressCompletionDelivery = undefined;
+    }
+    entry.wakeOnDescendantSettle = undefined;
+    await finishCleanup(skipRequesterDelivery);
     return;
   }
   if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {
@@ -195,33 +203,7 @@ const finalizeSubagentCleanup = async (
     const completion = ensureCompletionState(entry);
     completion.fallbackResultText = undefined;
     completion.fallbackCapturedAt = undefined;
-    const completionReason = resolveCleanupCompletionReason(entry);
-    if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
-      await safeRemoveAttachmentsDir(entry);
-    }
-    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
-      return;
-    }
-    context.completeCleanupBookkeeping({
-      runId,
-      entry,
-      cleanup,
-      completedAt: Date.now(),
-      skipRequesterSettleWake: terminalNonDelivery,
-    });
-    // Hook loading is best-effort; durable delivery and cleanup must already
-    // be terminal before plugin code can fail or stall.
-    if (!context.shouldSuppressSessionEffects(entry)) {
-      await emitCompletionEndedHookIfNeeded(
-        params,
-        entry,
-        completionReason,
-        () =>
-          context.isEndedHookOwnerCurrent(runId, entry) &&
-          !context.shouldSuppressSessionEffects(entry),
-      );
-    }
+    await finishCleanup(terminalNonDelivery, resolveCleanupCompletionReason(entry));
     return;
   }
 
@@ -326,7 +308,7 @@ export const startSubagentAnnounceCleanupFlow = (
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);
     params.persist(runId);
-    context.clearCleanupFailureCount(entry);
+    context.cleanupFailureCounts.delete(entry);
     return true;
   }
   let suppressSessionEffects = context.shouldSuppressSessionEffects(entry);

@@ -283,7 +283,6 @@ export function registerRequiredQueuedSubagent(params: {
     const { endedAt, message, error: cause } = failureFact;
     const terminalEndedAt = endedAt;
     const terminalError = message;
-    let failedSettlement: { error: unknown } | undefined;
     try {
       if (!(await clearDurableLaunchDescriptor())) {
         return;
@@ -316,11 +315,8 @@ export function registerRequiredQueuedSubagent(params: {
         settlementError instanceof SubagentRegistryWriteError &&
         settlementError.outcome === "not-committed"
       );
-      failedSettlement = { error: settlementError };
-    }
-    if (failedSettlement) {
       const failure = new AggregateError(
-        [cause, failedSettlement.error],
+        [cause, settlementError],
         "Queued registration failure could not be persisted",
         { cause },
       );

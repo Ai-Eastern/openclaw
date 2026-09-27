@@ -1555,7 +1555,7 @@ private fun ConversationContextPicker(
   actionBusy: Boolean,
   onOpenContextPicker: () -> Unit,
 ) {
-  val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+  val agent = snapshot.agents.firstOrNull(WearAgent::selected) ?: snapshot.agents.firstOrNull()
   val model = snapshot.models.firstOrNull(WearModelSummary::selected)
   val agentName =
     listOfNotNull(
@@ -1632,7 +1632,7 @@ private fun ContextPickerOverlay(
     }
     if (picker == WearContextPicker.Session) {
       item {
-        val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+        val agent = snapshot.agents.firstOrNull(WearAgent::selected) ?: snapshot.agents.firstOrNull()
         val model = snapshot.models.firstOrNull(WearModelSummary::selected)
         Panel {
           ContextPickerRow(

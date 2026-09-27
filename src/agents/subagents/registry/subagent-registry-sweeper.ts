@@ -486,15 +486,15 @@ export function createSubagentRegistrySweeper(params: {
           const groupId = entry.groupId?.trim();
           const swarmRequesterSessionKey =
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
-          const groupKey = groupId
-            ? JSON.stringify([entry.requesterAgentId, swarmRequesterSessionKey, groupId])
-            : undefined;
-          if (groupKey && groupId) {
-            collectorArchiveCandidates.set(groupKey, {
-              requesterSessionKey: swarmRequesterSessionKey,
-              groupId,
-              requesterAgentId: entry.requesterAgentId,
-            });
+          if (groupId) {
+            collectorArchiveCandidates.set(
+              JSON.stringify([entry.requesterAgentId, swarmRequesterSessionKey, groupId]),
+              {
+                requesterSessionKey: swarmRequesterSessionKey,
+                groupId,
+                requesterAgentId: entry.requesterAgentId,
+              },
+            );
           }
           continue;
         }
@@ -562,7 +562,7 @@ export function createSubagentRegistrySweeper(params: {
           );
         }
       }
-      for (const {
+      collectorGroups: for (const {
         requesterSessionKey,
         groupId,
         requesterAgentId,
@@ -579,11 +579,9 @@ export function createSubagentRegistrySweeper(params: {
         ) {
           continue;
         }
-        let keepGroup = false;
         for (const [candidateRunId, candidate] of groupEntries) {
           if (runs.get(candidateRunId) !== candidate) {
-            keepGroup = true;
-            break;
+            continue collectorGroups;
           }
           if (shouldSuppressSubagentRecoverySessionEffects(candidate)) {
             continue;
@@ -599,8 +597,7 @@ export function createSubagentRegistrySweeper(params: {
           try {
             const deletion = await deleteSession(candidate, sessionIdentity);
             if (runs.get(candidateRunId) !== candidate) {
-              keepGroup = true;
-              break;
+              continue collectorGroups;
             }
             if (deletion === "changed") {
               candidate.execution = {
@@ -615,14 +612,9 @@ export function createSubagentRegistrySweeper(params: {
               groupId,
               error,
             });
-            keepGroup = true;
-            break;
+            continue collectorGroups;
           }
         }
-        if (keepGroup) {
-          continue;
-        }
-        let attachmentCleanupFailed = false;
         for (const [candidateRunId, candidate] of groupEntries) {
           if (await safeRemoveAttachmentsDir(candidate)) {
             continue;
@@ -632,13 +624,8 @@ export function createSubagentRegistrySweeper(params: {
             childSessionKey: candidate.childSessionKey,
             groupId,
           });
-          attachmentCleanupFailed = true;
-          break;
+          continue collectorGroups;
         }
-        if (attachmentCleanupFailed) {
-          continue;
-        }
-        let contextCleanupFailed = false;
         for (const [candidateRunId, candidate] of groupEntries) {
           if (
             candidate.cleanup === "delete" ||
@@ -661,12 +648,8 @@ export function createSubagentRegistrySweeper(params: {
                 error,
               },
             );
-            contextCleanupFailed = true;
-            break;
+            continue collectorGroups;
           }
-        }
-        if (contextCleanupFailed) {
-          continue;
         }
         const expectedGroupEntries = new Map(groupEntries);
         const liveGroupEntries = readGroup();

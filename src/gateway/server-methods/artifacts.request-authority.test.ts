@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -323,6 +327,85 @@ async function exercise(
 }
 
 describe("registered artifact request authority after session preparation", () => {
+  it.each(methods)("uses the current default agent after preparing %s", async (method) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      let config: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      };
+      await state.writeConfig(config);
+      const readers = await vi.importActual<typeof import("../session-transcript-readers.js")>(
+        "../session-transcript-readers.js",
+      );
+      boundaries.visit.mockImplementation(readers.visitSessionMessagesAsync);
+      const client: GatewayClient = {
+        connId: "artifact-default-agent",
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+      };
+      const request = async (
+        selectedMethod: Method,
+        params: Record<string, unknown>,
+        getRuntimeConfig: () => OpenClawConfig,
+      ) => {
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: { type: "req", id: selectedMethod, method: selectedMethod, params },
+          client,
+          context: { getRuntimeConfig } as GatewayRequestContext,
+          methodRegistry: registry,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        return respond;
+      };
+      for (const agentId of ["main", "work"]) {
+        const scope = {
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+          sessionId: `artifact-${agentId}`,
+        };
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        await appendTranscriptMessage(scope, {
+          message: assistantFileMessage({ title: `${agentId}.txt` }),
+        });
+      }
+      const listed = await request(
+        "artifacts.list",
+        { sessionKey: "agent:work:main" },
+        () => config,
+      );
+      expect(listed.mock.calls[0]?.[0]).toBe(true);
+      const artifactId: unknown = listed.mock.calls[0]?.[1]?.artifacts?.[0]?.id;
+      if (typeof artifactId !== "string") {
+        throw new Error("Expected the work agent artifact");
+      }
+      const prepare = resolution.prepareArtifactSessionResolution;
+      vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
+        const resolve = await prepare(query);
+        config = { agents: { list: [{ id: "main" }, { id: "work", default: true }] } };
+        return resolve;
+      });
+      const response = await request(
+        method,
+        {
+          sessionKey: "main",
+          ...(method === "artifacts.list" ? {} : { artifactId }),
+        },
+        () => config,
+      );
+      expect(response.mock.calls[0]?.[0]).toBe(true);
+      const expected = { id: artifactId, sessionKey: "agent:work:main", title: "work.txt" };
+      expect(response.mock.calls[0]?.[1]).toMatchObject(
+        method === "artifacts.list" ? { artifacts: [expected] } : { artifact: expected },
+      );
+    });
+  });
+
   it.each(methods.flatMap((method) => changes.map((change) => ({ method, change }))))(
     "checks $change after $method preparation",
     async ({ method, change }) => exercise(method, change),

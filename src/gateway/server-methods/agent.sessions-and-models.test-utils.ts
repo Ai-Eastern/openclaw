@@ -2739,7 +2739,7 @@ describe("gateway agent handler", () => {
         const runId = "acp-plugin-subagent-run";
         await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });
         mockSpawnedChildSessionEntry(childSessionKey, root);
-        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        mocks.readAcpSessionMetaAsync.mockResolvedValue(confirmedAcpMeta);
 
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
         const pluginClient: AgentHandlerArgs["client"] = {

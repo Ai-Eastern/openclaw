@@ -41,7 +41,7 @@ import type {
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   SessionAcpMeta,
   SetManagerSessionState,
   WriteManagerSessionMeta,
@@ -59,7 +59,7 @@ export async function runManagerTurn(params: {
   deps: AcpSessionManagerDeps;
   runtimeHandles: ManagerRuntimeHandleCache;
   activeTurnBySession: Map<string, ActiveTurnState>;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
   recordTurnCompletion: (params: {
@@ -89,12 +89,6 @@ export async function runManagerTurn(params: {
   }
   const turnStartedAt = Date.now();
   const actorKey = acpSessionActorKey(params);
-  const initialResolution = params.resolveSession({
-    cfg: input.cfg,
-    sessionKey,
-    agentId,
-  });
-  const initialMeta = requireReadySessionMeta(initialResolution);
   const assertSignalAdmission = resolveAdmittedRunActiveAssertion(
     input.admittedRunContext,
     input.signal,
@@ -109,76 +103,122 @@ export async function runManagerTurn(params: {
     input.signal?.throwIfAborted();
     assertSignalAdmission?.();
   };
-  await recordSessionHumanDirectMessage(
-    {
-      sessionKey,
-      agentId,
-      entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
-      actor: { actorType: input.provenance },
-      channel: "acp",
-      runId: input.requestId,
-    },
-    { assertCurrent: assertSignalCurrent },
-  );
   assertSignalCurrent();
-  // ACP children bypass the subagent registry; terminal outcomes are projected into
-  // the signal log here so changesSince histories are not spawn-only for ACP runs.
-  const spawnedByWatcher =
-    initialResolution.kind === "ready"
-      ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
-      : undefined;
-  const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
-    configuredPrimaryBackend: input.cfg.acp?.backend,
-    resolvedPrimaryBackend: initialMeta.backend,
-    fallbackBackends: input.cfg.acp?.fallbacks,
-  });
-  const backendAttempts: BackendAttempt[] = [];
-  const recordBackendFailure = async (error: AcpRuntimeError) => {
-    assertActorCurrent();
-    const failedBackends = backendAttempts
-      .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-      .join(" | ");
-    const errorToRecord =
-      backendAttempts.length > 1
-        ? new AcpRuntimeError(
-            error.code,
-            `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
-            { detailCode: error.detailCode },
-          )
-        : error;
-    params.recordTurnCompletion({
-      startedAt: turnStartedAt,
-      errorCode: errorToRecord.code,
-    });
-    if (spawnedByWatcher) {
-      await recordSubagentTerminalState(
-        {
-          childSessionKey: sessionKey,
-          runId: input.requestId,
-          requesterSessionKey: spawnedByWatcher,
-          outcomeStatus:
-            errorToRecord.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timeout" : "error",
-        },
-        assertActorCurrent,
-      );
-      assertActorCurrent();
-    }
-    await params.setSessionState({
-      cfg: input.cfg,
-      sessionKey,
-      agentId,
-      isCurrentActor: params.isCurrentActor,
-      state: "error",
-      lastError: formatAcpErrorChain(errorToRecord),
-    });
-    throw errorToRecord;
-  };
-
-  // Liveness spans the whole task, not one backend attempt. The release belongs to
-  // this turn so a retired actor cannot erase a successor after reset overlap.
-  const releaseActiveTurn = markAcpTurnActive({ ...params, ownerSessionKey: spawnedByWatcher });
+  // Metadata reads and signal preparation also hold restart-drain custody.
+  // Each release is fenced so a retired actor cannot erase its successor.
+  let releaseActiveTurn = markAcpTurnActive(params);
+  let spawnedByWatcher: string | undefined;
 
   try {
+    let initialResolution: Awaited<ReturnType<ResolveManagerSessionAsync>>;
+    let initialMeta: SessionAcpMeta;
+    try {
+      initialResolution = await params.resolveSession({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        assertCurrent: assertSignalCurrent,
+      });
+      assertSignalCurrent();
+      initialMeta = requireReadySessionMeta(initialResolution);
+      // ACP children bypass the subagent registry; retain their requester for
+      // terminal signals and admission once the native metadata read completes.
+      spawnedByWatcher =
+        initialResolution.kind === "ready"
+          ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
+          : undefined;
+      if (spawnedByWatcher) {
+        releaseActiveTurn = markAcpTurnActive({ ...params, ownerSessionKey: spawnedByWatcher });
+      }
+      await recordSessionHumanDirectMessage(
+        {
+          sessionKey,
+          agentId,
+          entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
+          actor: { actorType: input.provenance },
+          channel: "acp",
+          runId: input.requestId,
+        },
+        { assertCurrent: assertSignalCurrent },
+      );
+      assertSignalCurrent();
+    } catch (error) {
+      const cancelled = input.signal?.aborted === true;
+      const acpError = toAcpRuntimeError({
+        error,
+        fallbackCode: cancelled ? "ACP_TURN_FAILED" : "ACP_SESSION_INIT_FAILED",
+        fallbackMessage: cancelled
+          ? "ACP operation aborted."
+          : "Could not prepare ACP session runtime.",
+      });
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        ...(cancelled ? {} : { errorCode: acpError.code }),
+      });
+      if (spawnedByWatcher && params.isCurrentActor()) {
+        await recordSubagentTerminalState(
+          {
+            childSessionKey: sessionKey,
+            runId: input.requestId,
+            requesterSessionKey: spawnedByWatcher,
+            outcomeStatus: cancelled
+              ? "cancelled"
+              : acpError.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
+                ? "timeout"
+                : "error",
+          },
+          assertActorCurrent,
+        );
+      }
+      throw acpError;
+    }
+    const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
+      configuredPrimaryBackend: input.cfg.acp?.backend,
+      resolvedPrimaryBackend: initialMeta.backend,
+      fallbackBackends: input.cfg.acp?.fallbacks,
+    });
+    const backendAttempts: BackendAttempt[] = [];
+    const recordBackendFailure = async (error: AcpRuntimeError) => {
+      assertActorCurrent();
+      const failedBackends = backendAttempts
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join(" | ");
+      const errorToRecord =
+        backendAttempts.length > 1
+          ? new AcpRuntimeError(
+              error.code,
+              `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
+              { detailCode: error.detailCode },
+            )
+          : error;
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        errorCode: errorToRecord.code,
+      });
+      if (spawnedByWatcher) {
+        await recordSubagentTerminalState(
+          {
+            childSessionKey: sessionKey,
+            runId: input.requestId,
+            requesterSessionKey: spawnedByWatcher,
+            outcomeStatus:
+              errorToRecord.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timeout" : "error",
+          },
+          assertActorCurrent,
+        );
+        assertActorCurrent();
+      }
+      await params.setSessionState({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        isCurrentActor: params.isCurrentActor,
+        state: "error",
+        lastError: formatAcpErrorChain(errorToRecord),
+      });
+      throw errorToRecord;
+    };
+
     for (const [backendIdx, currentBackend] of candidateBackends.entries()) {
       if (backendIdx > 0) {
         await params.runtimeHandles.close({
@@ -200,11 +240,13 @@ export async function runManagerTurn(params: {
         const resolution =
           backendIdx === 0 && attempt === 0
             ? initialResolution
-            : params.resolveSession({
+            : await params.resolveSession({
                 cfg: input.cfg,
                 sessionKey,
                 agentId,
+                assertCurrent: assertSignalCurrent,
               });
+        assertSignalCurrent();
         const resolvedMeta = requireReadySessionMeta(resolution);
         assertModelAllowed(resolvedMeta.runtimeOptions?.model);
         let runtime: AcpRuntime | undefined;

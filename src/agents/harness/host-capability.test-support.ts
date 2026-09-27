@@ -1,5 +1,5 @@
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import type { AdmittedRunContext } from "../admitted-run-context.js";
+import type { AdmittedRunContext, AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { createAgentHarnessCompletionScope } from "../agent-harness-completion-scope.js";
 import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
@@ -18,7 +18,11 @@ type AdmittedHostCapabilityTestFixture = Readonly<{
 /** Creates the same admitted authority and closure-bound host used by a real harness attempt. */
 export async function createAdmittedHostCapabilityTestFixture(
   attempt: Omit<HostAttempt, "admittedRunContext">,
-  options: { nativeModelPolicySupport?: "exact"; gatewayContext?: true } = {},
+  options: {
+    nativeModelPolicySupport?: "exact";
+    gatewayContext?: true;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+  } = {},
 ): Promise<AdmittedHostCapabilityTestFixture> {
   const { createAgentHarnessCompletionScope } =
     await import("../agent-harness-completion-scope.js");
@@ -56,6 +60,7 @@ export async function createAdmittedHostCapabilityTestFixture(
       ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
     },
     operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
+    operatorAuthority: options.operatorAuthority,
   });
   const admittedRunContext = await admission.admit("plugin-harness", `harness-${attempt.runId}`);
   if (resolveGatewayContext) {

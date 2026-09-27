@@ -619,9 +619,9 @@ internal fun ChatScreen(
   DisposableEffect(viewModel) {
     onDispose(viewModel::stopChatMessageSpeech)
   }
-  val modelSections =
+  val modelChoices =
     remember(modelCatalog, modelFavorites, modelRecents) {
-      chatModelPickerSections(
+      chatModelPickerChoices(
         catalog = modelCatalog,
         favorites = modelFavorites,
         recents = modelRecents,
@@ -1354,7 +1354,7 @@ internal fun ChatScreen(
           }
         } else {
           ChatModelPickerContent(
-            sections = modelSections,
+            models = modelChoices,
             favorites = modelFavorites.toSet(),
             selectedModelLabel = selectedModelLabel,
             selectedModelRef = selectedModelRef,
@@ -3805,7 +3805,7 @@ internal fun branchMetadataText(branch: SessionBranch): String {
 
 @Composable
 private fun ChatModelPickerContent(
-  sections: ChatModelPickerSections,
+  models: List<GatewayModelSummary>,
   favorites: Set<String>,
   selectedModelLabel: String,
   selectedModelRef: String?,
@@ -3818,7 +3818,6 @@ private fun ChatModelPickerContent(
 ) {
   var query by remember { mutableStateOf("") }
   var expandedProviders by remember { mutableStateOf(emptySet<String>()) }
-  val models = sections.pinned + sections.recent + sections.remaining
   val defaultModel = models.firstOrNull { it.providerQualifiedRef() == defaultModelRef }
 
   fun matches(model: GatewayModelSummary): Boolean = query.isBlank() || listOf(model.name, model.id, providerDisplayName(model.provider)).any { it.contains(query.trim(), ignoreCase = true) }

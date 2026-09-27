@@ -741,7 +741,7 @@ vi.mock("./workspace.js", () => ({
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: (...args: unknown[]) => state.acpResolveSessionMock(...args),
+    resolveSessionAsync: async (...args: unknown[]) => state.acpResolveSessionMock(...args),
     runTurn: (...args: unknown[]) => state.acpRunTurnMock(...args),
   }),
 }));

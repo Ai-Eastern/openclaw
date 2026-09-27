@@ -97,12 +97,16 @@ function rpc(method, params, label = method) {
       ? ["--expect-url", url]
       : ["--url", url, "--token", required("GATEWAY_AUTH_TOKEN_REF")];
   }
+  // Let the server's declared wait finish before the CLI transport deadline.
+  const timeoutArgs =
+    method === "agent.wait" ? ["--timeout", String(params.timeoutMs + 10_000)] : [];
   const output = cli(
     [
       "gateway",
       "call",
       method,
       ...gatewayAddressArgs,
+      ...timeoutArgs,
       "--params",
       JSON.stringify(params),
       "--json",

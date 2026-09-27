@@ -41,26 +41,26 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
-function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
+function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
-    typeof params.entry.runTimeoutSeconds !== "number" ||
-    !Number.isFinite(params.entry.runTimeoutSeconds) ||
-    params.entry.runTimeoutSeconds <= 0 ||
-    params.entry.execution.outcome?.status !== "timeout" ||
-    typeof params.entry.execution.endedAt !== "number"
+    typeof entry.runTimeoutSeconds !== "number" ||
+    !Number.isFinite(entry.runTimeoutSeconds) ||
+    entry.runTimeoutSeconds <= 0 ||
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number"
   ) {
     return false;
   }
-  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
-  if (deadlineMs === undefined || params.entry.execution.endedAt < deadlineMs) {
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
+  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
     return false;
   }
   return (
-    params.entry.cleanupHandled === true ||
-    typeof params.entry.cleanupCompletedAt === "number" ||
-    typeof params.entry.endedHookEmittedAt === "number" ||
-    params.entry.delivery?.status === "delivered" ||
-    typeof params.entry.delivery?.announcedAt === "number"
+    entry.cleanupHandled === true ||
+    typeof entry.cleanupCompletedAt === "number" ||
+    typeof entry.endedHookEmittedAt === "number" ||
+    entry.delivery?.status === "delivered" ||
+    typeof entry.delivery?.announcedAt === "number"
   );
 }
 
@@ -92,11 +92,7 @@ function isOlderEquivalentTerminalCallback(params: {
   ) {
     return false;
   }
-  return (
-    current.status !== "error" ||
-    params.outcome.status !== "error" ||
-    current.error === params.outcome.error
-  );
+  return current.status !== "error" || current.error === params.outcome.error;
 }
 
 export async function completeSubagentRunAttempt(
@@ -246,11 +242,7 @@ export async function completeSubagentRunAttempt(
     }
     let requestedEndedAt =
       typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
-    if (
-      shouldPreservePublishedExplicitRunTimeout({
-        entry,
-      })
-    ) {
+    if (shouldPreservePublishedExplicitRunTimeout(entry)) {
       return;
     }
     const shouldDrainExistingTerminal =

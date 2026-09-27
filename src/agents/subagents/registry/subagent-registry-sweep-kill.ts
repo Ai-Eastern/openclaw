@@ -110,7 +110,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
       current?.lifecycleRevision === killIntent.sessionLifecycleRevision
     );
   };
-  const completeRetiredKill = async () => {
+  const completeKill = async (retired: boolean) => {
     await params.completeSubagentRunWithRecovery(
       {
         runId: params.runId,
@@ -121,9 +121,9 @@ export async function reconcileDurableSubagentKillIntent(params: {
         sendFarewell: true,
         accountId: params.entry.requesterOrigin?.accountId,
         triggerCleanup: true,
-        suppressSessionEffects: true,
+        ...(retired ? { suppressSessionEffects: true } : {}),
       },
-      "sweeper-retired-kill-intent",
+      retired ? "sweeper-retired-kill-intent" : "sweeper-pending-kill-intent",
     );
     return true;
   };
@@ -131,7 +131,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
     killIntent.lifecycleGeneration === undefined ||
     !isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration)
   ) {
-    return await completeRetiredKill();
+    return await completeKill(true);
   }
   const identities = [params.entry.childSessionKey, killIntent.sessionId];
   // A live mutation owns this cancellation; reconcile other rows without waiting behind it.
@@ -144,7 +144,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
       return false;
     }
     if (!ownsSessionIncarnation()) {
-      return await completeRetiredKill();
+      return await completeKill(true);
     }
     return await runExclusiveSessionLifecycleMutation({
       scope: storePath,
@@ -154,7 +154,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
           return false;
         }
         if (!ownsSessionIncarnation()) {
-          return await completeRetiredKill();
+          return await completeKill(true);
         }
         const hasLiveRunContext = Boolean(getAgentRunContext(params.runId));
         const active = killIntent.sessionId
@@ -165,7 +165,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
             ? runtime.abortEmbeddedAgentRun(killIntent.sessionId)
             : false;
         if (!ownsSessionIncarnation()) {
-          return await completeRetiredKill();
+          return await completeKill(true);
         }
         runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
         if ((active || hasLiveRunContext) && !aborted) {
@@ -175,22 +175,9 @@ export async function reconcileDurableSubagentKillIntent(params: {
           return false;
         }
         if (!ownsSessionIncarnation()) {
-          return await completeRetiredKill();
+          return await completeKill(true);
         }
-        await params.completeSubagentRunWithRecovery(
-          {
-            runId: params.runId,
-            expectedEntry: params.entry,
-            endedAt: killIntent.requestedAt,
-            outcome: { status: "error", error: killIntent.reason },
-            reason: SUBAGENT_ENDED_REASON_KILLED,
-            sendFarewell: true,
-            accountId: params.entry.requesterOrigin?.accountId,
-            triggerCleanup: true,
-          },
-          "sweeper-pending-kill-intent",
-        );
-        return true;
+        return await completeKill(false);
       },
     });
   } catch (error) {

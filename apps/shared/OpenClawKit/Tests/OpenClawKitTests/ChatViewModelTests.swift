@@ -3585,6 +3585,8 @@ struct ChatViewModelTests {
             ])
         let (transport, vm) = await makeViewModel(historyResponses: [activeHistory, completedHistory])
 
+        // Explicit foreground/events own these scripted replies, not eager fallback polling.
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
 
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
@@ -3642,6 +3644,7 @@ struct ChatViewModelTests {
             historyResponses: [firstHistory, resumedHistory],
             requestHistoryHook: { _ in _ = await historyCalls.increment() })
 
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
         try await waitUntil("initial in-flight snapshot applied") {
             await MainActor.run {
@@ -4430,6 +4433,7 @@ struct ChatViewModelTests {
                 return nil
             })
 
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("older foreground history starts") { await historyCalls.current() == 2 }
@@ -4461,6 +4465,7 @@ struct ChatViewModelTests {
                     inFlightRun: OpenClawChatInFlightRun(runId: "run-active", text: "stale"))
             })
 
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
@@ -4496,6 +4501,7 @@ struct ChatViewModelTests {
                 return staleCompletedHistory
             })
 
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
@@ -4532,6 +4538,7 @@ struct ChatViewModelTests {
                 return index == 2 ? completedHistory : nil
             })
 
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
@@ -4581,6 +4588,7 @@ struct ChatViewModelTests {
                 return nil
             })
 
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
@@ -4626,6 +4634,7 @@ struct ChatViewModelTests {
                 return nil
             })
 
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [] }
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("stale foreground history starts") { await historyCalls.current() == 2 }
@@ -6864,20 +6873,15 @@ struct ChatViewModelTests {
         let staleRefreshGate = SessionSubscribeGate()
         let historyCount = AsyncCounter()
         let staleRefreshReleasedCount = AsyncCounter()
-        let now = (Date().timeIntervalSince1970 * 1000) + 10000
+        let now = (Date().timeIntervalSince1970 * 1000) - 10000
         let firstTurn = [
             chatTextMessage(role: "user", text: "retry", timestamp: now),
             chatTextMessage(role: "assistant", text: "first answer", timestamp: now + 1),
-        ]
-        let latestBoundedTurn = [
-            chatTextMessage(role: "user", text: "retry", timestamp: now + 2),
-            chatTextMessage(role: "assistant", text: "second answer", timestamp: now + 3),
         ]
         let (transport, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionId: sessionId, messages: firstTurn),
                 historyPayload(sessionId: sessionId, messages: firstTurn),
-                historyPayload(sessionId: sessionId, messages: latestBoundedTurn),
             ],
             requestHistoryHook: { sessionKey in
                 guard sessionKey == "main" else { return }
@@ -6886,6 +6890,16 @@ struct ChatViewModelTests {
                     await staleRefreshGate.wait()
                     _ = await staleRefreshReleasedCount.increment()
                 }
+            },
+            historyResponseHook: { _, index, sentRunIds in
+                guard index == 2, let runId = sentRunIds.last else { return nil }
+                let responseTime = Date().timeIntervalSince1970 * 1000
+                return historyPayload(sessionId: sessionId, messages: [
+                    chatTextMessage(
+                        role: "user", text: "retry", timestamp: responseTime,
+                        idempotencyKey: "\(runId):user"),
+                    chatTextMessage(role: "assistant", text: "second answer", timestamp: responseTime + 1),
+                ])
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
@@ -8862,6 +8876,9 @@ struct ChatViewModelTests {
             let keys = await transport.compactSessionKeys()
             return await MainActor.run { keys == ["main"] && !vm.isSubmittingDraft }
         }
+        try await waitUntil("compact failure settled") {
+            await MainActor.run { !vm.isLoading && vm.canRequestSessionCompact }
+        }
         #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
     }
 
@@ -8941,6 +8958,9 @@ struct ChatViewModelTests {
         try await waitUntil("first compact command settled") {
             let keys = await transport.compactSessionKeys()
             return await MainActor.run { keys == ["main"] && !vm.isSubmittingDraft }
+        }
+        try await waitUntil("first compact failure settled") {
+            await MainActor.run { !vm.isLoading && vm.canRequestSessionCompact }
         }
         #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
 
@@ -10956,7 +10976,6 @@ struct ChatViewModelTests {
         let staleFallbackGate = SessionSubscribeGate()
         let mainHistoryCount = AsyncCounter()
         let staleFallbackReleasedCount = AsyncCounter()
-        let now = (Date().timeIntervalSince1970 * 1000) + 10000
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload(sessionKey: "main", sessionId: "sess-main")],
             requestHistoryHook: { sessionKey in
@@ -10969,6 +10988,7 @@ struct ChatViewModelTests {
             },
             historyResponseHook: { _, index, sentRunIds in
                 guard let runId = sentRunIds.last else { return nil }
+                let responseTime = Date().timeIntervalSince1970 * 1000
                 if (1...3).contains(index) {
                     let sessionId = switch index {
                     case 1: "sess-main-send-refresh"
@@ -10978,7 +10998,9 @@ struct ChatViewModelTests {
                     return historyPayload(
                         sessionKey: "main",
                         sessionId: sessionId,
-                        messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)],
+                        messages: [chatTextMessage(
+                            role: "user", text: "hello", timestamp: responseTime,
+                            idempotencyKey: "\(runId):user")],
                         inFlightRun: OpenClawChatInFlightRun(runId: runId, text: ""))
                 }
                 guard index == 4 else { return nil }
@@ -10986,8 +11008,13 @@ struct ChatViewModelTests {
                     sessionKey: "main",
                     sessionId: "sess-main-next-fallback",
                     messages: [
-                        chatTextMessage(role: "user", text: "hello", timestamp: now),
-                        chatTextMessage(role: "assistant", text: "reply from later fallback", timestamp: now + 1),
+                        chatTextMessage(
+                            role: "user", text: "hello", timestamp: responseTime,
+                            idempotencyKey: "\(runId):user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "reply from later fallback",
+                            timestamp: responseTime + 1),
                     ])
             },
             sendMessageStatus: "pending")
@@ -11027,16 +11054,21 @@ struct ChatViewModelTests {
 
     @Test @MainActor func `session activity without chat snapshot does not retain completed pending run`() async throws {
         let historyCalls = AsyncCounter()
-        let now = (Date().timeIntervalSince1970 * 1000) + 10000
-        let completedHistory = historyPayload(
-            messages: [
-                chatTextMessage(role: "user", text: "hello", timestamp: now),
-                chatTextMessage(role: "assistant", text: "done", timestamp: now + 1),
-            ],
-            hasActiveRun: true)
         let (transport, vm) = await makeViewModel(
-            historyResponses: [historyPayload(), completedHistory],
+            historyResponses: [historyPayload()],
             requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            historyResponseHook: { _, index, sentRunIds in
+                guard index > 0, let runId = sentRunIds.last else { return nil }
+                let responseTime = Date().timeIntervalSince1970 * 1000
+                return historyPayload(
+                    messages: [
+                        chatTextMessage(
+                            role: "user", text: "hello", timestamp: responseTime,
+                            idempotencyKey: "\(runId):user"),
+                        chatTextMessage(role: "assistant", text: "done", timestamp: responseTime + 1),
+                    ],
+                    hasActiveRun: true)
+            },
             sendMessageStatus: "pending")
 
         try await loadAndWaitBootstrap(vm: vm)
