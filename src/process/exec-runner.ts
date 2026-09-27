@@ -9,7 +9,11 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
+import {
+  EXIT_STDIO_GRACE_MS,
+  hasChildProcessExited,
+  releaseChildProcessOutputAfterExit,
+} from "./child-process.js";
 import {
   appendCapturedOutput,
   appendPreservedOutputLines,
@@ -219,6 +223,7 @@ async function runCommandWithOutputEncoding(
   const combinedCapturedBytesByStream = { stdout: 0, stderr: 0 };
   const combinedTailChunks: Array<{ stream: CommandOutputStream; buffer: Buffer }> = [];
   let noOutputTimer: ReturnType<typeof setProcessTimeout> | undefined;
+  let eofGraceTimer: ReturnType<typeof setProcessTimeout> | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
   let terminatingOutputError: Error | undefined;
@@ -281,17 +286,17 @@ async function runCommandWithOutputEncoding(
     );
     commandSettled = true;
     await startupReady?.catch(() => {});
-    if (ownsOutputDeadline && childExitState?.code === 0) {
-      // Bounded pipe drain can finish before the deadline; join the remaining owned tree.
-      terminationController.terminate();
-    }
     return await terminationController.settle();
   })();
   retainCommandProcessCleanup(processCleanup);
   void processCleanup.catch(() => {});
   nodeChild.once("exit", (code, signalValue) => {
     childExitState = { code, signal: signalValue };
-    releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+    // Successful tree output belongs to its command deadline, not the diagnostic
+    // idle cutoff. Failed, terminated, and unowned output still gets a bounded drain.
+    if (!ownsOutputDeadline || code !== 0 || termination) {
+      releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+    }
     // An inner timeout can become an ordinary failed exit while its descendants survive.
     // Retain the existing tree owner through its drain without changing that exit result.
     if (killProcessTree && !termination && (code !== 0 || options.requireProcessTreeExtinction)) {
@@ -299,20 +304,10 @@ async function runCommandWithOutputEncoding(
     }
   });
 
-  const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
-    if (
-      !termination &&
-      !commandSettled &&
-      (reason === "timeout" || reason === "no-output-timeout") &&
-      (childExitState || hasChildProcessExited(nodeChild))
-    ) {
-      // The root result is final; the primary deadline still stops its owned descendants.
-      if (ownsOutputDeadline) {
-        terminationController.terminate();
-      }
-      return;
-    }
-    // Output caps and explicit cancellation remain meaningful after root exit.
+  const cancel = (reason: Exclude<CommandTerminationReason, "exit">, eofGraceElapsed = false) => {
+    // Failed roots already own a drain; later deadlines must preserve their exit result.
+    // Successful POSIX roots retain deadline ownership of inherited descendants.
+    // Output caps remain meaningful for bytes drained after either exit.
     if (
       termination ||
       commandSettled ||
@@ -322,6 +317,26 @@ async function runCommandWithOutputEncoding(
     ) {
       return;
     }
+    if (
+      (reason === "timeout" || reason === "no-output-timeout") &&
+      (childExitState || hasChildProcessExited(nodeChild))
+    ) {
+      if (!ownsOutputDeadline || (childExitState?.code ?? nodeChild.exitCode) !== 0) {
+        return;
+      }
+      if (
+        (!nodeChild.stdout || nodeChild.stdout.readableEnded) &&
+        (!nodeChild.stderr || nodeChild.stderr.readableEnded)
+      ) {
+        return;
+      }
+      if (!eofGraceElapsed) {
+        // EOF can follow root exit by a poll turn; bound that grace without renewing the command deadline.
+        eofGraceTimer ??= setProcessTimeout(() => cancel(reason, true), EXIT_STDIO_GRACE_MS);
+        return;
+      }
+    }
+    eofGraceTimer?.clear();
     termination = reason;
     if (waitingForSpawn) {
       startupCanceled.resolve(reason);
@@ -364,6 +379,7 @@ async function runCommandWithOutputEncoding(
   const clearTimers = () => {
     timeoutTimer?.clear();
     noOutputTimer?.clear();
+    eofGraceTimer?.clear();
     noOutputTimer = undefined;
     signal?.removeEventListener("abort", onAbort);
   };

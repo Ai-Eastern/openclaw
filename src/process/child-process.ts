@@ -3,7 +3,7 @@
  */
 import type { ChildProcess } from "node:child_process";
 
-const EXIT_STDIO_GRACE_MS = 100;
+export const EXIT_STDIO_GRACE_MS = 100;
 const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 
 /** Native and broker exit notifications can precede output EOF. */

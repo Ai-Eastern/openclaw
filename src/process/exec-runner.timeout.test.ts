@@ -178,6 +178,7 @@ describe("command deadline event ordering", () => {
       await vi.advanceTimersByTimeAsync(21);
       command.child.stdout?.end("complete");
       command.child.stderr?.end();
+      await vi.advanceTimersByTimeAsync(101);
       command.settle();
 
       await expect(result).resolves.toMatchObject({
@@ -188,17 +189,31 @@ describe("command deadline event ordering", () => {
     },
   );
 
-  it("bounds inherited output after a successful tree root exits", async () => {
-    const command = createCommand();
-    const result = runCommandWithTimeout([process.execPath], {
-      timeoutMs: 1_000,
-      killProcessTree: true,
-    });
-    command.emitExit(0);
-    await vi.advanceTimersByTimeAsync(101);
-    const drained = command.child.stdout.destroyed && command.child.stderr.destroyed;
-    command.settle();
-    await expect(result).resolves.toMatchObject({ code: 0, termination: "exit" });
-    expect(drained).toBe(true);
-  });
+  it.each([
+    { deadline: "timeoutMs", stream: "stdout" },
+    { deadline: "noOutputTimeoutMs", stream: "stderr" },
+  ] as const)(
+    "times out owned $stream held past the bounded EOF grace after $deadline",
+    async ({ deadline, stream }) => {
+      const command = createCommand();
+      const result = runCommandWithTimeout([process.execPath], {
+        [deadline]: 20,
+        killProcessTree: true,
+      });
+      command.emitExit(0);
+      command.child[stream === "stdout" ? "stderr" : "stdout"].end();
+      await vi.advanceTimersByTimeAsync(21);
+      await vi.advanceTimersByTimeAsync(100);
+      const pipeStillOpen = !command.child[stream].destroyed;
+      expect(command.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      command.settle();
+      await expect(result).resolves.toMatchObject({
+        code: 124,
+        termination: deadline === "timeoutMs" ? "timeout" : "no-output-timeout",
+      });
+      expect(pipeStillOpen).toBe(true);
+      expect(command.kill).toHaveBeenCalledOnce();
+    },
+  );
 });
