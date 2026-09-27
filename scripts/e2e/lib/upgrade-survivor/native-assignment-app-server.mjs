@@ -150,7 +150,7 @@ function startTurn(socket, phase, threadId, turnId) {
     durationMs: null,
   };
   thread(threadId).turns.push(turn);
-  thread(threadId).status = { type: "active" };
+  thread(threadId).status = { type: "active", activeFlags: [] };
   notify(socket, phase, "turn/started", { threadId, turn });
   return turn;
 }
