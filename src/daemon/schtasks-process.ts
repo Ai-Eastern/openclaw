@@ -25,6 +25,7 @@ import {
   readWindowsProcessSnapshot,
   type WindowsProcessSnapshotEntry,
 } from "./schtasks-process-snapshot.js";
+import { retryScheduledTaskLeaseRead } from "./schtasks-sqlite.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -192,7 +193,7 @@ export async function resolveScheduledTaskOwnedGatewayPids(
   return ownership?.pids ?? [];
 }
 
-async function resolveScheduledTaskGatewayOwnership(
+export async function resolveScheduledTaskGatewayOwnership(
   env: GatewayServiceEnv,
   context?: { port: number | null; probeHosts?: readonly string[] },
   installedCommand?: GatewayServiceCommandConfig | null,
@@ -206,7 +207,7 @@ async function resolveScheduledTaskGatewayOwnership(
     return null;
   }
   const ownerEnv = mergeGatewayServiceEnv(env, command);
-  const owner = readGatewayOwnerLease({ env: ownerEnv });
+  const owner = await retryScheduledTaskLeaseRead(() => readGatewayOwnerLease({ env: ownerEnv }));
   const taskName = resolveTaskName(env);
   const isTaskSupervisor = (supervisor: NonNullable<typeof owner>["supervisor"]) =>
     supervisor?.kind === "schtasks" && supervisor.name?.toLowerCase() === taskName.toLowerCase();
@@ -223,6 +224,8 @@ async function resolveScheduledTaskGatewayOwnership(
     : await resolveLegacyScheduledTaskOwnedGatewayPids(env, context, command);
   let ownerWasValidatedForTermination = false;
   return {
+    owner,
+    env: ownerEnv,
     pids,
     acquireTerminationExclusion() {
       if (
@@ -245,7 +248,7 @@ async function resolveScheduledTaskGatewayOwnership(
       if (pids.length > 0) {
         return null;
       }
-      if (owner) {
+      if (owner && owner.state !== "dead") {
         return null;
       }
       const exclusion = tryAcquireGatewayLifecycleCleanupCoordinator({
@@ -567,10 +570,12 @@ function probeWindowsTasklistProcessState(pid: number): "alive" | "missing" | "u
     : "missing";
 }
 
-async function waitForProcessExit(
+export async function waitForProcessExit(
   pid: number,
   timeoutMs: number,
-  probe: (pid: number) => "alive" | "missing" | "unknown" = probeProcessState,
+  probe: (pid: number) => "alive" | "missing" | "unknown" = process.platform === "win32"
+    ? probeWindowsTasklistProcessState
+    : probeProcessState,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
