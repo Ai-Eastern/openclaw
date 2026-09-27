@@ -4,18 +4,18 @@ title: "Verify a cloud worker profile"
 read_when: "You added or changed a cloud worker profile and want to prove it works before relying on it."
 ---
 
-The checks to run before and after restarting the Gateway, and the end-to-end flow that read-only readiness checks do not substitute for.
+The checks to run after saving a profile change, and the end-to-end flow that read-only readiness checks do not substitute for.
 
 ## Verify the profile
 
-Validate before saving the change:
+After saving the change, validate the saved config and the provider runtime:
 
 ```bash
 openclaw config validate --json
 openclaw plugins inspect crabbox --runtime --json
 ```
 
-Changes under `cloudWorkers` apply without restarting the Gateway: the default `gateway.reload.mode: "hybrid"` watches the config and reloads the worker provider plugins in place. With reload watching disabled, run `openclaw gateway restart` to apply them. Profile changes apply to newly provisioned workers; running workers keep their admitted provisioning settings (see [hot reload](/gateway/configuration/hot-reload)).
+Changes under `cloudWorkers` apply without restarting the Gateway: the default `gateway.reload.mode: "hybrid"` watches the config and reloads the worker provider plugins in place. With `gateway.reload.mode: "off"`, passive changes wait for a manual `openclaw gateway restart`. Profile changes apply to newly provisioned workers; running workers keep their admitted provisioning settings (see [hot reload](/gateway/configuration/hot-reload)).
 
 To use the same profile with Codex, enable a trusted Codex plugin installation on the Gateway and explicitly add `codex.exec-server.stdio.v1` to `gateway.nodes.commands.allow`. Bootstrap includes and enables the required plugin in the cloud node's isolated state automatically. Installing the runtime does not grant execution authority: persistent command enablement does not replace the critical launch approval. **Allow once** covers one exec-server launch; **Allow always** covers later launches only while the exact placement, node pairing, environment owner, command approval scope, and workspace stay current.
 
