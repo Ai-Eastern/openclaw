@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,7 +8,7 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
-} from "../infra/sqlite-coordinator.js";
+} from "../infra/sqlite-lifecycle-errors.js";
 import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
@@ -40,7 +39,6 @@ import type {
   AgentDatabaseExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionOpen,
-  AgentDatabaseExecutionPreparation,
   AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
@@ -89,7 +87,7 @@ export type AgentDatabaseNativeGeneration = {
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
-    preparation?: AgentDatabaseExecutionPreparation,
+    signal?: AbortSignal,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };
@@ -360,7 +358,7 @@ export function createAgentDatabaseNativeGeneration(
     source: AgentDatabaseRequestExecutionSource,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
-    preparation?: AgentDatabaseExecutionPreparation,
+    signal?: AbortSignal,
   ): Promise<Store | undefined> => {
     assertCurrent();
     source.assertCurrent();
@@ -379,7 +377,7 @@ export function createAgentDatabaseNativeGeneration(
           assertCurrent();
           source.assertCurrent();
           assertCallerCurrent?.();
-          preparation?.signal?.throwIfAborted();
+          signal?.throwIfAborted();
         };
         const createAdmission = admission(source, registration, assertCallerCurrent);
         return await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
@@ -393,15 +391,8 @@ export function createAgentDatabaseNativeGeneration(
             stateContext: context,
             stateDatabasePath: context.admission.databasePath,
             assertCurrent: assertOpening,
-            signal: preparation?.signal,
+            signal,
             createAdmission,
-            requireStateLifecycle: preparation
-              ? {
-                  get waitMs() {
-                    return Math.max(0, Math.ceil(preparation.deadlineMs - performance.now()));
-                  },
-                }
-              : false,
             onNativeStopped: (stopped, readReceipt) => {
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
@@ -439,7 +430,7 @@ export function createAgentDatabaseNativeGeneration(
         opening = undefined;
       }
       if (!store && createIfMissing) {
-        return open(source, assertCallerCurrent, true, preparation);
+        return open(source, assertCallerCurrent, true, signal);
       }
       return store;
     });
@@ -449,20 +440,16 @@ export function createAgentDatabaseNativeGeneration(
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
-    preparation?: AgentDatabaseExecutionPreparation,
+    signal?: AbortSignal,
   ): Promise<T | undefined> {
     const assertOperationCurrent = () => {
       assertCurrent();
       source.assertCurrent();
       assertCallerCurrent?.();
-      preparation?.signal?.throwIfAborted();
+      signal?.throwIfAborted();
     };
-    const store =
-      openedStore ?? (await open(source, assertCallerCurrent, createIfMissing, preparation));
-    assertCurrent();
-    source.assertCurrent();
-    assertCurrent();
-    assertCallerCurrent?.();
+    const store = openedStore ?? (await open(source, assertCallerCurrent, createIfMissing, signal));
+    assertOperationCurrent();
     if (!store) {
       return undefined;
     }
@@ -477,21 +464,10 @@ export function createAgentDatabaseNativeGeneration(
         const createAdmission = admission(source, registration, assertCallerCurrent);
         await runSqliteWorkerStoreOperation(
           store,
-          (scope) =>
-            scope.execute(
-              { type: "database.prepareWrite", input: undefined },
-              { signal: preparation?.signal },
-            ),
+          (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }, { signal }),
           undefined,
           assertOperationCurrent,
           createAdmission,
-          preparation
-            ? {
-                get waitMs() {
-                  return Math.max(0, Math.ceil(preparation.deadlineMs - performance.now()));
-                },
-              }
-            : false,
         );
         assertCurrent();
         source.assertCurrent();

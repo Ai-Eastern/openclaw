@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
@@ -24,7 +23,6 @@ import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runti
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -38,7 +36,6 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import {
   createReplyOperation,
   isReplyRunSuccessorAdmissionBlocked,
@@ -142,7 +139,6 @@ function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
 
 type ReplyTurnAdmissionParams = {
   runId?: string;
-  stateAcquisitionDeadline?: () => number;
   assertRequestCurrent?: () => void;
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   agentId?: string;
@@ -201,7 +197,6 @@ export async function admitReplyTurn(
   const waitTimeoutMs =
     params.waitTimeoutMs ??
     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
-  let acquisitionDeadlineMs: number | undefined;
   let admittedDatabaseClaim: SessionAdmissionDatabaseClaim | undefined;
   let discardedDatabaseClaimRelease: Promise<void> | undefined;
   let owned = false;
@@ -327,22 +322,7 @@ export async function admitReplyTurn(
                   },
                   {
                     signal,
-                    get deadlineMs() {
-                      return (acquisitionDeadlineMs ??= Math.min(
-                        params.stateAcquisitionDeadline?.() ?? Number.POSITIVE_INFINITY,
-                        performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-                      ));
-                    },
                     assertCurrent,
-                    onWait: params.runId
-                      ? () =>
-                          emitAgentRunStatusEvent({
-                            runId: params.runId!,
-                            phase: "waiting_for_state",
-                            sessionKey: params.sessionKey,
-                            agentId: params.agentId,
-                          })
-                      : undefined,
                   },
                 );
                 if (

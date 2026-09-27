@@ -1,19 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { onAgentEventForRun } from "../../infra/agent-events.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
-import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
-import { holdStateCoordinator } from "../../state/openclaw-state-coordinator.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -28,6 +28,27 @@ afterEach(() => {
 });
 
 type Admission = Awaited<ReturnType<typeof admitReplyTurn>>;
+
+function observeNativeOpen(databasePath: string, agentId: string) {
+  const entered = createDeferred();
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const observed = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      createAdmission((request, grant) => {
+        admit(request, grant);
+        if (
+          request.stage === "open" &&
+          isRecord(request.facts) &&
+          request.facts.databasePath === databasePath &&
+          request.facts.agentId === agentId
+        ) {
+          entered.resolve();
+        }
+      }, attachment),
+    );
+  return { entered: entered.promise, restore: () => observed.mockRestore() };
+}
 
 async function completeAdmission(result: Admission | undefined, sessionKey: string) {
   if (result?.status === "owned") {
@@ -95,7 +116,7 @@ it.each(["missing", "corrupt"] as const)(
   },
 );
 
-it("admits cold and reopened persistent replies without main-thread SQLite while the coordinator is held", async () => {
+it("admits cold and reopened persistent replies without main-thread SQLite while a shared writer is held", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "agent.sqlite");
     const sessionKey = "agent:main:worker-admission";
@@ -106,16 +127,13 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
 
     for (const phase of ["cold", "reopened"] as const) {
       await closeOpenClawAgentDatabaseByPathAsync(storePath);
-      const holder = await holdStateCoordinator(statePath);
-      let coordinatorRelease: Promise<void> | undefined;
-      const releaseCoordinator = () => (coordinatorRelease ??= holder());
-      const waiting = createDeferred();
-      const runId = `worker-admission-${phase}`;
-      const stop = onAgentEventForRun(runId, (event) => {
-        if (event.stream === "run_status" && event.data.phase === "waiting_for_state") {
-          waiting.resolve();
-        }
-      });
+      const holder = holdStateDatabaseWriteTransaction(statePath, 10_000);
+      await holder.ready;
+      const releaseWriter = async () => {
+        holder.release();
+        await holder.joined;
+      };
+      const nativeOpen = observeNativeOpen(storePath, "main");
       const sql = observeMainThreadSql({ includeClose: true });
       sql.calibrate();
       const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
@@ -125,7 +143,6 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
         sessionKey,
         sessionId,
         expectedSessionId: sessionId,
-        runId,
         kind: "visible",
         resetTriggered: false,
         upstreamAbortSignal: controller.signal,
@@ -143,18 +160,20 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
       try {
         await withTestTimeout(
           Promise.race([
-            waiting.promise,
+            nativeOpen.entered,
             pending.then(() => {
-              throw new Error("Admission completed while its coordinator was held");
+              throw new Error("Admission completed while its shared writer was held");
             }),
           ]),
           5_000,
-          "Admission never reported coordinator contention",
+          `${phase} admission never reached its native factory`,
         );
-        await setImmediate();
-        await holder.observe();
+        await sleep(10);
+        expect(Atomics.load(holder.released, 0)).toBe(0);
+        sql.expectIdle();
+        expect(opened).not.toHaveBeenCalled();
         expect(settled).toBe(false);
-        await releaseCoordinator();
+        await releaseWriter();
         result = await pending;
         expect(result.status).toBe("owned");
         if (result.status !== "owned" || !result.databaseClaim) {
@@ -173,12 +192,12 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
       } finally {
         try {
           controller.abort();
-          await releaseCoordinator();
+          await releaseWriter();
           result ??= await pending.catch(() => undefined);
           await completeAdmission(result, sessionKey);
           await settlement;
         } finally {
-          stop();
+          nativeOpen.restore();
           opened.mockRestore();
           sql.restore();
         }
@@ -200,26 +219,17 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       { sessionId: followerSessionId, updatedAt: 1 },
     );
     await closeOpenClawAgentDatabaseByPathAsync(storePath);
-    const holder = await holdStateCoordinator(openOpenClawStateDatabase({ env: state.env }).path);
-    let coordinatorRelease: Promise<void> | undefined;
-    const releaseCoordinator = () => (coordinatorRelease ??= holder());
-    const waiting = createDeferred();
-    const firstCaptured = createDeferred();
+    const holder = holdStateDatabaseWriteTransaction(
+      openOpenClawStateDatabase({ env: state.env }).path,
+      10_000,
+    );
+    await holder.ready;
+    const releaseWriter = async () => {
+      holder.release();
+      await holder.joined;
+    };
+    const nativeOpen = observeNativeOpen(storePath, "main");
     const followerQueued = createDeferred();
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
-    let captures = 0;
-    const observed = vi
-      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-      .mockImplementation((...args) => {
-        const execution = capture(...args);
-        if (args[0].path === storePath) {
-          captures += 1;
-          if (captures === 1) {
-            firstCaptured.resolve();
-          }
-        }
-        return execution;
-      });
     const enqueue = agentWriteAdmission.runOpenClawAgentWorkerWrite;
     let queued = 0;
     const observedQueue = vi
@@ -231,12 +241,6 @@ it("cancels a contended persistent admission without claiming the reply or poiso
         }
         return pendingWrite;
       });
-    const runId = "cancel-worker-admission";
-    const stop = onAgentEventForRun(runId, (event) => {
-      if (event.stream === "run_status" && event.data.phase === "waiting_for_state") {
-        waiting.resolve();
-      }
-    });
     const controller = new AbortController();
     const request = {
       storePath,
@@ -246,7 +250,7 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       kind: "visible" as const,
       resetTriggered: false,
     };
-    const pending = admitReplyTurn({ ...request, runId, upstreamAbortSignal: controller.signal });
+    const pending = admitReplyTurn({ ...request, upstreamAbortSignal: controller.signal });
     void pending.catch(() => undefined);
     const followerController = new AbortController();
     let follower: Promise<Admission> | undefined;
@@ -254,13 +258,13 @@ it("cancels a contended persistent admission without claiming the reply or poiso
     try {
       await withTestTimeout(
         Promise.race([
-          Promise.all([waiting.promise, firstCaptured.promise]),
+          nativeOpen.entered,
           pending.then(() => {
             throw new Error("Admission completed before cancellation under contention");
           }),
         ]),
         5_000,
-        "Admission never reported coordinator contention",
+        "Admission never reached its native factory",
       );
       follower = admitReplyTurn({
         ...request,
@@ -281,14 +285,12 @@ it("cancels a contended persistent admission without claiming the reply or poiso
         "Concurrent admission never entered the writer queue",
       );
       controller.abort(new Error("Synthetic cancelled reply"));
-      try {
-        await expect(
-          withTestTimeout(pending, 5_000, "Cancelled admission waited for coordinator release"),
-        ).resolves.toEqual({ status: "skipped", reason: "aborted" });
-        await holder.observe();
-      } finally {
-        await releaseCoordinator();
-      }
+      await sleep(10);
+      expect(Atomics.load(holder.released, 0)).toBe(0);
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(replyRunRegistry.get(followerKey)).toBeUndefined();
+      await releaseWriter();
+      await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
       expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
       result = await follower;
       expect(result.status).toBe("owned");
@@ -301,13 +303,12 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       try {
         controller.abort();
         followerController.abort();
-        await releaseCoordinator();
+        await releaseWriter();
         result ??= await follower?.catch(() => undefined);
         await completeAdmission(result, followerKey);
         await completeAdmission(await pending.catch(() => undefined), sessionKey);
       } finally {
-        stop();
-        observed.mockRestore();
+        nativeOpen.restore();
         observedQueue.mockRestore();
       }
     }
@@ -358,9 +359,12 @@ it("keeps successors behind physical claim release when another agent occupies t
       expect(leases.all(activePath)).toHaveLength(1);
       expect(leases.all(idlePath)).toHaveLength(1);
 
-      const holder = await holdStateCoordinator(shared.path);
-      let coordinatorRelease: Promise<void> | undefined;
-      const releaseCoordinator = () => (coordinatorRelease ??= holder());
+      const holder = holdStateDatabaseWriteTransaction(shared.path, 10_000);
+      await holder.ready;
+      const releaseWriter = async () => {
+        holder.release();
+        await holder.joined;
+      };
       const sql = observeMainThreadSql({ includeClose: true });
       sql.calibrate();
       const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
@@ -373,17 +377,17 @@ it("keeps successors behind physical claim release when another agent occupies t
           settled = true;
           return result;
         });
-        await setImmediate();
-        await holder.observe();
+        await sleep(10);
+        expect(Atomics.load(holder.released, 0)).toBe(0);
         expect(settled).toBe(false);
-        await releaseCoordinator();
+        await releaseWriter();
         expect(await successor).toMatchObject({ settled: true });
         expect(replyRunRegistry.get(activeKey)).toBeUndefined();
         sql.expectIdle();
         expect(opened).not.toHaveBeenCalled();
       } finally {
         try {
-          await releaseCoordinator();
+          await releaseWriter();
           await successor;
         } finally {
           opened.mockRestore();

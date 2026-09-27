@@ -1,13 +1,10 @@
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
-import { acquireStateDatabaseCoordinator } from "../../infra/state-database-coordinator.js";
 import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
@@ -297,79 +294,20 @@ it.each(
   },
 );
 
-// A native competing holder needs a host event-loop turn to receive release.
-// Cold admission must not spend its whole lock budget blocking that turn.
-it.each(["reply", "coalesced-stop"] as const)(
-  "admits cold %s after contention without blocking release or cancelling another caller",
-  async (mode) => {
-    const root = tempDirs.make("reply-admission-contention-");
-    const storePath = path.join(root, "agent.sqlite");
-    const sessionKey = "agent:main:contention";
-    const sessionId = "contention-session";
-    sessionEntries.replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
-    closeOpenClawAgentDatabasesForTest();
-    const lease = acquireStateDatabaseCoordinator({
-      databasePath: openOpenClawStateDatabase().path,
-    });
-    const coordinatorPath = lease.path;
-    lease.release();
-    const holder = new Worker(
-      `
-    const { parentPort, workerData } = require("node:worker_threads");
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(workerData);
-    db.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
-    parentPort.postMessage("held");
-    parentPort.once("message", () => { db.exec("ROLLBACK"); db.close(); parentPort.close(); });
-  `,
-      { eval: true, execArgv: [], workerData: coordinatorPath },
-    );
-    try {
-      expect(await once(holder, "message")).toEqual(["held"]);
-      const scope = { storePath, sessionKey };
-      const controller = new AbortController();
-      const first =
-        mode === "coalesced-stop"
-          ? Promise.allSettled([
-              sessionEntries.loadSessionEntryForAdmission(scope, { signal: controller.signal }),
-            ])
-          : undefined;
-      const pending =
-        mode === "coalesced-stop"
-          ? sessionEntries.loadSessionEntryForAdmission(scope)
-          : admitReplyTurn({
-              storePath,
-              sessionKey,
-              sessionId,
-              expectedSessionId: sessionId,
-              kind: "visible",
-              resetTriggered: false,
-            });
-      if (first) {
-        controller.abort(new Error("Stop only the first caller"));
-      }
-      const release = setImmediate(() => holder.postMessage("release", []));
-      try {
-        const result = await pending;
-        if ("status" in result) {
-          expect(result.status).toBe("owned");
-          if (result.status === "owned") {
-            expect(registry.replyRunRegistry.get(sessionKey)).toBe(result.operation);
-            result.operation.complete();
-          }
-        } else {
-          expect(result.entry?.sessionId).toBe(sessionId);
-          await result.databaseClaim.release();
-          expect(await first).toMatchObject([{ status: "rejected" }]);
-        }
-      } finally {
-        clearImmediate(release);
-      }
-    } finally {
-      await holder.terminate();
-    }
-  },
-);
+it("preserves first admission to a missing durable agent store", async () => {
+  openOpenClawStateDatabase();
+  const storePath = path.join(tempDirs.make("reply-first-admission-"), "agent.sqlite");
+  const result = await sessionEntries.loadSessionEntryForAdmission({
+    storePath,
+    sessionKey: "agent:main:first",
+  });
+  try {
+    expect(result.entry).toBeUndefined();
+    expect(result.databaseClaim.isCurrent()).toBe(true);
+  } finally {
+    await result.databaseClaim.release();
+  }
+});
 
 it("cancels an in-flight admission read when its lifecycle owner interrupts ingress", async () => {
   const storePath = path.join(tempDirs.make("reply-admission-interrupt-"), "agent.sqlite");

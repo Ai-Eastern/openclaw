@@ -1,5 +1,4 @@
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
@@ -22,7 +21,6 @@ import {
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
@@ -54,9 +52,7 @@ export async function loadSessionEntryForAdmission(
   input: SessionAccessScope,
   preparation: {
     signal?: AbortSignal;
-    deadlineMs?: number;
     assertCurrent?: () => void;
-    onWait?: () => void;
   } = {},
 ): Promise<{ entry: SessionEntry | undefined; databaseClaim: SessionAdmissionDatabaseClaim }> {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
@@ -65,13 +61,9 @@ export async function loadSessionEntryForAdmission(
   const agentId = scope.agentId
     ? normalizeAgentId(scope.agentId)
     : parseAgentSessionKey(scope.sessionKey)?.agentId;
-  let waitFailure: { error: unknown } | undefined;
   const assertCurrent = () => {
     preparation.signal?.throwIfAborted();
     preparation.assertCurrent?.();
-    if (waitFailure) {
-      throw waitFailure.error;
-    }
   };
   assertCurrent();
   const incognito =
@@ -109,16 +101,6 @@ export async function loadSessionEntryForAdmission(
   }
   const candidates = captureSessionStoreReadCandidates(storePath);
   let claim: WorkerSessionAdmissionClaim | undefined;
-  const notice = preparation.onWait
-    ? setTimeout(() => {
-        try {
-          assertCurrent();
-          preparation.onWait?.();
-        } catch (error) {
-          waitFailure = { error };
-        }
-      }, 1_000)
-    : undefined;
   try {
     const result = await withSessionStoreTarget(
       { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
@@ -178,11 +160,7 @@ export async function loadSessionEntryForAdmission(
             };
             let transferred = false;
             try {
-              await execution.prepare(source, {
-                deadlineMs:
-                  preparation.deadlineMs ?? performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-                signal: preparation.signal,
-              });
+              await execution.prepare(source, preparation.signal);
               const entry = await execution.runExisting(source, (worker) =>
                 worker.execute(
                   {
@@ -233,7 +211,5 @@ export async function loadSessionEntryForAdmission(
   } catch (error) {
     await claim?.release();
     throw error;
-  } finally {
-    clearTimeout(notice);
   }
 }

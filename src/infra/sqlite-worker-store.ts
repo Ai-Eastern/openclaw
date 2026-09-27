@@ -12,7 +12,6 @@ import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
-  type SqliteWorkerStateLifecycle,
 } from "./sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -57,7 +56,6 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle: SqliteWorkerStateLifecycle = false,
 ): Promise<T> {
   return withCallerErrors(
     resolveSqliteWorkerBroker().runOperation(
@@ -66,7 +64,6 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
       stateContext,
       assertCurrent,
       createAdmission,
-      requireStateLifecycle,
     ),
   );
 }
@@ -190,10 +187,9 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
+    signal?: AbortSignal;
     assertCurrent(): void;
     createAdmission: SqliteWorkerAdmissionFactory;
-    requireStateLifecycle?: SqliteWorkerStateLifecycle;
-    signal?: AbortSignal;
   },
 ): Promise<SqliteWorkerStore<Operations> | undefined> {
   if (!isMainThread) {
@@ -211,7 +207,6 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
         onNativeStopped: custody.onNativeStopped,
-        requireStateLifecycle: custody.requireStateLifecycle,
         signal: custody.signal,
       },
     ),
