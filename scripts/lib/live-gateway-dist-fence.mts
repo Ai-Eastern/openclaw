@@ -127,10 +127,11 @@ async function tryRealpath(value: string): Promise<string> {
 
 async function loadFenceRuntime() {
   try {
-    const [layout, service, pathGuards] = await Promise.all([
+    const [layout, service, pathGuards, windowsInspection] = await Promise.all([
       import("../../src/daemon/service-layout.ts"),
       import("../../src/daemon/service.ts"),
       import("../../src/infra/path-guards.ts"),
+      import("../../src/infra/windows-powershell-spawn.ts"),
     ]);
     return {
       summarizeGatewayServiceLayout: layout.summarizeGatewayServiceLayout,
@@ -138,6 +139,7 @@ async function loadFenceRuntime() {
       readGatewayServiceState: service.readGatewayServiceState,
       resolveGatewayService: service.resolveGatewayService,
       isPathInside: pathGuards.isPathInside,
+      windowsInspectionTimeoutMs: windowsInspection.WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
     };
   } catch {
     return null;
@@ -253,7 +255,10 @@ export async function resolveLiveManagedGatewayDistFence(
         requireLoadedCommand: true,
         ...(binding.systemdReadTarget ? { systemdReadTarget: binding.systemdReadTarget } : {}),
         ...(binding.windowsStartupEntry !== undefined
-          ? { windowsStartupEntry: binding.windowsStartupEntry }
+          ? {
+              windowsStartupEntry: binding.windowsStartupEntry,
+              timeoutMs: runtime.windowsInspectionTimeoutMs,
+            }
           : {}),
       });
       const matches = await gatewayServiceCommandOverlapsPhysicalCheckout(root, state.command);

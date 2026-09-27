@@ -12,6 +12,7 @@ import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import * as gatewayService from "../../src/daemon/service.js";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../../src/test-utils/vitest-spies.js";
+import { createDeferred } from "../helpers/promise.js";
 
 function baseState(overrides: Partial<GatewayServiceState> = {}): GatewayServiceState {
   return {
@@ -595,6 +596,64 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
         });
       }),
   );
+
+  it("continues to a live sibling after a Startup file read exhausts its inspection budget", async () => {
+    await withTestDir({ prefix: "openclaw-live-dist-startup-stalled-" }, async (tmp) => {
+      await writeOpenClawPackage(tmp);
+      const startupPath = "C:\\Startup\\stalled.cmd";
+      const pending = createDeferred<Awaited<ReturnType<typeof fs.readFile>>>();
+      const entered = createDeferred();
+      const readState = gatewayService.readGatewayServiceState;
+      const readFile = fs.readFile.bind(fs);
+      let signal: AbortSignal | undefined;
+      const files = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+        if (args[0] !== startupPath) {
+          return readFile(...args);
+        }
+        const options = args[1];
+        signal = typeof options === "object" && options !== null ? options.signal : undefined;
+        entered.resolve();
+        return pending.promise;
+      });
+      try {
+        await withMockedPlatform("win32", async () => {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+          let result: Awaited<ReturnType<typeof resolveLiveManagedGatewayDistFence>> | undefined;
+          const inspection = inspectFixtureGateway(tmp, {
+            listBindings: async () => [
+              { profile: "stalled", env: {}, windowsStartupEntry: startupPath },
+              { profile: "live", env: { OPENCLAW_PROFILE: "live" } },
+            ],
+            readState: async (binding, input) =>
+              input?.windowsStartupEntry
+                ? readState(gatewayService.resolveGatewayService(), input)
+                : stateForPackage(tmp, { running: binding.profile === "live" }),
+          }).then((value) => {
+            result = value;
+          });
+          try {
+            await entered.promise;
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(signal?.aborted).toBe(true);
+            await inspection;
+            expect(result).toMatchObject({
+              refuse: true,
+              message: expect.stringContaining("profile live"),
+            });
+          } finally {
+            pending.reject(new Error("Fixture file read released"));
+            try {
+              await inspection;
+            } finally {
+              vi.useRealTimers();
+            }
+          }
+        });
+      } finally {
+        files.mockRestore();
+      }
+    });
+  });
 
   it.each([true, false])(
     "keeps distinct Startup file bindings when only the second holds dist (running=%s)",
