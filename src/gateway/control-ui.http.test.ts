@@ -41,6 +41,10 @@ import {
   registerControlUiUploadConfigTests,
 } from "./control-ui.bootstrap.test-support.js";
 import {
+  createTrustedProxyHeaders,
+  setupTrustedProxyAuth,
+} from "./control-ui.http.test-support.js";
+import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -263,28 +267,6 @@ describe("handleControlUiHttpRequest", () => {
     return { res, end, setHeader, handled };
   }
 
-  function createTrustedProxyAuth(): ResolvedGatewayAuth {
-    return {
-      mode: "trusted-proxy",
-      allowTailscale: false,
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-      },
-    };
-  }
-
-  function createTrustedProxyHeaders(
-    extraHeaders: IncomingMessage["headers"] = {},
-  ): IncomingMessage["headers"] {
-    return {
-      host: "gateway.example.com",
-      "x-forwarded-user": "nick@example.com",
-      "x-forwarded-for": "203.0.113.10",
-      "x-forwarded-proto": "https",
-      ...extraHeaders,
-    };
-  }
-
   async function runTrustedProxyAssistantMediaRequest(params: {
     filePath: string;
     meta?: boolean;
@@ -293,7 +275,7 @@ describe("handleControlUiHttpRequest", () => {
     return await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?${params.meta ? "meta=1&" : ""}source=${encodeURIComponent(params.filePath)}`,
       method: "GET",
-      auth: createTrustedProxyAuth(),
+      auth: setupTrustedProxyAuth(),
       trustedProxies: ["10.0.0.1"],
       remoteAddress: "10.0.0.1",
       headers: createTrustedProxyHeaders(params.headers),
@@ -309,7 +291,7 @@ describe("handleControlUiHttpRequest", () => {
     return await runAvatarRequest({
       url: `/avatar/${params.agentId ?? "main"}${params.meta ? "?meta=1" : ""}`,
       method: "GET",
-      auth: createTrustedProxyAuth(),
+      auth: setupTrustedProxyAuth(),
       trustedProxies: ["10.0.0.1"],
       remoteAddress: "10.0.0.1",
       headers: createTrustedProxyHeaders(params.headers),

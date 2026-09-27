@@ -4,6 +4,7 @@ import {
   listCoreGatewayHandlerMethodNames,
   type CoreGatewayHandlerFamily,
 } from "../methods/core-method-policy.js";
+import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -146,6 +147,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "hooks-status": () => import("./hooks-status.js").then((module) => module.hooksStatusHandlers),
   skills: () => import("./skills.js").then((module) => module.skillsHandlers),
   system: () => import("./system.js").then((module) => module.systemHandlers),
+  presence: () => import("./presence.js").then((module) => module.presenceHandlers),
   talk: () => import("../talk/handlers/index.js").then((module) => module.talkHandlers),
   // Mode synchronization does not depend on loading speech or realtime providers.
   "talk-mode": () => import("../talk/handlers/mode.js").then((module) => module.talkModeHandlers),
@@ -185,3 +187,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
     ),
   ),
 );
+
+// The canonical agent owner reconciles authorized receipts before admitting new input.
+// Overrides retain the router fence; a method name alone cannot delegate admission.
+export function defersAgentUploadAdmission(
+  method: string,
+  registry: Pick<GatewayMethodRegistryView, "getHandler">,
+): boolean {
+  return method === "agent" && registry.getHandler(method) === coreGatewayHandlers.agent;
+}

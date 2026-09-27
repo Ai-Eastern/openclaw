@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getMediaDir } from "../media/store.js";
+import { handleGatewayRequest } from "./server-methods.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { handleDirectExternalChatSend } from "./server-methods/chat-send-external-entry.js";
@@ -36,6 +37,7 @@ describe("client upload policy at the input commit owner", () => {
     ["sessions.send", "inline-image", "policy"],
     ["sessions.create", "document", "policy"],
     ["agent", "offloaded-image", "stop"],
+    ["agent", "offloaded-image", "stop-and-policy"],
   ] as const)(
     "settles %s %s when %s interrupts the real media writer",
     async (method, kind, interruption) => {
@@ -113,7 +115,7 @@ describe("client upload policy at the input commit owner", () => {
           }),
         ]);
         let stoppedPayload: unknown;
-        if (interruption === "stop") {
+        if (interruption !== "policy") {
           const abortRespond = vi.fn<RespondFn>();
           const abortParams = { sessionKey: f.sessionKey, agentId: "main", runId: f.runId };
           await handleChatAbortRequest({
@@ -130,7 +132,8 @@ describe("client upload policy at the input commit owner", () => {
             status: "timeout",
             stopReason: "rpc",
           });
-        } else {
+        }
+        if (interruption !== "stop") {
           committedConfig = {
             ...committedConfig,
             gateway: { ...committedConfig.gateway, uploads: { enabled: false } },
@@ -140,7 +143,7 @@ describe("client upload policy at the input commit owner", () => {
         await pending;
         await f.drain();
         expect(intercepted).toBe(true);
-        if (interruption === "stop") {
+        if (interruption !== "policy") {
           expect(respond).toHaveBeenCalledExactlyOnceWith(
             true,
             stoppedPayload,
@@ -148,6 +151,33 @@ describe("client upload policy at the input commit owner", () => {
             expect.objectContaining({ cached: true }),
           );
           expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toEqual(stoppedPayload);
+          if (interruption === "stop-and-policy") {
+            const replayRespond = vi.fn<RespondFn>();
+            await handleGatewayRequest({
+              ...handlerOptions,
+              req: { ...handlerOptions.req, id: f.runId + "-retry" },
+              respond: replayRespond,
+            });
+            expect(replayRespond).toHaveBeenCalledExactlyOnceWith(
+              true,
+              stoppedPayload,
+              undefined,
+              expect.objectContaining({ cached: true }),
+            );
+            const freshRespond = vi.fn<RespondFn>();
+            const freshParams = { ...requestParams, idempotencyKey: f.runId + "-fresh" };
+            await handleGatewayRequest({
+              ...handlerOptions,
+              req: { ...handlerOptions.req, id: f.runId + "-fresh", params: freshParams },
+              respond: freshRespond,
+            });
+            expect(freshRespond.mock.calls.some(([ok]) => ok)).toBe(false);
+            expect(freshRespond.mock.calls.at(-1)?.[2]).toMatchObject({
+              code: "FORBIDDEN",
+              details: { code: "UPLOADS_DISABLED" },
+            });
+            expect(f.context.dedupe.has(`agent:${f.runId}-fresh`)).toBe(false);
+          }
         } else if (method === "sessions.create") {
           // Creation remains committed; only its initial input is rejected.
           expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({

@@ -125,6 +125,34 @@ export function createAgentDedupeLifecycle(params: {
     }
   };
 
+  const handlePreparationFailure =
+    (assertCallerCurrent: (() => void) | undefined) =>
+    (error: unknown): undefined => {
+      assertCallerCurrent?.();
+      // Preparation refusal must preserve the cached Stop or replacement response.
+      if (
+        !ownsReservation() &&
+        replayAgentTurnIfCached({
+          preflight: params,
+          context: params.context,
+          io: params.io,
+          acceptedOnly: params.privateCompletion,
+        })
+      ) {
+        return undefined;
+      }
+      if (error instanceof AgentRequestReservationEndedError) {
+        logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", error);
+        params.io.emitAcceptance([
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(error)),
+        ]);
+        return undefined;
+      }
+      throw error;
+    };
+
   const recordCommittedReset = (
     completion: CommittedResetCompletion,
     followUpNotice: string,
@@ -278,21 +306,7 @@ export function createAgentDedupeLifecycle(params: {
     ownsReservation,
     ownedReservationKeys,
     assertReservationCurrent,
-    settleContentPreparationError: (error: unknown) => {
-      if (!(error instanceof AgentRequestReservationEndedError)) {
-        throw error;
-      }
-      // Stop may publish its terminal receipt while attachment preparation waits.
-      if (!replayAgentTurnIfCached({ preflight: params, context: params.context, io: params.io })) {
-        logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", error);
-        params.io.emitAcceptance([
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, String(error)),
-        ]);
-      }
-      return undefined;
-    },
+    handlePreparationFailure,
     reserve,
     bindSessionTarget,
     clearUnaccepted,

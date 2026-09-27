@@ -4,10 +4,7 @@ import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "../agent-turn/principal.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import {
-  captureGatewayClientUploadCommitGuard,
-  gatewayClientUploadPolicyError,
-} from "../upload-policy.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -22,16 +19,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   hasCurrentClientAuthority,
   sessionMutationCommitGuard,
 }) => {
-  const uploadError = gatewayClientUploadPolicyError({
-    method: "agent",
-    requestParams: params,
-    client,
-    context,
-  });
-  if (uploadError) {
-    respond(false, undefined, uploadError);
-    return;
-  }
   const assertUploadAllowed = captureGatewayClientUploadCommitGuard({
     method: "agent",
     requestParams: params,
@@ -74,10 +61,8 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   });
   try {
     await createAgentTurnService({ context, isWebchatConnect }).startTurn({
-      assertAdmissionCurrent: () => {
-        assertUploadAllowed?.();
-        runtimeAuthority.commitGuard?.();
-      },
+      assertAdmissionCurrent: runtimeAuthority.commitGuard,
+      assertInputCommitAllowed: assertUploadAllowed,
       hasCurrentClientAuthority,
       preflight,
       principal,

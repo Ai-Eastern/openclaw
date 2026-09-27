@@ -56,6 +56,21 @@ export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
   );
 }
 
+export function resolveAgentWaitSource(
+  context: Pick<GatewayRequestContext, "chatAbortControllers" | "dedupe">,
+  runId: string,
+): "agent" | "chat" | undefined {
+  const activeChatEntry = context.chatAbortControllers.get(runId);
+  if (activeChatEntry) {
+    return activeChatEntry.kind === "agent" ? "agent" : "chat";
+  }
+  // Cancellation can retire the controller before dispatch publishes its result;
+  // sessionless admissions also retain their RPC owner in the accepted dedupe.
+  return isAcceptedAgentDedupePayload(context.dedupe.get(`agent:${runId}`)?.payload)
+    ? "agent"
+    : undefined;
+}
+
 function isPreRegistrationAbortedAgentDedupePayload(payload: unknown): payload is {
   agentId?: unknown;
   runId?: unknown;
