@@ -231,7 +231,6 @@ async function invoke(
       {
         json: true,
         yes: true,
-        restart: false,
         timeout: "15",
         deferCompletionCache: true,
       },
@@ -806,7 +805,6 @@ describe("update orchestration lifecycle ownership", () => {
       channel: "beta",
       json: true,
       yes: true,
-      restart: false,
       deferCompletionCache: true,
     });
     expectSuccess("repair");
