@@ -112,6 +112,7 @@ describe("runDoctorHealthFlow", () => {
             return kind.startsWith("absent")
               ? null
               : {
+                  ...(windows ? { sourcePath: path.join(foreignRoot, "gateway.cmd") } : {}),
                   programArguments: [process.execPath, entrypoint, "gateway"],
                   environment: {
                     OPENCLAW_STATE_DIR: foreign ? state.path("foreign-state") : state.stateDir,
