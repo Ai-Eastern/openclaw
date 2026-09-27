@@ -55,7 +55,7 @@ Bun remains usable as an optional package-script runner. The default package man
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 
-- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 24.16+ or 26.1+, with Node 26 recommended)
+- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw's Node runtime requires 24.16+ or 26.1+, with Node 26 recommended; [Bun-only installs](/install/bun-compatibility#bun-only-installs) use an explicit launcher contract)
 - `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts)
 
 If you hit a runtime issue that needs these scripts, trust them explicitly:

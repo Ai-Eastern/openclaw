@@ -5,6 +5,7 @@ import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 const state = vi.hoisted(() => ({
   stop: new Error("stop after read-only target resolution"),
   selected: undefined as ResolvedGlobalInstallTarget | undefined,
+  runner: undefined as string | undefined,
   calls: [] as string[][],
 }));
 vi.mock("../../infra/update-global.js", async (original) => {
@@ -53,6 +54,7 @@ import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 beforeEach(() => {
   state.selected = undefined;
+  state.runner = undefined;
   state.calls = [];
 });
 const rootB = path.resolve(".n1-fixture/B/node_modules/openclaw");
@@ -85,6 +87,7 @@ async function resolve(servicePlan: {
       1000,
     ),
   ).rejects.toBe(state.stop);
+  state.runner = recovery.triageTarget.nodeRunner;
   return state.selected;
 }
 it("keeps writable rebind target B without a recognized service Node instead of PATH npm A", async () => {
@@ -92,6 +95,7 @@ it("keeps writable rebind target B without a recognized service Node instead of 
   expect(selected?.packageRoot).toBe(rootB);
   expect(selected?.directNodeModulesRoot).toBe(true);
   expect(state.calls.some((argv) => argv[1] === "root")).toBe(false);
+  expect(state.runner).toBe(process.versions.bun ? undefined : "/current/node");
 });
 it("keeps writable target B with an explicit service Node", async () => {
   expect(

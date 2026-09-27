@@ -169,6 +169,125 @@ describe("install runtime enforcement", () => {
     expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node missing"));
   });
 
+  it.each([
+    {
+      name: "no marker",
+      launcher: undefined,
+      bun: "1.4.3",
+      persistent: undefined,
+      accepted: false,
+      error: "detected Node missing",
+    },
+    {
+      name: "supported launcher",
+      launcher: "/opt/bun/bin/bun",
+      bun: "1.4.3",
+      persistent: undefined,
+      accepted: true,
+      error: undefined,
+    },
+    {
+      name: "old launcher",
+      launcher: "/opt/bun/bin/bun",
+      bun: "1.3.9",
+      persistent: undefined,
+      accepted: false,
+      error: "Bun launcher /opt/bun/bin/bun requires Bun 1.4+",
+    },
+    {
+      name: "relative launcher",
+      launcher: "bin/bun",
+      bun: "1.4.3",
+      persistent: undefined,
+      accepted: false,
+      error: "detected Node missing",
+    },
+    {
+      name: "persistent old Node after the shim",
+      launcher: "/opt/bun/bin/bun",
+      bun: "1.4.3",
+      persistent: "old-node",
+      accepted: false,
+      error: "detected Node 24.14.1",
+    },
+    {
+      name: "different Bun-backed node before the shim",
+      launcher: "/opt/bun/bin/bun",
+      bun: "1.4.3",
+      persistent: "other-bun",
+      accepted: false,
+      error: "detected Node missing",
+    },
+  ])(
+    "enforces the explicit Bun launcher contract: $name",
+    ({ launcher, bun, persistent, accepted, error }) => {
+      const reportError = vi.fn();
+      const run = vi.fn(
+        (
+          _command: string,
+          _args: string[],
+          options: { env: NodeJS.ProcessEnv; timeout: number },
+        ) => {
+          expect(options.env).not.toHaveProperty("NODE_OPTIONS");
+          expect(options.env).not.toHaveProperty("Node_Options");
+          expect(options.timeout).toBe(10_000);
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              version: persistent === "old-node" ? "24.14.1" : "24.3.0",
+              bunVersion: persistent === "old-node" ? null : bun,
+              execPath: _command,
+            }),
+          };
+        },
+      );
+      const result = enforceSupportedNodeRuntime(
+        {
+          bunVersion: "1.4.3",
+          engine: EXPECTED_NODE_ENGINE_RANGE,
+          probeNodeRuntime: () =>
+            probePackageCliNodeRuntime({
+              cwd: "/work/openclaw",
+              execPath: "/opt/bun/bin/bun",
+              realpath: (candidate) =>
+                candidate === "/tmp/bun-node-fixture/node" ? "/opt/bun/bin/bun" : candidate,
+              platform: "linux",
+              env: {
+                OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher,
+                NODE_OPTIONS: "--require=fixture.cjs",
+                Node_Options: "--require=other-fixture.cjs",
+              },
+              pathEnv: [
+                "/work/openclaw/node_modules/.bin",
+                "/work/node_modules/.bin",
+                "/node_modules/.bin",
+                ...(persistent === "other-bun" ? ["/other-bun/bin"] : []),
+                "/tmp/bun-node-fixture",
+                ...(persistent === "old-node" ? ["/opt/node/bin"] : []),
+              ].join(":"),
+              run,
+            }),
+        },
+        reportError,
+      );
+      expect(result).toBe(accepted);
+      if (error) {
+        expect(reportError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(error));
+      } else {
+        expect(reportError).not.toHaveBeenCalled();
+      }
+      expect(run.mock.calls.map(([command]) => command)).toEqual(
+        persistent === "old-node"
+          ? ["/opt/node/bin/node"]
+          : persistent === "other-bun"
+            ? ["/other-bun/bin/node"]
+            : launcher?.startsWith("/")
+              ? [launcher]
+              : [],
+      );
+    },
+  );
+
   it("strips only Bun's cwd-to-root lifecycle PATH prefix", () => {
     const candidates: string[] = [];
     const runtime = probePackageCliNodeRuntime({

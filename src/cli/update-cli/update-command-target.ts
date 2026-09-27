@@ -361,7 +361,9 @@ export async function resolveUpdateCommandTarget(
           printManagedServicePackageUpdatePlan(servicePlan);
         }
         packageUpdateNodeRunner = managedServiceRoot
-          ? resolveNodeRunner()
+          ? process.versions.bun
+            ? undefined
+            : resolveNodeRunner()
           : managedServiceNodeRunner;
       }
 

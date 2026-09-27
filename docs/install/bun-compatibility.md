@@ -66,6 +66,22 @@ If you previously used a preload that calls `Database.setCustomSQLite()`, remove
 
 When the KNN child cannot load extensions, memory search falls back to a batched embedding scan. It preserves provider and source filters and cancellation checks between batches, but can be slower on large indexes. See [Memory configuration](/reference/memory-config).
 
+## Bun-only installs
+
+Pin the Gateway service to your Bun executable so updates and Doctor retain it:
+
+```sh
+openclaw gateway install --runtime-path <bun> --force
+```
+
+Update, repair, and Doctor maintenance children use the running Bun executable. The Bun package-manager command resolves as `bun` from PATH; the CLI prepends its own executable directory, so the executable must be named `bun` for package-manager operations.
+
+First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4+. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
+
+Published updaters through 2026.9.6 do not set this marker, so staging a newer package also refuses before mutation on a Bun-only host. They also refuse managed-service updates with `target-native-unsupported` because they launch a bare `node` probe before stopping the Gateway, which keeps running. A fixed version must drive the update; installing a fixed candidate cannot change the updater already running.
+
+Npm-sourced plugins still require npm and Node.
+
 ## Known limitations
 
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
@@ -83,6 +99,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                               |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                           |
 | Unreleased (main)                  | Expands Bun SQLite storage from four databases to up to 64 dedicated workers within the existing 64-client cap while retaining worker-exit cleanup.                                                  |
 | Unreleased (main)                  | Managed Bun services on macOS persist OPENCLAW_SQLITE_LIBRARY and HOMEBREW_PREFIX from the installing shell.                                                                                         |
 | Unreleased (main)                  | Daemon install, repair, doctor, and service audits probe Bun executables through the same SQLite library selection as Gateway startup, with a minimal probe environment. #142186                     |

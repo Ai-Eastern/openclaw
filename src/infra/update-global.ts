@@ -605,6 +605,9 @@ export async function createGlobalInstallEnv(
   applyCorepackDownloadPromptEnv(merged);
   applyNpmFreshnessBypassEnv(merged);
   applyPosixNpmScriptShellEnv(merged);
+  if (process.versions.bun) {
+    merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
+  }
   return merged;
 }
 
