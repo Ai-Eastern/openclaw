@@ -1,6 +1,7 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { createConfigIO } from "../config/io.factory.js";
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -13,6 +14,7 @@ import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
@@ -250,6 +252,11 @@ export async function readAdmittedConfigSnapshot(params: {
           pluginValidation: "core-only",
         }),
       );
+      // State admission depends on readable config; retain its failure instead of
+      // reclassifying a second storage failure as required offline maintenance.
+      if (isConfigReadFailure(selected)) {
+        return { snapshot: selected };
+      }
       const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
       const coreRecovery = await measureDoctorConfigPreflightStep("admission.core-recovery", () =>
         createConfigIO({
@@ -305,7 +312,9 @@ export async function readAdmittedConfigSnapshot(params: {
       }
       return { ...read, ...(recovery ? { recovery } : {}) };
     } catch (error) {
-      if (error instanceof ExitError) {
+      // Only an explicit maintenance refusal can park a managed Gateway.
+      // Unavailable reads, scratch allocation, and cleanup retain their ordinary failure.
+      if (error instanceof ExitError || !findStartupMaintenanceRequiredError(error)) {
         throw error;
       }
       return throwStartupMigrationRefusal(formatErrorMessage(error), error);

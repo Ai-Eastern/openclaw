@@ -26,6 +26,7 @@ import {
 } from "./ed25519-signature.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 export type { DeviceIdentity } from "./device-identity-store.js";
 
@@ -62,7 +63,8 @@ export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOption
     pathMayExistSync(`${legacyPath}${NATIVE_CLAIM_SUFFIX}`) ||
     pathMayExistSync(legacyPath)
   ) {
-    throw new Error(
+    throw new StartupMaintenanceRequiredError(
+      "state-migrations",
       `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
     );
   }

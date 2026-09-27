@@ -1,5 +1,4 @@
 // Gateway run option resolution and local server startup command implementation.
-import fs from "node:fs";
 import { asOptionalObjectRecord, expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -15,10 +14,13 @@ import type {
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
+  createConfigReadError,
+  formatInvalidConfigDetails,
+  isConfigReadFailure,
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
 } from "../../config/io.invalid-config.js";
-import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
+import { normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -168,26 +170,27 @@ async function readGatewayStartupConfig(params: {
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<{
   cfg: OpenClawConfig;
-  snapshot: ConfigFileSnapshot | null;
-  startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+  snapshot: ConfigFileSnapshot;
+  startupConfigSnapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
-    await params.startupTrace.measure("cli.config-snapshot", () =>
-      readConfigFileSnapshotWithPluginMetadata({
-        isolateEnv: true,
-        observe: false,
-        ...(Object.keys(params.lowerPrecedenceEnv).length > 0
-          ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
-          : {}),
-      }).catch(() => null),
-    );
-  const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
-  const cfg = snapshot?.config ?? {};
+  const snapshotRead = await params.startupTrace.measure("cli.config-snapshot", () =>
+    readConfigFileSnapshotWithPluginMetadata({
+      isolateEnv: true,
+      observe: false,
+      ...(Object.keys(params.lowerPrecedenceEnv).length > 0
+        ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
+        : {}),
+    }),
+  );
+  const { snapshot } = snapshotRead;
+  if (!snapshot.valid && isConfigReadFailure(snapshot)) {
+    throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+  }
   return {
-    cfg,
+    cfg: snapshot.config,
     snapshot,
-    ...(snapshotRead ? { startupConfigSnapshotRead: snapshotRead } : {}),
+    startupConfigSnapshotRead: snapshotRead,
   };
 }
 
@@ -275,7 +278,7 @@ async function readGatewayStartupConfigWithShellEnv(params: {
         startupTrace: params.startupTrace,
       });
       const plan = await resolveGatewayRunShellEnvFallbackPlan(
-        startupConfig.snapshot?.valid === true ? startupConfig.cfg : {},
+        startupConfig.snapshot.valid ? startupConfig.cfg : {},
       );
       const planSignature = JSON.stringify(plan);
       if (!plan.enabled) {
@@ -575,39 +578,37 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   ) {
     return;
   }
-  if (snapshot) {
-    const { applyFinalGatewayRunConfigEnv } = await import("./pre-bootstrap.js");
-    if (
-      !(await applyFinalGatewayRunConfigEnv({
-        lowerPrecedenceEnv,
-        runtime: defaultRuntime,
-        snapshot,
-      }))
-    ) {
-      return;
+  const { applyFinalGatewayRunConfigEnv } = await import("./pre-bootstrap.js");
+  if (
+    !(await applyFinalGatewayRunConfigEnv({
+      lowerPrecedenceEnv,
+      runtime: defaultRuntime,
+      snapshot,
+    }))
+  ) {
+    return;
+  }
+  const finalConfigEnteredServiceMode = Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
+  const clearRejectedFinalConfigEnv = () => {
+    clearGatewayRunConfigEnvironment();
+    if (finalConfigEnteredServiceMode) {
+      delete process.env[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
     }
-    const finalConfigEnteredServiceMode = Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
-    const clearRejectedFinalConfigEnv = () => {
-      clearGatewayRunConfigEnvironment();
-      if (finalConfigEnteredServiceMode) {
-        delete process.env[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
-      }
-    };
-    let finalConfigAllowed: boolean;
-    try {
-      finalConfigAllowed = enforceGatewayRunFutureConfigGuard({
-        opts,
-        runtime: defaultRuntime,
-        snapshot,
-      });
-    } catch (err) {
-      clearRejectedFinalConfigEnv();
-      throw err;
-    }
-    if (!finalConfigAllowed) {
-      clearRejectedFinalConfigEnv();
-      return;
-    }
+  };
+  let finalConfigAllowed: boolean;
+  try {
+    finalConfigAllowed = enforceGatewayRunFutureConfigGuard({
+      opts,
+      runtime: defaultRuntime,
+      snapshot,
+    });
+  } catch (err) {
+    clearRejectedFinalConfigEnv();
+    throw err;
+  }
+  if (!finalConfigAllowed) {
+    clearRejectedFinalConfigEnv();
+    return;
   }
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
@@ -783,13 +784,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const tokenRaw = toOptionString(opts.token);
 
   gatewayLog.info("resolving authentication…");
-  const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
-  const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
-  const mode = effectiveCfg.gateway?.mode;
   const guardErrors = getGatewayStartGuardErrors({
     allowUnconfigured: opts.allowUnconfigured,
-    configExists,
-    mode,
+    configExists: snapshot.exists,
+    mode: cfg.gateway?.mode,
   });
   if (guardErrors.length > 0) {
     for (const error of guardErrors) {
@@ -798,7 +796,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
-  const miskeys = extractGatewayMiskeys(snapshot?.parsed);
+  const miskeys = extractGatewayMiskeys(snapshot.parsed);
   const authOverride =
     authMode || passwordRaw || tokenRaw || authModeRaw
       ? {
@@ -884,7 +882,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");
-  let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
+  let startupConfigSnapshotReadForNextStart:
+    | ReadConfigFileSnapshotWithPluginMetadataResult
+    | undefined = startupConfigSnapshotRead;
   const envSidecarStartupMode =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)

@@ -23,6 +23,7 @@ import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
+import { failedGatewayRunConfigSnapshot } from "./run-config.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -2197,90 +2198,76 @@ describe("gateway run option collisions", () => {
     }
   });
 
-  it("blocks startup when the observed snapshot loses gateway.mode", async () => {
-    configState.cfg = {
-      gateway: {
-        mode: "local",
-      },
-    };
+  it.each([
+    { label: "missing gateway.mode", valid: true, config: { update: { channel: "beta" } } },
+    { label: "invalid config", valid: false, config: {} },
+  ])("blocks startup with $label without automatic recovery", async ({ valid, config }) => {
     configState.snapshot = {
       exists: true,
-      valid: true,
-      config: {
-        update: { channel: "beta" },
-      },
-      parsed: {
-        update: { channel: "beta" },
-      },
-    };
-
-    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:78");
-
-    expect(runtimeErrors).toContain(
-      "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
-    );
-    expect(runtimeErrors).toContain(`Config write audit: ${CONFIG_AUDIT_STORE_LABEL}`);
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(readBestEffortConfig).not.toHaveBeenCalled();
-  });
-
-  it("blocks invalid startup config without automatic recovery", async () => {
-    configState.cfg = {};
-    configState.snapshot = {
-      exists: true,
-      valid: false,
+      valid,
       path: "/tmp/openclaw-test-missing-config.json",
-      config: {},
-      parsed: null,
-      issues: [{ path: "<root>", message: "JSON5 parse failed" }],
+      config,
+      parsed: valid ? config : null,
+      issues: valid ? [] : [{ path: "<root>", message: "JSON5 parse failed" }],
       legacyIssues: [],
     };
-
     await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:78");
-
     expect(runtimeErrors).toContain(
       "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
     );
     expect(runtimeErrors).toContain(`Config write audit: ${CONFIG_AUDIT_STORE_LABEL}`);
     expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledOnce();
     expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
   });
 
-  it("keeps explicit dev reset as the recovery path for invalid config", async () => {
-    configState.snapshot = {
-      exists: true,
-      valid: false,
-      path: "/tmp/openclaw-test-missing-config.json",
-      config: {},
-      parsed: null,
-      issues: [{ path: "<root>", message: "JSON5 parse failed" }],
-      legacyIssues: [],
-    };
+  it.each(["rejected", "unavailable"])(
+    "preserves a %s final read before mode validation",
+    async (kind) => {
+      const failure = Object.assign(new Error("configuration storage unavailable"), {
+        code: "ENOSPC",
+      });
+      if (kind === "rejected") {
+        readConfigFileSnapshotWithPluginMetadata.mockRejectedValueOnce(failure);
+      } else {
+        readConfigFileSnapshotWithPluginMetadata.mockResolvedValueOnce({
+          snapshot: failedGatewayRunConfigSnapshot([
+            { path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" },
+          ]),
+        });
+      }
+      const error = await runGatewayCli(["gateway", "run"]).catch((error: unknown) => error);
+      if (kind === "rejected") {
+        expect(error).toBe(failure);
+      } else {
+        expect(error).toMatchObject({ code: "CONFIG_READ_FAILED" });
+      }
+      expect(startGatewayServer).not.toHaveBeenCalled();
+      expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
+    },
+  );
 
-    await prepareGatewayReset();
-    await runGatewayCli(["gateway", "--dev", "--reset", "--allow-unconfigured"]);
-
-    expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
-  });
-
-  it("passes invalid startup snapshot through when explicitly allowed", async () => {
-    configState.cfg = {};
-    configState.snapshot = {
-      exists: true,
-      valid: false,
-      path: "/tmp/openclaw-test-missing-config.json",
-      config: {},
-      parsed: null,
-      issues: [{ path: "<root>", message: "JSON5 parse failed" }],
-      legacyIssues: [],
-    };
-
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
-
-    const options = gatewayStartOptions();
-    expect(options.bind).toBe("loopback");
-    expect(options.startupConfigSnapshotRead?.snapshot?.valid).toBe(false);
-  });
+  it.each([false, true])(
+    "allows explicit invalid-config startup (dev reset: %s)",
+    async (reset) => {
+      configState.snapshot = failedGatewayRunConfigSnapshot();
+      if (reset) {
+        await prepareGatewayReset();
+      }
+      await runGatewayCli([
+        "gateway",
+        ...(reset ? ["--dev", "--reset"] : ["run"]),
+        "--allow-unconfigured",
+      ]);
+      if (reset) {
+        expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
+      } else {
+        const options = gatewayStartOptions();
+        expect(options.bind).toBe("loopback");
+        expect(options.startupConfigSnapshotRead?.snapshot?.valid).toBe(false);
+      }
+    },
+  );
 
   it("does not offer doctor repair after --allow-unconfigured reaches startup", async () => {
     const { createInvalidConfigError } = await import("../../config/io.invalid-config.js");
