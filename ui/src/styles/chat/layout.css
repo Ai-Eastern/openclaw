@@ -642,8 +642,8 @@ openclaw-pending-session-create {
 }
 
 .chat-thread-inner--virtual {
-  /* Only measured rows extend the scroll range; intrinsic overflow can still paint. */
-  contain: layout;
+  /* The owner sets the height; isolate intrinsic row sizing without clipping paint. */
+  contain: size layout;
 }
 
 .chat-virtual-block {
