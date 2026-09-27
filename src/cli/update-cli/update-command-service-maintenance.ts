@@ -151,20 +151,6 @@ async function abortWindowsTaskUpdateIfInterrupted(
   throw new UpdateCommandAbort();
 }
 
-export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-  stopState: PreManagedServiceStop | undefined,
-  restartSafe?: boolean,
-  guard?: () => Promise<void>,
-  assertCurrent?: () => void,
-): Promise<void> {
-  if (!stopState?.windowsTaskAutoStartRecovery) {
-    return;
-  }
-  // Activation needs an enabled task; retain its owner until verification can
-  // commit that restoration or compensate a failed update.
-  await stopState.windowsTaskAutoStartRecovery.restore(restartSafe, guard, assertCurrent);
-}
-
 type ManagedServiceStopParams = {
   recovery?: unknown;
   updateRun?: UpdateCommandOptions["run"];

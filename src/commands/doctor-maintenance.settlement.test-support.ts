@@ -118,7 +118,6 @@ vi.mock("../state/openclaw-database-preflight.js", () => ({
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: boundary.stop,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: boundary.resume,
   revalidateManagedGatewayServiceAfterUpdate: boundary.revalidate,
 }));
 vi.mock("../daemon/service.js", () => ({
@@ -202,7 +201,7 @@ beforeEach(() => {
       suspended: Promise.resolve(true),
       beginMutation: () => {},
       assertRecoveryCurrent: () => {},
-      restore: async () => {},
+      restore: boundary.resume,
       handoff: () => {},
       complete: boundary.complete,
       interrupted: () => false,

@@ -111,6 +111,13 @@ continues serving. This check observes current services; it does not prevent a
 service from starting during compilation, and unavailable inspection does not
 prove that no Gateway is running.
 
+Discovery uses installed service definitions and the invoking service selector.
+A bare systemd template is checked for the current OS account. Other active
+template instances without an installed instance definition or an explicit
+selector are not enumerated. Stop those instances with their native service
+commands before building. System LaunchDaemon runtime inspection is also outside
+this check.
+
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference
 for a source-server update: it fails closed on all tracked local changes,
@@ -161,8 +168,11 @@ Updating target files alone does not repair an older running binary.
 The published 2026.9.4 source-server script also builds before its final restart.
 Candidate build entry points recognize its existing update marker only when the
 selected, natively owned Gateway serves this checkout's physical `dist`. The
-existing source-build transaction stops that Gateway before writing and restores
-the previous output on a settled build failure. A separate candidate checkout or
+existing source-build transaction stops that Gateway before writing. On a settled
+build failure, it restores the previous output and restarts the selected service
+through its native owner, preserving its definition and rechecking its binding.
+The original build failure remains visible; a custom shell restart command runs
+only after a successful build in the old caller. A separate candidate checkout or
 a sibling-only match never grants permission to stop another service.
 If that native stop partially succeeds and then fails, the candidate revalidates
 and restarts the original service through its native owner, without running a

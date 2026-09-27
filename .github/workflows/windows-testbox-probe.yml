@@ -628,8 +628,27 @@ jobs:
             $armRoot = if ($paired) { Join-Path $env:RUNNER_TEMP "startup-comparison/$arm" } else { $env:RUNNER_TEMP }
             $candidateDir = Join-Path $armRoot "startup-package-resolved"
             $artifactDir = Join-Path $env:RUNNER_TEMP $(if ($arm -eq "candidate") { "startup-package-comparison-input" } else { "startup-package-input" })
-            node --import ./scripts/tsx.mjs scripts/resolve-openclaw-package-candidate.mts --source artifact --artifact-dir $artifactDir --package-sha256 $binding.packageSha256 --output-dir $candidateDir --metadata (Join-Path $candidateDir "package-candidate.json")
-            if ($LASTEXITCODE -ne 0) { throw "Canonical package resolution failed." }
+            $validationRoot = Join-Path $env:GITHUB_WORKSPACE ".tmp/package-validation-$arm"
+            if (Test-Path -LiteralPath $validationRoot) { throw "Package validation scratch must be fresh." }
+            New-Item -ItemType Directory -Path $validationRoot | Out-Null
+            $previousTemps = @{}
+            $resolverExitCode = $null
+            try {
+              foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+                $previousTemps[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+                [Environment]::SetEnvironmentVariable($name, $validationRoot, "Process")
+              }
+              $observedTemp = (node -p 'require("node:os").tmpdir()').Trim()
+              if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFullPath($observedTemp) -ine [IO.Path]::GetFullPath($validationRoot)) { throw "Package validation scratch was not selected." }
+              @{ temporaryRoot = $observedTemp; previous = $previousTemps; scope = "canonical package validation only" } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "${prefix}package-validation-temp.json")
+              node --import ./scripts/tsx.mjs scripts/resolve-openclaw-package-candidate.mts --source artifact --artifact-dir $artifactDir --package-sha256 $binding.packageSha256 --output-dir $candidateDir --metadata (Join-Path $candidateDir "package-candidate.json")
+              $resolverExitCode = $LASTEXITCODE
+            } finally {
+              foreach ($name in $previousTemps.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $previousTemps[$name], "Process")
+              }
+            }
+            if ($resolverExitCode -ne 0) { throw "Canonical package resolution failed." }
             $candidate = Get-Content -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Raw | ConvertFrom-Json
             if ($candidate.packageSourceSha -cne $binding.sourceSha -or $candidate.sha256 -cne $binding.packageSha256) { throw "Resolved source or package bytes differ." }
             Copy-Item -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Destination (Join-Path $evidence "${prefix}package-candidate.json")

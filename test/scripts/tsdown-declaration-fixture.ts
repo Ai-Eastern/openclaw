@@ -149,7 +149,6 @@ export function createFixture(groups: readonly string[], root: string) {
     "tsx",
     "esbuild",
     "import-meta-resolve",
-    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS ? ["pretty-ms"] : []),
   ]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -209,6 +208,9 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/shared/pid-alive.ts",
     "src/infra/process-env.ts",
     "src/infra/windows-process-start.ts",
+    "src/infra/format-time/duration-units.ts",
+    "src/infra/format-time/format-duration-exact.ts",
+    "src/infra/format-time/format-duration-internal.ts",
     "src/infra/node-runtime-executable.ts",
     "src/infra/runtime-dependency-ownership.ts",
     "src/shared/non-packaged-plugin-dirs.ts",

@@ -12,6 +12,7 @@ const mode = process.env.LEGACY_FIXTURE_MODE;
 const self = import.meta.url;
 const partialStop = mode.startsWith("partial-stop");
 let definitionReassigned = false;
+let recoveryRevoked = false;
 export const event = (name) => fs.appendFileSync(path.join(root, "events"), `${name}\n`);
 export async function revalidate({ preManagedServiceStop }) {
   return mode === "drift" || definitionReassigned
@@ -24,13 +25,36 @@ export async function admitNativeRestart(action) {
   );
   await assertFutureConfigActionAllowed(action);
   event("native-admission");
-  if (mode === "partial-stop-drift") definitionReassigned = true;
+  if (["partial-stop-drift", "failure-drift"].includes(mode)) {
+    definitionReassigned = true;
+  }
+  if (mode === "failure-revoked") {
+    recoveryRevoked = true;
+  }
 }
 export async function nativeRestart(args) {
   args.assertCurrent();
   assert.equal(args.env.OPENCLAW_PROFILE, "selected");
+  assert.equal(args.preserveDefinition, true);
+  assert.equal(fs.readFileSync(path.join(root, "dist/entry.js"), "utf8"), "old runtime\n");
+  if (mode === "begin-unjoined") {
+    event("restart-unjoined");
+    const { CommandProcessCleanupError } = await import(
+      pathToFileURL(path.join(source, "src/process/exec-result.ts")).href
+    );
+    throw new CommandProcessCleanupError();
+  }
   event("native-restart");
-  return { outcome: mode === "partial-stop-scheduled" ? "scheduled" : "completed" };
+  if (mode === "build-throw-restart") {
+    throw new Error("fixture native restart failed");
+  }
+  const outcome = ["partial-stop-scheduled", "failure-scheduled"].includes(mode)
+    ? "scheduled"
+    : "completed";
+  if (outcome === "completed") {
+    fs.unlinkSync(path.join(root, "stopped"));
+  }
+  return { outcome };
 }
 const running = () => !fs.existsSync(path.join(root, "stopped"));
 export function readState(_service, options = {}) {
@@ -52,7 +76,9 @@ export function readState(_service, options = {}) {
   };
 }
 export async function inspect() {
-  if (["disjoint", "sibling", "unavailable"].includes(mode)) return null;
+  if (["disjoint", "sibling", "unavailable"].includes(mode)) {
+    return null;
+  }
   return {
     ...readState(),
     verdict: { kind: "owned", root, fingerprint: "original", refreshDefinition: false },
@@ -91,29 +117,44 @@ export async function stop(params) {
     serviceUpdateVerdict: params.expectedService.serviceUpdateVerdict,
     windowsTaskAutoStartRecovery: {
       assertRecoveryCurrent() {
+        if (recoveryRevoked) {
+          throw new Error("fixture recovery revoked");
+        }
         if (["begin-closed", "begin-delegated", "begin-lost"].includes(mode)) {
           throw new Error(`fixture recovery ${mode.slice(6)}`);
         }
       },
       beginMutation() {
         event("mutation");
-        if (mutationAbort) throw mutationAbort;
+        if (mutationAbort) {
+          throw mutationAbort;
+        }
       },
       async restore(safe, guard) {
-        if (["begin-closed", "begin-delegated"].includes(mode)) return;
-        if (mode === "begin-lost") throw new Error("fixture recovery lost");
+        if (["begin-closed", "begin-delegated"].includes(mode)) {
+          return;
+        }
+        if (mode === "begin-lost") {
+          throw new Error("fixture recovery lost");
+        }
         assert.equal(safe, true);
         await guard();
         if (!restored) {
           restored = true;
           event("enable");
-          if (mode === "enable-failure") throw new Error("fixture enable failed after dispatch");
+          if (mode === "enable-failure") {
+            throw new Error("fixture enable failed after dispatch");
+          }
         }
       },
       async complete(safe) {
         event(`complete:${safe}`);
-        if (!safe && restored) event("disable");
-        if (mode === "build-throw-settle") throw new Error("fixture native completion failed");
+        if (!safe && restored) {
+          event("disable");
+        }
+        if (mode === "build-throw-settle") {
+          throw new Error("fixture native completion failed");
+        }
       },
       interrupted: () => mode === "begin-abort" || mode === "begin-unjoined",
     },
@@ -137,7 +178,7 @@ const modules = new Map([
     export const createWindowsTaskAutoStartGuard = ({root, before}) => async () => {
       if (before.serviceUpdateVerdict.root !== root) throw new Error('wrong restoration root');
     };
-    export const maybeResumeWindowsTaskAutoStartAfterPackageUpdate = (state, safe, guard) => state.windowsTaskAutoStartRecovery?.restore(safe, guard);`,
+`,
   ],
   [
     "src/cli/update-cli/update-command-service-revalidation",
@@ -153,7 +194,12 @@ const modules = new Map([
     `export const discoverManagedGatewayBindings = async () => ${JSON.stringify(mode === "sibling" ? [{ profile: "sibling", env: { OPENCLAW_PROFILE: "sibling" } }] : [])};`,
   ],
 ]);
-if (partialStop) {
+if (
+  partialStop ||
+  mode.startsWith("failure") ||
+  mode.startsWith("begin-") ||
+  mode.startsWith("build-throw-")
+) {
   // The subprocess owns a synthetic account home; keep canonical-path admission real.
   const userInfo = os.userInfo;
   os.userInfo = (...args) => ({ ...userInfo(...args), homedir: process.env.HOME });
@@ -208,11 +254,6 @@ const compilerResponse = `
   let invoked = false;
   export async function runManagedCommand(options) {
     if (options.bin === 'bash') {
-      if (${JSON.stringify(mode)} === 'begin-unjoined') {
-        event('restart-unjoined');
-        const { CommandProcessCleanupError } = await import(${JSON.stringify(pathToFileURL(path.join(source, "src/process/exec-result.ts")).href)});
-        throw new CommandProcessCleanupError();
-      }
       return actual(options);
     }
     if (!invoked) {
@@ -230,12 +271,14 @@ const compilerResponse = `
       }
       if (${JSON.stringify(mode)}.startsWith('build-throw-')) throw new Error('fixture compiler rejected');
     }
-    return ${JSON.stringify(mode)} === 'failure' ? 17 : 0;
+    return ${JSON.stringify(mode)}.startsWith('failure') ? 17 : 0;
   }`;
 modules.set("scripts/lib/managed-child-process", compilerResponse);
 registerHooks({
   resolve(specifier, context, next) {
-    if (specifier.includes("?original")) return next(specifier, context);
+    if (specifier.includes("?original")) {
+      return next(specifier, context);
+    }
     const candidate =
       specifier.startsWith(".") && context.parentURL
         ? new URL(specifier, context.parentURL).href

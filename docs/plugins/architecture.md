@@ -224,8 +224,10 @@ dependencies link at the captured package root. Capture does not add `node_modul
 individual source files, so native-addon loaders can still locate their package
 root and its build assets.
 
-Native artifacts are admitted with their complete companion directory, so a
-binary's real path retains its sibling files. Installer-owned directories use
+Native artifacts are admitted with their owning package directory, preserving
+the binary's package-relative path and declared companion library dependencies.
+Artifacts without an admitted package root retain their containing directory.
+Installer-owned directories use
 hardlinks or an existing retained-directory reference; files inspected by plugin
 safety checks keep independent copies. Mutable source trees retain one private
 directory snapshot per admitted identity, preserving old binary and companion
@@ -306,9 +308,23 @@ custody, including explicit exits and CLI-handled signals. Forced termination
 still relies on startup reclamation. Snapshot
 cleanup owns SQLite staging files, while plugin cleanup owns this capture subtree.
 Reclamation removes captured
-payload before its coordinator so a partial deletion remains retryable.
+payload before its coordinator so a partial deletion remains retryable. A native
+library mapped in the current process retains its capture and coordinator through
+process exit, even after its JavaScript module cache entry is removed. Cleanup
+records `retained-by-loaded-module` once for that capture lifetime instead of
+trying to unlink a loaded Windows image. Unchanged native package identities
+continue to share the retained payload across reloads.
+Native-load attempts also retain their capture when initialization throws:
+the native image can remain mapped after the initialization error.
 
-Startup and hourly cleanup inspect this owned subtree. An instance becomes
+Before runtime plugin loading, startup attempts receipt-aware cleanup under
+exclusive maintenance ownership. It can reclaim a retired, unlocked instance
+immediately, including unpublished native payloads retained until the previous
+process exited. Published native payloads still referenced by the installed index
+remain available. Busy maintenance or cleanup failures produce a warning and
+startup continues; observational reads leave captures untouched.
+
+Hourly cleanup also inspects this owned subtree. An instance becomes
 eligible after one hour, but age alone never authorizes removal: cleanup must
 also acquire its native coordinator, proving that no producer retains custody.
 Process exit releases the native lock even after a forced termination. PID

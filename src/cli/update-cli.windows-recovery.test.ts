@@ -146,10 +146,8 @@ describe("update-cli", () => {
           ? commandResult({ code: 124, stderr: "disable timed out after commit" })
           : commandResult();
       });
-      const {
-        maybeStopManagedServiceBeforeMutableUpdate,
-        maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
-      } = await import("./update-cli/update-command-service.js");
+      const { maybeStopManagedServiceBeforeMutableUpdate } =
+        await import("./update-cli/update-command-service.js");
       const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
         root: process.cwd(),
         updateInstallKind: "package",
@@ -159,7 +157,7 @@ describe("update-cli", () => {
       const recovery = requireValue(stopped.windowsTaskAutoStartRecovery, "task suspension");
       try {
         recovery.beginMutation();
-        await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped, true);
+        await recovery.restore(true);
         expect(enabled).toBe(true);
         expect(stopped.windowsTaskAutoStartRecovery).toBe(recovery);
         if (compensationFails) {

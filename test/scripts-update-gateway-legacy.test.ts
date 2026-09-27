@@ -25,6 +25,9 @@ it.skipIf(process.platform === "win32").for([
   { mode: "unavailable", restart: undefined, code: 1, owns: false },
   { mode: "explicit-profile", restart: undefined, code: 1, owns: false },
   { mode: "failure", restart: "custom-restart", code: 17, owns: true },
+  { mode: "failure-drift", restart: "custom-restart", code: 1, owns: true },
+  { mode: "failure-scheduled", restart: "custom-restart", code: 1, owns: true },
+  { mode: "failure-revoked", restart: "custom-restart", code: 1, owns: true },
   { mode: "unjoined", restart: undefined, code: 1, owns: true },
   { mode: "enable-failure", restart: undefined, code: 1, owns: true },
   { mode: "partial-stop", restart: undefined, code: 1, owns: true },
@@ -112,11 +115,7 @@ export npm_execpath="$LEGACY_FIXTURE_BIN/pnpm.cjs"
 exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --import "$LEGACY_FIXTURE_LOADER" "$LEGACY_FIXTURE_SOURCE/scripts/build-all.mts" "$LEGACY_FIXTURE_PROFILE"`,
       );
       for (const name of ["openclaw", "custom-restart"]) {
-        shim(
-          name,
-          `echo restart >> "$LEGACY_FIXTURE_ROOT/events"
-if [ "$LEGACY_FIXTURE_MODE" = build-throw-restart ]; then exit 23; fi`,
-        );
+        shim(name, 'echo restart >> "$LEGACY_FIXTURE_ROOT/events"');
       }
       const result = await lifetime.track(
         runVitestShutdownCommand({
@@ -168,14 +167,15 @@ if [ "$LEGACY_FIXTURE_MODE" = build-throw-restart ]; then exit 23; fi`,
           expect(result.stderr).toContain(
             mode === "build-throw-settle"
               ? "fixture native completion failed"
-              : "restart failed (23)",
+              : "fixture native restart failed",
           );
           expect(events).toEqual([
             "stop",
             "mutation",
             "build",
             "enable",
-            "restart",
+            "native-admission",
+            "native-restart",
             ...(mode === "build-throw-settle" ? ["complete:true"] : ["complete:false", "disable"]),
           ]);
           expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe(
@@ -189,12 +189,20 @@ if [ "$LEGACY_FIXTURE_MODE" = build-throw-restart ]; then exit 23; fi`,
           fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
         ).toBe(false);
         if (mode === "begin-abort") {
-          expect(events).toEqual(["stop", "mutation", "enable", "restart", "complete:true"]);
+          expect(events).toEqual([
+            "stop",
+            "mutation",
+            "enable",
+            "native-admission",
+            "native-restart",
+            "complete:true",
+          ]);
         } else if (mode === "begin-unjoined") {
           expect(events).toEqual([
             "stop",
             "mutation",
             "enable",
+            "native-admission",
             "restart-unjoined",
             "complete:false",
             "disable",
@@ -232,6 +240,30 @@ if [ "$LEGACY_FIXTURE_MODE" = build-throw-restart ]; then exit 23; fi`,
         expect(
           fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
         ).toBe(false);
+      } else if (mode.startsWith("failure-")) {
+        expect(events).toEqual([
+          "stop",
+          "mutation",
+          "build",
+          "enable",
+          "native-admission",
+          ...(mode === "failure-scheduled" ? ["native-restart"] : []),
+          "complete:false",
+          "disable",
+        ]);
+        expect(result.stderr).toContain("Source build failed (exit 17)");
+        expect(result.stderr).toContain(
+          mode === "failure-drift"
+            ? "native fingerprint changed"
+            : mode === "failure-revoked"
+              ? "fixture recovery revoked"
+              : "restart was not completed",
+        );
+        expect(fs.existsSync(path.join(checkout, "stopped"))).toBe(true);
+        expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe("old runtime\n");
+        expect(
+          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
+        ).toBe(true);
       } else if (mode === "drift") {
         expect(events).toEqual(["stop", "mutation", "build", "complete:false"]);
         expect(result.stderr).toContain("native fingerprint changed");
@@ -264,7 +296,7 @@ if [ "$LEGACY_FIXTURE_MODE" = build-throw-restart ]; then exit 23; fi`,
                 "build",
                 "enable",
                 ...(mode === "failure"
-                  ? ["restart", "complete:true"]
+                  ? ["native-admission", "native-restart", "complete:true"]
                   : ["complete:true", "restart"]),
               ]
             : ["build", "restart"],
@@ -272,6 +304,12 @@ if [ "$LEGACY_FIXTURE_MODE" = build-throw-restart ]; then exit 23; fi`,
         expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe(
           mode === "failure" ? "old runtime\n" : "new runtime\n",
         );
+        if (mode === "failure") {
+          expect(fs.existsSync(path.join(checkout, "stopped"))).toBe(false);
+          expect(
+            fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
+          ).toBe(false);
+        }
         const buildEnv = JSON.parse(fs.readFileSync(path.join(checkout, "build-env.json"), "utf8"));
         expect(buildEnv.npm_execpath).toBe(path.join(bin, "pnpm.cjs"));
         expect(buildEnv.workspace).toBe(checkout);
