@@ -224,7 +224,7 @@ function forbiddenPath(path: string): boolean {
     /(?:^|\/)(?:\.github|patches|__snapshots__|node_modules|dist|build|coverage|generated|__generated__|protocol-gen|CHANGELOG[^/]*)(?:\/|$)/iu.test(
       path,
     ) ||
-    /(?:^|\/)(?:package\.json|pnpm-lock\.yaml|CHANGELOG[^/]*|vitest[^/]*\.[cm]?[jt]s|[^/]*(?:baseline|ratchet|inventory)[^/]*)$/iu.test(
+    /(?:^|\/)(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig[^/]*\.json|\.npmrc|\.gitattributes|\.gitmodules|\.[A-Za-z]*ignore|CHANGELOG[^/]*|vitest[^/]*\.[cm]?[jt]s|[^/]*(?:baseline|ratchet|inventory)[^/]*)$/iu.test(
       path,
     ) ||
     /(?:\.snap$|\.generated\.|^test\/vitest\/|^scripts\/ci-repair-agent\.|(?:^|\/)AGENTS(?:\.override)?\.md$)/iu.test(
@@ -390,7 +390,7 @@ export function renderPrBody(input: {
   base: string;
 }): string {
   const e = escapeMarkdown;
-  return `Repairs failures from https://github.com/${REPO}/actions/runs/${integer(input.runId)}/attempts/${integer(input.attempt)}.\n\nFailing tests:\n\n${input.tests.map((file) => `- ${e(file)}`).join("\n")}\n\nClassification: ${e(input.result.classification)}\n\nCause: ${e(input.result.cause)}\n\nEvidence: ${e(input.result.evidence)}\n\nGuard: ${input.guard.passed ? "passed" : "failed"}; ${input.guard.files.length} files, ${input.guard.changedLines} changed lines.\n\nProof: ${e(input.prove)}\n\nRepair was proved on base ${e(input.base)}. Publication applies the same guarded patch to current main without executing it; the PR's own CI verifies that resulting tree.\n\nThe CI repair agent opened this PR. It needs review before merging. Auto-merge is not enabled.\n`;
+  return `Repairs failures from https://github.com/${REPO}/actions/runs/${integer(input.runId)}/attempts/${integer(input.attempt)}.\n\nFailing tests:\n\n${input.tests.map((file) => `- ${e(file)}`).join("\n")}\n\nClassification: ${e(input.result.classification)}\n\nCause: ${e(input.result.cause)}\n\nEvidence: ${e(input.result.evidence)}\n\nGuard: ${input.guard.passed ? "passed" : "failed"}; ${input.guard.files.length} files, ${input.guard.changedLines} changed lines.\n\nProof: ${e(input.prove)}\n\nThe prove verdict is evidence recorded by the repair job; this PR's own CI and review are authoritative.\n\nRepair was proved on base ${e(input.base)}. Publication applies the same guarded patch to current main without executing it; the PR's own CI verifies that resulting tree.\n\nThe CI repair agent opened this PR. It needs review before merging. Auto-merge is not enabled.\n`;
 }
 
 function readJson(name: string): unknown {
@@ -458,6 +458,9 @@ function git(args: string[], cwd = process.cwd(), extraEnv: NodeJS.ProcessEnv = 
     cwd,
     {
       ...process.env,
+      GH_TOKEN: undefined,
+      GITHUB_TOKEN: undefined,
+      CI_REPAIR_READ_TOKEN: undefined,
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
@@ -466,21 +469,21 @@ function git(args: string[], cwd = process.cwd(), extraEnv: NodeJS.ProcessEnv = 
     0, // The Git owner must finish descendant cleanup before this parent returns.
   );
 }
-async function api(path: string): Promise<unknown> {
-  if (
-    process.env.CI_REPAIR_PUBLIC_READS === "true" &&
-    (!process.env.GH_TOKEN || path.startsWith("actions/"))
-  ) {
-    const response = await fetch(`https://api.github.com/repos/${REPO}/${path}`, {
-      signal: AbortSignal.timeout(30000),
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (!response.ok) {
-      throw new Error(`Public admission API failed: ${response.status}`);
-    }
-    return response.json();
+function githubRead(args: string[]): string {
+  const env = { ...process.env };
+  const readToken = env.CI_REPAIR_READ_TOKEN;
+  if (env.GITHUB_ACTIONS === "true" && !readToken) {
+    throw new Error("CI_REPAIR_READ_TOKEN is required for workflow admission reads");
   }
-  return JSON.parse(command("gh", ["api", `repos/${REPO}/${path}`]));
+  // In publish, GH_TOKEN is the app writer. Admission and log reads must never use it.
+  if (readToken) {
+    env.GH_TOKEN = readToken;
+    delete env.GITHUB_TOKEN;
+  }
+  return command("gh", args, process.cwd(), env);
+}
+async function api(path: string): Promise<unknown> {
+  return JSON.parse(githubRead(["api", `repos/${REPO}/${path}`]));
 }
 async function pages(path: string, field?: string): Promise<unknown[]> {
   const result: unknown[] = [];
@@ -550,8 +553,11 @@ async function inFlightOrRecovered(run: Run): Promise<string | undefined> {
     event: "schedule",
     status: "success",
     created: `>${run.createdAt}`,
+    per_page: "5",
   });
-  const recovered = await pages(`actions/workflows/ci.yml/runs?${query}`, "workflow_runs");
+  const recovered = array(
+    record(await api(`actions/workflows/ci.yml/runs?${query}`)).workflow_runs,
+  );
   if (
     recovered
       .map(parseRun)
@@ -569,9 +575,20 @@ async function inFlightOrRecovered(run: Run): Promise<string | undefined> {
   ) {
     return "A later scheduled main CI run recovered";
   }
-  const pulls = await pages("pulls?state=open");
-  if (pulls.some((value) => string(record(record(value).head).ref).startsWith("ci-repair/"))) {
-    return "An open ci-repair/ PR already exists";
+  const refs = git(["ls-remote", REMOTE, "refs/heads/ci-repair/*"]).trim();
+  for (const line of refs ? refs.split("\n") : []) {
+    const match = /^[a-f0-9]{40}\trefs\/heads\/(ci-repair\/\S+)$/u.exec(line);
+    if (!match?.[1]) {
+      throw new Error("Invalid repair branch advertisement");
+    }
+    const headQuery = new URLSearchParams({
+      head: `openclaw:${match[1]}`,
+      state: "open",
+      per_page: "1",
+    });
+    if (array(await api(`pulls?${headQuery}`)).length) {
+      return "An open ci-repair/ PR already exists";
+    }
   }
   return undefined;
 }
@@ -640,7 +657,7 @@ async function jobEvidence(run: Run) {
       if (existsSync(cache)) {
         log = readFileSync(cache, "utf8");
       } else {
-        log = command("gh", ["api", `repos/${REPO}/actions/jobs/${job.id}/logs`]);
+        log = githubRead(["api", `repos/${REPO}/actions/jobs/${job.id}/logs`]);
         mkdirSync(join(OUT, "raw"), { recursive: true });
         writeFileSync(cache, log);
       }
@@ -783,6 +800,38 @@ function contextData(): { runId: number; attempt: number; sha: string; tests: Te
     }),
   };
 }
+const CANDIDATE_ENV_DENYLIST = new Set([
+  "GITHUB_OUTPUT",
+  "GITHUB_ENV",
+  "GITHUB_PATH",
+  "GITHUB_STATE",
+  "GITHUB_STEP_SUMMARY",
+  "ACTIONS_RUNTIME_TOKEN",
+  "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+  "ACTIONS_ID_TOKEN_REQUEST_URL",
+  "ACTIONS_CACHE_URL",
+  "ACTIONS_RESULTS_URL",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "CI_REPAIR_READ_TOKEN",
+]);
+
+export function buildCandidateEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !CANDIDATE_ENV_DENYLIST.has(key)),
+  );
+}
+
+function installDependencies() {
+  const installed = spawnSync("pnpm", ["install", "--frozen-lockfile"], {
+    stdio: "inherit",
+    env: buildCandidateEnv(process.env),
+  });
+  if (installed.error || installed.status !== 0) {
+    throw new Error("Candidate dependency installation failed");
+  }
+}
+
 function testOnce(file: string, name: string): boolean {
   if (!existsSync(file) || lstatSync(file).isSymbolicLink()) {
     throw new Error(`Test unavailable in this tree: ${file}`);
@@ -790,11 +839,11 @@ function testOnce(file: string, name: string): boolean {
   // GNU timeout owns the complete pnpm process group on the disposable Linux runner.
   const result = spawnSync(
     "timeout",
-    ["--signal=TERM", "--kill-after=15s", "180s", "pnpm", "test", file, "--maxWorkers=1"],
+    ["--signal=TERM", "--kill-after=15s", "480s", "pnpm", "test", file, "--maxWorkers=1"],
     {
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "" },
+      env: buildCandidateEnv(process.env),
     },
   );
   save(
@@ -1141,7 +1190,7 @@ async function publish() {
   save("pr-url.txt", url);
   note(`Opened ${url}; review required, auto-merge remains disabled`);
   const labels = JSON.parse(
-    command("gh", ["label", "list", "--repo", REPO, "--search", "ci-repair", "--json", "name"]),
+    githubRead(["label", "list", "--repo", REPO, "--search", "ci-repair", "--json", "name"]),
   );
   if (array(labels).some((value) => record(value).name === "ci-repair")) {
     command("gh", ["pr", "edit", url, "--repo", REPO, "--add-label", "ci-repair"]);
@@ -1151,6 +1200,9 @@ export async function main(args: string[]) {
   const [operation, id] = args;
   try {
     switch (operation) {
+      case "install":
+        installDependencies();
+        break;
       case "verify":
         await verify();
         break;
@@ -1207,7 +1259,7 @@ export async function main(args: string[]) {
       }
       default:
         throw new Error(
-          "Usage: ci-repair-agent.mjs verify|collect <run-id>|reproduce|guard|prepare-repair|prove|prepare-publish|publish|render-pr-body|summary",
+          "Usage: ci-repair-agent.mjs install|verify|collect <run-id>|reproduce|guard|prepare-repair|prove|prepare-publish|publish|render-pr-body|summary",
         );
     }
   } catch (error) {

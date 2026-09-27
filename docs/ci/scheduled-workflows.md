@@ -86,8 +86,11 @@ completion before CI is not guaranteed.
 `CI Repair Agent` reacts to failed scheduled `CI` completions on canonical `main`.
 A read-only admission job re-fetches the run and verifies its workflow path,
 repository, head repository, branch, SHA, and attempt. A later successful hourly
-run, an existing open `ci-repair/` PR, or infrastructure-only failed jobs skips
+run, an existing open canonical `ci-repair/` PR, or infrastructure-only failed jobs skips
 repair with a recorded reason. Unknown failures are retained for diagnosis.
+In-flight detection lists only canonical `ci-repair/*` branch refs, then checks
+for an open PR at each exact head. Recovery needs only the first five matching
+successful scheduled runs, without scanning the open-PR backlog.
 
 The repair job collects failed-job logs, bounded excerpts, extracted Vitest test
 paths, and recurrence across the previous six scheduled runs. Unavailable history
@@ -100,7 +103,8 @@ those cases do not establish a product regression.
 Deterministic guards permit at most four existing regular files and 80 added plus
 removed lines. They reject new, deleted, renamed, or mode-changed files; workflow,
 package, lockfile, snapshot, baseline, ratchet, inventory, generated, changelog,
-Vitest configuration, and controller changes; skip/only/todo/expected-failure
+TypeScript/Vitest configuration, workspace/package-manager settings, Git attributes,
+submodules, ignore files, and controller changes; skip/only/todo/expected-failure
 markers, retries, timeout changes, type suppressions, and lint disables; and any
 per-file loss of assertion calls. These syntactic checks do not prove unchanged
 coverage. Human review remains required, particularly for flakes.
@@ -108,20 +112,23 @@ coverage. Human review remains required, particularly for flakes.
 A permitted repair is committed locally with hooks disabled, rebased onto freshly
 fetched public `main`, and tested again. Conflicts stop publication. Previously
 non-reproduced failures require five consecutive passes without retrying a failed
-proof. A single-file attempt is bounded to three minutes; reproduction and proof
-steps have ten- and twenty-five-minute limits. Empty or more-than-eight-file
-failure selections produce a diagnosis without editing. The complete repair job
-has a sixty-minute limit.
+proof. A single-file attempt is bounded to eight minutes to accommodate cold
+worker compilation; reproduction and proof steps have 30- and 45-minute limits.
+Empty or more-than-eight-file failure selections produce a diagnosis without editing. The complete repair job
+has a two-hour limit; the Codex step retains its fifteen-minute limit. Dependency
+installation and test children receive no Actions control-file variables, runtime
+or GitHub credentials, OIDC request variables, or Actions cache/results URLs.
 
 Only artifacts cross into the publisher, on a fresh runner and trusted workflow
 checkout. It independently validates the patch digest and patch-level guards,
-rechecks admission, and applies the patch to current `main` as data, with hooks
-disabled. It never installs dependencies or executes the generated source, tests,
+rechecks admission using a dedicated read-only GitHub token, and applies the patch
+to current `main` as data, with hooks disabled. It never installs dependencies or executes the generated source, tests,
 or tooling. The publisher then mints the existing GitHub App token to create only
 a fresh `ci-repair/<run_id>` branch and a review PR. It never pushes to `main`,
 updates an existing repair branch, or enables auto-merge. The `ci-repair` label is
 added only when it already exists. App-authored events allow the PR's CI to run;
-that CI verifies any main movement after the repair proof.
+that CI verifies any main movement after the repair proof. The PR body identifies
+the prove verdict as repair-job evidence; the PR's own CI and review are authoritative.
 
 Manual dispatch is restricted to the default branch and accepts a failed
 scheduled or push `main` CI run. Dry-run is the default: repair and evidence still

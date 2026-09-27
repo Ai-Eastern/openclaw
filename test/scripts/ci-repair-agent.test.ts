@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCandidateEnv,
   canonicalFailure,
   classifyJob,
   escapeMarkdown,
@@ -33,6 +34,36 @@ const job = (name: string, steps: string[]) => ({
   name,
   conclusion: "failure",
   steps: steps.map((stepName) => ({ name: stepName, conclusion: "failure" })),
+});
+
+it("removes Actions control channels and credentials from candidate children without mutating the parent", () => {
+  const parent = Object.freeze({
+    PATH: "/synthetic/bin",
+    HOME: "/synthetic/home",
+    CI: "true",
+    GITHUB_RUN_ID: "123",
+    GITHUB_OUTPUT: "/synthetic/output",
+    GITHUB_ENV: "/synthetic/env",
+    GITHUB_PATH: "/synthetic/path",
+    GITHUB_STATE: "/synthetic/state",
+    GITHUB_STEP_SUMMARY: "/synthetic/summary",
+    ACTIONS_RUNTIME_TOKEN: "synthetic",
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "synthetic",
+    ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc",
+    ACTIONS_CACHE_URL: "https://example.invalid/cache",
+    ACTIONS_RESULTS_URL: "https://example.invalid/results",
+    GH_TOKEN: "synthetic",
+    GITHUB_TOKEN: "synthetic",
+    CI_REPAIR_READ_TOKEN: "synthetic",
+  });
+  expect(buildCandidateEnv(parent)).toEqual({
+    PATH: "/synthetic/bin",
+    HOME: "/synthetic/home",
+    CI: "true",
+    GITHUB_RUN_ID: "123",
+  });
+  expect(parent.GITHUB_OUTPUT).toBe("/synthetic/output");
+  expect(parent.CI_REPAIR_READ_TOKEN).toBe("synthetic");
 });
 
 describe("failure collection", () => {
@@ -81,6 +112,18 @@ describe("patch-only publication guard", () => {
     "package.json",
     "extensions/chat/package.json",
     "pnpm-lock.yaml",
+    "tsconfig.json",
+    "test/tsconfig/tsconfig.test.root.json",
+    "pnpm-workspace.yaml",
+    ".npmrc",
+    "extensions/chat/.npmrc",
+    ".gitattributes",
+    ".gitmodules",
+    ".gitignore",
+    "ui/.eslintignore",
+    "test/.prettierignore",
+    ".dockerignore",
+    ".ignore",
     "patches/library.patch",
     "src/example.snap",
     "test/__snapshots__/example.ts",
@@ -222,6 +265,9 @@ it("renders model and log text as escaped prose while retaining the trusted run 
   expect(text).toContain("&lt;script&gt;&#64;everyone&lt;/script&gt; \\# forged");
   expect(text).toContain("\\[click\\]\\(https://evil\\.invalid\\) \\`code\\` &amp; \\|");
   expect(text).not.toContain("\n## spoof");
+  expect(text).toContain(
+    "The prove verdict is evidence recorded by the repair job; this PR's own CI and review are authoritative.",
+  );
   expect(escapeMarkdown("@user <b> &")).toBe("&#64;user &lt;b&gt; &amp;");
 });
 

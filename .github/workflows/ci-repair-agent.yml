@@ -58,10 +58,12 @@ jobs:
         with:
           node-version: "24.21.0"
           package-manager-cache: false
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475 # trusted lifecycle owner
       - name: Verify failed canonical main CI
         id: verify
         env:
-          GH_TOKEN: ${{ github.token }}
+          CI_REPAIR_READ_TOKEN: ${{ github.token }}
           INPUT_RUN_ID: ${{ inputs.run_id }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: node scripts/ci-repair-agent.mjs verify
@@ -82,7 +84,7 @@ jobs:
     needs: verify
     if: needs.verify.outputs.allowed == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
       actions: read
@@ -118,14 +120,14 @@ jobs:
           install-bun: "false"
           install-deps: "false"
       - name: Install candidate dependencies
-        run: pnpm install --frozen-lockfile
+        run: node ../scripts/ci-repair-agent.mjs install
       - name: Collect failures and scheduled history
         env:
-          GH_TOKEN: ${{ github.token }}
+          CI_REPAIR_READ_TOKEN: ${{ github.token }}
         run: node ../scripts/ci-repair-agent.mjs collect
       - name: Reproduce before editing
         id: reproduce
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: node ../scripts/ci-repair-agent.mjs reproduce
       # No GitHub token is passed to Codex or the test processes. Only patch and
       # evidence artifacts cross to publish; that job mints its app token on a
@@ -156,7 +158,7 @@ jobs:
       - name: Prove the rebased repair
         id: prove
         if: steps.prepare.outputs.prepared == 'true'
-        timeout-minutes: 25
+        timeout-minutes: 45
         run: node ../scripts/ci-repair-agent.mjs prove
       - name: Summarize repair
         if: always()
@@ -182,15 +184,16 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
     env:
       CI_REPAIR_RUN_ID: ${{ needs.verify.outputs.run_id }}
       CI_REPAIR_ATTEMPT: ${{ needs.verify.outputs.attempt }}
       CI_REPAIR_HEAD_SHA: ${{ needs.verify.outputs.head_sha }}
       CI_REPAIR_ARTIFACTS: ${{ github.workspace }}/.artifacts/ci-repair-publish-evidence
       CI_REPAIR_PUBLISH_DIR: ${{ github.workspace }}/.artifacts/ci-repair-publish-tree
-      # Admission uses the public read API: no actions permission or app token
-      # is needed before validating the artifacts and preparing the commit.
-      CI_REPAIR_PUBLIC_READS: "true"
+      # Admission uses a dedicated read token, including after the app writer is minted.
+      CI_REPAIR_READ_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout trusted workflow code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
