@@ -587,11 +587,11 @@ export function createHookRunner(
     hook: PluginHookRegistration,
     promise: Promise<T>,
     defaultTimeoutMs?: number,
-    options?: { unref?: boolean },
+    timeoutOptions?: { unref?: boolean },
   ): Promise<T> => {
     const timeoutMs =
       clampPositiveTimerTimeoutMs(hook.timeoutMs) ?? clampPositiveTimerTimeoutMs(defaultTimeoutMs);
-    return timeoutMs ? withHookTimeout(promise, timeoutMs, options) : promise;
+    return timeoutMs ? withHookTimeout(promise, timeoutMs, timeoutOptions) : promise;
   };
 
   const runSyncMessageHookStep = <K extends SyncHookName>(

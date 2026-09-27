@@ -272,8 +272,8 @@ export function normalizeMediaUnderstandingProviderMetadata(
       rawMetadata.defaultModels,
       normalizeOptionalString,
     );
-    const autoPriority = normalizeMediaUnderstandingRecord(rawMetadata.autoPriority, (value) =>
-      typeof value === "number" && Number.isFinite(value) ? value : undefined,
+    const autoPriority = normalizeMediaUnderstandingRecord(rawMetadata.autoPriority, (priority) =>
+      typeof priority === "number" && Number.isFinite(priority) ? priority : undefined,
     );
     const nativeDocumentInputs = normalizeMediaUnderstandingNativeDocumentInputs(
       rawMetadata.nativeDocumentInputs,

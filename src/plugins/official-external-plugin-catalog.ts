@@ -238,14 +238,11 @@ export function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  return normalizeUniqueTrimmedStringList([
-    manifest?.plugin?.id,
-    manifest?.channel?.id,
-    ...(manifest?.providers ?? []).flatMap((provider) => [
-      provider.id,
-      ...(provider.aliases ?? []),
-    ]),
-  ]);
+  const ids = [manifest?.plugin?.id, manifest?.channel?.id];
+  for (const provider of manifest?.providers ?? []) {
+    ids.push(provider.id, ...(provider.aliases ?? []));
+  }
+  return normalizeUniqueTrimmedStringList(ids);
 }
 
 export function resolveOfficialExternalPluginLabel(

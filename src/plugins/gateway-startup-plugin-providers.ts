@@ -364,11 +364,13 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
 export function collectConfiguredMemoryEmbeddingProviderIds(
   config: OpenClawConfig,
 ): ReadonlySet<string> {
-  return new Set(
-    collectConfiguredMemoryEmbeddingStartupProviderOwners(config).flatMap((provider) => [
-      ...provider.ownerIds,
-    ]),
-  );
+  const ids = new Set<string>();
+  for (const provider of collectConfiguredMemoryEmbeddingStartupProviderOwners(config)) {
+    for (const ownerId of provider.ownerIds) {
+      ids.add(ownerId);
+    }
+  }
+  return ids;
 }
 
 /**

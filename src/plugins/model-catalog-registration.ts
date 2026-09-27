@@ -20,7 +20,11 @@ function mergeCatalogHookResults(
   if (rows.length === 0) {
     return null;
   }
-  return rows.map((row) => ({ ...row, source }));
+  const merged: UnifiedModelCatalogEntry[] = [];
+  for (const row of rows) {
+    merged.push({ ...row, source });
+  }
+  return merged;
 }
 
 function mergeModelCatalogHooks(
