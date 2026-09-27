@@ -644,6 +644,12 @@ children's identities and the same reconciliation guidance. Restart interruption
 remains in history as an interrupted outcome, rather than a child execution
 failure. Genuine execution and delivery failures still require attention.
 
+On upgrade, saved interruptions that retain the typed restart-recovery owner
+are reconciled through the same startup path. Historical failed runs without
+that ownership evidence remain failed: their error text alone cannot distinguish
+a restart from a genuine failure. Inspect those retained sessions before
+continuing them; recovery does not rewrite ambiguous history.
+
 A completed child may still owe its requester a final follow-up. If that
 follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection

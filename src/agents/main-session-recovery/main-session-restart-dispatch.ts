@@ -9,6 +9,7 @@ import {
   applySessionEntryReplacements,
   loadExactSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -410,13 +411,21 @@ async function resumeMainSessionWithinAdmission(
         ? "failed"
         : "skipped";
     }
+    const requesterStorePath = await preparePhysicalSessionStorePath({
+      agentId: params.agentId,
+      sessionKey: dispatchSessionKey,
+      storePath: params.storePath,
+    });
     const agentParams: AgentRunRequest = {
       agentId: params.agentId,
       message: buildResumeMessage(
         sanitizedPendingText,
         params.forceRestartSafeTools,
         buildSubagentRestartRecoveryRoster(
-          listSubagentRunsForRequester(dispatchSessionKey, { requesterAgentId: params.agentId }),
+          listSubagentRunsForRequester(dispatchSessionKey, {
+            requesterAgentId: params.agentId,
+            requesterStorePath,
+          }),
         ),
       ),
       sessionKey: dispatchSessionKey,

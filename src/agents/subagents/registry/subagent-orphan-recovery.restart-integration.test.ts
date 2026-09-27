@@ -138,7 +138,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
           expect(findTaskByRunId(entry.runId)).toMatchObject({ status: "failed" });
           expect(
             loadExactSessionEntry({ agentId: "main", sessionKey: entry.childSessionKey })?.entry,
-          ).toMatchObject({ status: "failed", endedAt: expect.any(Number) });
+          ).toMatchObject({ status: "interrupted", endedAt: expect.any(Number) });
           expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.execution).toMatchObject({
             status: "terminal",
             outcome: { status: "error" },
@@ -383,8 +383,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
     },
   );
 
-  it.each(["run", "admission", "replaced", "missing", "original"] as const)(
-    "delivers a saved interrupted terminal result while preserving the %s child owner",
+  it.each(["run", "admission", "replaced", "missing", "original", "unclassified"] as const)(
+    "reconciles historical child status while preserving the %s owner",
     async (owner) => {
       const now = Date.now();
       const runId = "saved-terminal-replay";
@@ -425,7 +425,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
         childSessionKey,
         expectsCompletionMessage: true,
         endedReason: "subagent-error",
-        terminalOwner: "interrupted-recovery",
+        terminalOwner: owner === "unclassified" ? undefined : "interrupted-recovery",
+        cleanupCompletedAt: owner === "unclassified" ? now : undefined,
+        cleanupHandled: owner === "unclassified" ? true : undefined,
         execution: {
           status: "terminal",
           endedAt: now,
@@ -449,6 +451,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
         }
         const before = loadExactSessionEntry({ storePath, sessionKey: childSessionKey })?.entry;
         await testing.sweepOnceForTests();
+        if (owner === "unclassified") {
+          expect(loadExactSessionEntry({ storePath, sessionKey: childSessionKey })?.entry).toEqual(
+            before,
+          );
+          expect(entry.execution.interruptionReason).toBeUndefined();
+          return;
+        }
         await vi.waitFor(() =>
           expect(announce).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -463,6 +472,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
           expect(loadExactSessionEntry({ storePath, sessionKey: childSessionKey })?.entry).toEqual(
             before,
           );
+        } else {
+          expect(
+            loadExactSessionEntry({ storePath, sessionKey: childSessionKey })?.entry,
+          ).toMatchObject({
+            status: "interrupted",
+          });
+          expect(entry.execution.interruptionReason).toBe("gateway-restart");
         }
       } finally {
         admission?.release();
@@ -524,7 +540,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     await cleanupSessionStateForTest();
     const persistedSession = (await readSubagentSessionStore(storePath))[childSessionKey];
     expect(persistedSession).toMatchObject({
-      status: "failed",
+      status: "interrupted",
       endedAt: expect.any(Number),
     });
     expect(persistedSession?.abortedLastRun).toBeUndefined();
@@ -537,12 +553,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
           sessionId: "sess-stale-aborted",
         })
       ).filter((event) => isRecord(event) && event.customType === "run-failed-before-reply"),
-    ).toMatchObject([
-      {
-        display: true,
-        details: { runId, error: expect.stringContaining("Gateway restart") },
-      },
-    ]);
+    ).toEqual([]);
   });
 
   it.each([60_000, 3 * TWO_HOURS_MS])(
