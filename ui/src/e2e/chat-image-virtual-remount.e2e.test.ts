@@ -14,6 +14,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const source = "media://inbound/virtual-remount.png";
       let metadataRequests = 0;
+      let imageRequests = 0;
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const url = new URL(route.request().url());
         expect(url.searchParams.get("source")).toBe(source);
@@ -27,6 +28,7 @@ suite.define(() => {
             },
           });
         } else {
+          imageRequests += 1;
           await route.fulfill({
             contentType: "image/png",
             headers: { "Cache-Control": "no-cache" },
@@ -64,7 +66,7 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       const row = await image.evaluateHandle((element) => element.closest(".chat-virtual-row")!);
       const trace = await page.locator(".chat-thread").evaluateHandle((thread) => {
-        const selector = '.chat-assistant-attachment-card--checking[aria-busy="true"]';
+        const selector = '.chat-image-frame[aria-busy="true"]';
         let showedSkeleton = false;
         const observer = new MutationObserver((records) => {
           // Inspect added subtrees too: a flash may be removed before the callback runs.
@@ -96,6 +98,7 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       expect(await trace.evaluate((observer) => observer.stop())).toBe(false);
       expect(metadataRequests).toBe(1);
+      expect(imageRequests).toBe(1);
     });
   });
 });
