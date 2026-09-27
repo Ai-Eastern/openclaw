@@ -54,13 +54,35 @@ it("reuses expanded provider scopes across agents while keeping auth request-loc
           "registrations.jsonl",
           `provider: ${JSON.stringify(provider)}, filename: __filename`,
         );
-      const execution = (provider: string) =>
-        record(
-          "executions.jsonl",
-          `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir`,
-        );
+      const execution = (provider: string) => `
+        ${record("executions.jsonl", `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir`)}
+        const retained = globalThis[Symbol.for("catalog.retired.registries.proof")];
+        if (retained && ++retained.requests % ${2 * providerIds.length} === 0) {
+          require("node:v8").queryObjects(WeakRef);
+          fs.writeFileSync(${JSON.stringify(path.join(seed.root, "retention.json"))}, JSON.stringify({
+            registries: retained.registries.filter(ref => ref.deref()).length,
+            captured: retained.registries.length,
+            nativeExports: retained.exports.filter(ref => ref.deref()).length,
+            controlCollected: retained.control.deref() === undefined,
+            memory: process.memoryUsage(),
+          }));
+        }
+      `;
       fs.writeFileSync(path.join(seed.root, "executions.jsonl"), "");
       // Module evaluation alone misses fresh registries built from retained source modules.
+      // Node keeps native ESM exports after their capture files are retired. Identity-sensitive
+      // registrations must not let those exports retain the rest of a disposed registry.
+      fs.writeFileSync(
+        path.join(seed.root, "plugin", "retained.mjs"),
+        'export const speech = { id: "retained-speech", label: "Retention fixture", isConfigured: () => true, synthesize: async () => ({ audio: new Uint8Array() }) };',
+      );
+      const retention = `
+  api.registerSpeechProvider(require("./retained.mjs").speech);
+  const instance = globalThis[Symbol.for("openclaw.pluginInstanceState")].values.get(require("./retained.mjs").speech);
+  const state = globalThis[Symbol.for("catalog.retired.registries.proof")] ??= { registries: [], exports: [], requests: 0, control: new WeakRef({}) };
+  state.registries.push(new WeakRef(instance.owner.registry));
+  state.exports.push(new WeakRef(require("./retained.mjs").speech));
+`;
       const baseEntry = path.join(seed.root, "plugin", "index.cjs");
       fs.writeFileSync(
         baseEntry,
@@ -68,7 +90,7 @@ it("reuses expanded provider scopes across agents while keeping auth request-loc
           .readFileSync(baseEntry, "utf8")
           // This proof has only provider publication, not a second native acquisition.
           .replace(/ {6}loadModelCatalog: async \(\) => \{[\s\S]*?\n {6}\},\n/u, "")
-          .replace("  register(api) {", `  register(api) {${registration(PROVIDER_ID)}`)
+          .replace("  register(api) {", `  register(api) {${registration(PROVIDER_ID)}${retention}`)
           .replace("run(context) {", `run(context) {${execution(PROVIDER_ID)}`),
       );
       for (const provider of providerIds) {
@@ -228,6 +250,12 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
     expect(registrations()).toEqual(expanded);
     expect(readCatalogCaptureFootprint(captureRoot)).toEqual(footprint);
   }
+  const retained = JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8"));
+  console.log("Retired catalog registries", JSON.stringify(retained));
+  expect(retained.controlCollected).toBe(true);
+  expect(retained.captured).toBe(1 + providerIds.length);
+  expect(retained.nativeExports).toBe(retained.captured);
+  expect(retained.registries).toBe(1);
   const warmedRegistrations = registrations();
   const warmedFootprint = readCatalogCaptureFootprint(captureRoot);
   expect(warmedFootprint.bytes).toBeGreaterThan(0);
@@ -261,6 +289,14 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
       expect(readCatalogCaptureFootprint(captureRoot)).toEqual(warmedFootprint);
     }
   }
+  expect(
+    JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8")),
+  ).toMatchObject({
+    captured: 1 + providerIds.length,
+    nativeExports: 1 + providerIds.length,
+    registries: 1,
+    controlCollected: true,
+  });
   expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
     workers: 1,
     workersCreated: 1,

@@ -398,6 +398,10 @@ configuration revisions can still retain module memory during that lifetime. Age
 credentials and configured model facts travel with each request; catalog jobs do
 not rebuild the agent workspace. Discovery reuses the registrations already
 acquired by that context. Replacement releases them after admitted work settles.
+After successful physical cleanup, retired plugin instances release their registry
+references while preserving revocation. Native module exports no longer retain the
+disposed registry through instance ownership, and stale calls remain rejected. Pending or failed
+cleanup retains its custody.
 Successfully disposed registrations leave their plugin caches.
 
 Catalog observation is passive. Inventory requests can ask the catalog owner to

@@ -9,6 +9,7 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
 } from "./plugin-instance.types.js";
+import type { PluginRegistryGatewayOwner } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
@@ -50,10 +51,13 @@ export type PluginInvocationContext = {
 
 export type PluginInstanceOwner = {
   record: PluginRecord;
-  registry: PluginRegistry;
-  revoked: boolean;
+  /** Recovery follows the live Gateway without retaining a disposed registry. */
+  retiredGatewayOwner?: WeakRef<PluginRegistryGatewayOwner>;
   instance?: PluginInstanceHandle;
-};
+} & (
+  | { revoked: false; registry: PluginRegistry }
+  | { revoked: true; registry: PluginRegistry | undefined }
+);
 // SDK source transforms and native core chunks must observe the same exact owner.
 export const pluginInstanceState = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInstanceState"),
