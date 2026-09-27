@@ -119,8 +119,9 @@ original shared-state generation.
 A caller refused before native opening does not retire other captured borrowers
 when the broker confirms settlement without committed work or cleanup failures.
 Its failed native generation closes before another operation can open one; the
-refused operation is not replayed. Uncertain outcomes and cleanup failures retain
-whole-owner retirement. Borrowing through any registered path also promotes every
+refused operation is not replayed. Uncertain outcomes and cleanup failures use the
+canonical owner's retirement and recovery path; replacement work waits for
+successful cleanup, and explicit revocation remains terminal. Borrowing through any registered path also promotes every
 alias to the shared maintenance scope, so a nested scope cannot close a resource
 still owned by its parent.
 

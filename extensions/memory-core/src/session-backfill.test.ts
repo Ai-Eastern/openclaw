@@ -813,7 +813,7 @@ describe("runSessionBackfill", () => {
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(diaryPath, "Keep this operator note.\n");
     openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
-      CREATE TRIGGER reject_diary_origin BEFORE INSERT ON memory_entry_origins
+      CREATE TEMP TRIGGER reject_diary_origin BEFORE INSERT ON main.memory_entry_origins
       BEGIN SELECT RAISE(ABORT, 'injected diary origin failure'); END;
     `);
     await expect(

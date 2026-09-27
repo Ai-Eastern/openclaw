@@ -28,7 +28,10 @@ export async function registerRunningSubagent(params: {
   entry: SubagentRunRecord;
   previous: SubagentRunRecord | undefined;
   context: OpenClawStateWorkerContext;
-  manager: Pick<SubagentManagerOptions, "runs" | "getRunsForChildSession" | "persistAsyncOrThrow">;
+  manager: Pick<
+    SubagentManagerOptions,
+    "runs" | "getRunsForChildSession" | "persistAsyncOrThrow" | "ensureListener" | "startSweeper"
+  >;
   ownership: ReturnType<typeof subagentRuns.captureRegistrationOwnership>;
   taskParams: DetachedRunningTaskCreateParams;
   taskRowOwnership: "required" | "gateway_best_effort" | undefined;
@@ -119,6 +122,13 @@ export async function registerRunningSubagent(params: {
       params.activate(!ownership.superseded);
     }
   };
+  const observeRetainedRun = () => {
+    if (!activated && acknowledged && registryCurrent() && exactEntry()) {
+      // Recovery observation must survive a failed launch without granting launch authority.
+      manager.ensureListener();
+      manager.startSweeper();
+    }
+  };
   const settleCreatedTask = async (error: unknown) => {
     const task = receipt?.task ?? legacy?.task;
     if (!task) {
@@ -182,9 +192,15 @@ export async function registerRunningSubagent(params: {
     for (const [candidate, original] of originals) {
       if (
         manager.runs.get(candidate.runId) === candidate &&
-        isDeepStrictEqual(candidate, snapshot.get(candidate.runId))
+        isDeepStrictEqual(
+          candidate.killReconciliation,
+          snapshot.get(candidate.runId)?.killReconciliation,
+        )
       ) {
-        restored.set(candidate.runId, original);
+        restored.set(candidate.runId, {
+          ...structuredClone(candidate),
+          killReconciliation: original.killReconciliation,
+        });
         retained.set(candidate, structuredClone(candidate));
       }
     }
@@ -296,6 +312,7 @@ export async function registerRunningSubagent(params: {
       uncertain = false;
       activate();
     }
+    observeRetainedRun();
     throw error;
   }
   if (!acknowledged) {
@@ -360,6 +377,10 @@ export async function registerRunningSubagent(params: {
     }
     throw error;
   } finally {
-    receipt?.release();
+    try {
+      receipt?.release();
+    } finally {
+      observeRetainedRun();
+    }
   }
 }

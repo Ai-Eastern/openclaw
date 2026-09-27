@@ -198,7 +198,16 @@ it.each(["required", "optional"] as const)(
     expect(f.runs.has(f.registration.runId)).toBe(true);
     expect(f.scope.canCleanupSession()).toBe(false);
     expect(f.scope.canLaunch()).toBe(ownership === "optional");
-    expect(f.options.ensureListener).toHaveBeenCalledTimes(ownership === "optional" ? 1 : 0);
+    expect(f.options.ensureListener).toHaveBeenCalledOnce();
+    expect(f.options.startSweeper).toHaveBeenCalledOnce();
+    expect(f.manager.waitForSubagentCompletion).toHaveBeenCalledTimes(
+      ownership === "optional" ? 1 : 0,
+    );
+    if (ownership === "required") {
+      await expect(f.scope.settleFailedLaunch("creation failed")).rejects.toThrow(
+        "requires recovery",
+      );
+    }
     expect(f.writes).toHaveLength(1);
   },
 );

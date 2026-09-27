@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
@@ -8,6 +9,7 @@ import "./subagent-registry.persistence.mocks.test-support.js";
 // oxfmt-ignore
 import { useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-broker-admission.js";
@@ -18,11 +20,12 @@ import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-adm
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
+import * as detachedTaskRuntime from "../../../tasks/detached-task-runtime.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../../tasks/detached-task-runtime.test-support.js";
+import { findTaskByRunIdAsync } from "../../../tasks/task-registry-query.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   holdStateDatabaseCoordinator,
@@ -38,7 +41,8 @@ import {
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
-import { releaseSubagentRun } from "./subagent-registry.test-helpers.js";
+import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js";
+import type { SubagentRegistrationScope } from "./subagent-registry.types.js";
 
 const fixture = useSubagentPersistenceFixture();
 
@@ -158,7 +162,7 @@ it.each(["none", "before rollback commit", "after rollback commit"] as const)(
       try {
         const noTask = vi.fn(() => null);
         setDetachedTaskLifecycleRuntime({
-          ...getDetachedTaskLifecycleRuntime(),
+          ...detachedTaskRuntime.getDetachedTaskLifecycleRuntime(),
           createRunningTaskRun: noTask,
         });
         let lifecycleHandler: Parameters<typeof onAgentEvent>[0] | undefined;
@@ -277,6 +281,14 @@ it.each(["none", "before rollback commit", "after rollback commit"] as const)(
         expect(initialCommitted).toBe(true);
         const marker = predecessor.killReconciliation?.supersededAt;
         expect(marker).toBeTypeOf("number");
+        if (successorTiming === "none") {
+          predecessor.label = "Updated while successor task creation is pending";
+          await registryState.persistSubagentRunsToDiskAsyncOrThrow(
+            subagentRuns,
+            [predecessor.runId],
+            { context },
+          );
+        }
         if (successorTiming === "after rollback commit") {
           await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
             await registryState.prepareSubagentSessionListReadCache();
@@ -350,6 +362,10 @@ it.each(["none", "before rollback commit", "after rollback commit"] as const)(
         expect(afterCommitSuccessorCount).toBe(successorTiming === "after rollback commit" ? 1 : 0);
         const durable = loadSubagentRegistryFromSqlite();
         const durableMarker = durable.get(predecessor.runId)?.killReconciliation?.supersededAt;
+        if (successorTiming === "none") {
+          expect(durable.get(predecessor.runId)?.label).toBe(predecessor.label);
+          expect(durableMarker).toBeUndefined();
+        }
         if (successorTiming === "after rollback commit") {
           expect(rollbackCommittedIds).toEqual([olderId]);
           expect(subagentRuns.has(olderId)).toBe(false);
@@ -442,6 +458,183 @@ it.each(["none", "before rollback commit", "after rollback commit"] as const)(
       }
       if (failures.length > 1) {
         throw new AggregateError(failures, "Rollback authority or worker settlement failed");
+      }
+    });
+  },
+);
+
+it.each(["after rejection", "before rejection"] as const)(
+  "recovers the first required registration after a lost task receipt and terminal %s",
+  async (terminalTiming) => {
+    await fixture.allocateStateDir();
+    vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
+    await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), async () => {
+      const runId = "receiptless-first-registration";
+      const childSessionKey = "agent:main:subagent:receiptless-first-registration";
+      const storePath = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: childSessionKey,
+        sessionId: "receiptless-session",
+        defaultSessionId: "receiptless-session",
+        lifecycleRevision: "receiptless-lifecycle",
+      });
+      expect(subagentRuns.size).toBe(0);
+      const listeners = new Set<Parameters<typeof onAgentEvent>[0]>();
+      vi.mocked(onAgentEvent).mockImplementation((listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      });
+      const created = createDeferred();
+      const rejectReceipt = createDeferred();
+      const lostReceipt = new Error("Running task committed but its creation reply was lost");
+      let createdTaskId: string | undefined;
+      let registrationScope: SubagentRegistrationScope | undefined;
+      let registration: Promise<unknown> | undefined;
+      const prepareRunningTaskRun = detachedTaskRuntime.prepareRunningTaskRun;
+      const prepare = vi
+        .spyOn(detachedTaskRuntime, "prepareRunningTaskRun")
+        .mockImplementation((...args) => {
+          const prepared = prepareRunningTaskRun(...args);
+          if (prepared.kind !== "receipt") {
+            throw new Error("Receipt-loss fixture requires the real core task writer");
+          }
+          return {
+            kind: "receipt",
+            async create() {
+              const receipt = expectDefined(await prepared.create(), "committed task receipt");
+              createdTaskId = receipt.task.taskId;
+              receipt.release();
+              created.resolve();
+              await rejectReceipt.promise;
+              throw lostReceipt;
+            },
+          };
+        });
+      try {
+        registration = Promise.resolve(
+          registerSubagentRun(
+            {
+              runId,
+              childSessionKey,
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: "Retain terminal recovery after the first task receipt is lost",
+              cleanup: "keep",
+              expectsCompletionMessage: false,
+              taskRowOwnership: "required",
+            },
+            {
+              retainOwnership: (scope) => {
+                registrationScope = scope;
+              },
+            },
+          ),
+        ).catch((error: unknown) => error);
+        await Promise.race([created.promise, registration]);
+        const taskId = expectDefined(createdTaskId, "real committed task id");
+        const scope = expectDefined(registrationScope, "retained registration scope");
+        const entry = expectDefined(subagentRuns.get(runId), "acknowledged running entry");
+        expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+          runId,
+          childSessionKey,
+          execution: { status: "running" },
+        });
+        expect(await findTaskByRunIdAsync(runId)).toMatchObject({
+          taskId,
+          runId,
+          status: "running",
+        });
+        expect(scope.canLaunch()).toBe(false);
+        const endedAt = Date.now();
+        const emitTerminal = () => {
+          for (const listener of [...listeners]) {
+            listener({
+              runId,
+              sessionKey: childSessionKey,
+              seq: 1,
+              stream: "lifecycle",
+              ts: endedAt,
+              lifecycleGeneration: "test-generation",
+              data: {
+                phase: "end",
+                startedAt: entry.execution.startedAt,
+                endedAt,
+                aborted: true,
+                stopReason: "aborted",
+              },
+            });
+          }
+        };
+        if (terminalTiming === "before rejection") {
+          const session = expectDefined(
+            (await readSubagentSessionStore(storePath))[childSessionKey],
+            "retained child session",
+          );
+          await replaceSessionEntry(
+            { agentId: "main", storePath, sessionKey: childSessionKey },
+            {
+              ...session,
+              status: "killed",
+              lifecycleRunId: runId,
+              startedAt: entry.execution.startedAt,
+              endedAt,
+              updatedAt: endedAt,
+            },
+          );
+          emitTerminal();
+          expect(entry.execution.status).toBe("running");
+        }
+        rejectReceipt.resolve();
+        expect(await registration).toBe(lostReceipt);
+        expect(scope.canLaunch()).toBe(false);
+        expect(scope.canCleanupSession()).toBe(false);
+        await expect(scope.settleFailedLaunch("registration failed")).rejects.toThrow(
+          "requires recovery before launch settlement",
+        );
+        if (terminalTiming === "after rejection") {
+          emitTerminal();
+        } else {
+          // Make the retained run old enough for the normal sweeper recovery path.
+          const clock = vi.spyOn(Date, "now").mockReturnValue(endedAt + 60_001);
+          try {
+            await testing.runSweeperTickForTests();
+          } finally {
+            clock.mockRestore();
+          }
+        }
+        await fixture.settle();
+        expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+          runId,
+          childSessionKey,
+          execution: { status: "terminal", endedAt },
+          endedReason: SUBAGENT_ENDED_REASON_KILLED,
+        });
+        expect(await findTaskByRunIdAsync(runId)).toMatchObject({
+          taskId,
+          runId,
+          status: "cancelled",
+        });
+        expect((await readSubagentSessionStore(storePath))[childSessionKey]).toMatchObject({
+          sessionId: "receiptless-session",
+          lifecycleRevision: "receiptless-lifecycle",
+        });
+        expect(scope.canLaunch()).toBe(false);
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(
+          vi
+            .mocked(callGateway)
+            .mock.calls.some(
+              ([request]) => request.method === "agent" || request.method === "agent.wait",
+            ),
+        ).toBe(false);
+      } finally {
+        rejectReceipt.resolve();
+        await Promise.allSettled([registration]);
+        prepare.mockRestore();
+        await fixture.settle();
       }
     });
   },
