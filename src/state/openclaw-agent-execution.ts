@@ -335,7 +335,7 @@ function createAgentDatabaseExecution(
     const current = generation;
     try {
       const result = await current.run(source, operation, assertCallerCurrent, createIfMissing);
-      if (generation === current && current.failed()) {
+      if (generation === current && current.failure()) {
         try {
           await owner.close();
         } catch (error) {
@@ -344,10 +344,10 @@ function createAgentDatabaseExecution(
       }
       return result;
     } catch (error) {
-      const nativeFailed = current.failed();
-      if (generation === current && (nativeFailed || retireNativeOnFailure)) {
+      const nativeFailure = current.failure();
+      if (generation === current && (nativeFailure || retireNativeOnFailure)) {
         try {
-          if (nativeFailed) {
+          if (nativeFailure === "native") {
             await owner.close();
           } else {
             // The rejected broker scope has settled; only its captured native owner is retired.
@@ -422,7 +422,9 @@ function createAgentDatabaseExecution(
         throw new Error("Agent creation cannot capture another pending native opener");
       }
       retainAlias(borrowedPath);
-      observeOpenClawDatabaseMaintenanceResource(unregisterAgent);
+      for (const unregister of aliases.values()) {
+        observeOpenClawDatabaseMaintenanceResource(unregister);
+      }
       borrowers += 1;
       clearIdleTimer();
       if (executionState.idle === owner && !nativeClosing && !cleanupFailure) {

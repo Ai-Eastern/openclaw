@@ -47,6 +47,7 @@ import {
   resolveQuarantineStorePath,
 } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 
 const counter = vi.hoisted(() => ({
   path: "",
@@ -106,6 +107,130 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+it.each(["confirmed close", "native exit"] as const)(
+  "uses native close evidence before recovering an agent lease (%s)",
+  async (outcome) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-native-close-") };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const shared = openOpenClawStateDatabase({ env });
+    const leases = () =>
+      shared.db
+        .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+        .all(database.path);
+    const hostLeases = leases();
+    expect(hostLeases).toHaveLength(1);
+    const context = captureOpenClawStateWorkerContext({ env });
+    const assertCurrent = () => context.admission.assertCurrent();
+    const source: AgentDatabaseRequestExecutionSource = {
+      assertCurrent,
+      createAdmission: (binding) => () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          assertCurrent();
+          if (!grant()) {
+            throw new Error("Native close fixture lost admission");
+          }
+        }, binding.attachment),
+      }),
+    };
+    const generation = createAgentDatabaseNativeGeneration(
+      database.agentId,
+      database.path,
+      context,
+      assertCurrent,
+      assertCurrent,
+      undefined,
+      () => {},
+    );
+    const workers: Worker[] = [];
+    const observeWorker = (worker: Worker) => workers.push(worker);
+    const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
+    process.on("worker", observeWorker);
+    try {
+      await expect(generation.run(source, async () => "opened")).resolves.toBe("opened");
+      expect(leases()).toHaveLength(2);
+      process.off("worker", observeWorker);
+      if (outcome === "native exit") {
+        expect(workers.length).toBeGreaterThan(0);
+        await Promise.all(workers.map((worker) => worker.terminate()));
+        expect(leases()).toHaveLength(2);
+      }
+      await generation.close();
+      expect(leases()).toEqual(hostLeases);
+      expect(cleanup).toHaveBeenCalledTimes(outcome === "confirmed close" ? 0 : 1);
+    } finally {
+      process.off("worker", observeWorker);
+      try {
+        await generation.close();
+      } finally {
+        cleanup.mockRestore();
+      }
+    }
+  },
+);
+
+it("retires every borrower when native open refusal retains admission cleanup failure", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-open-cleanup-")) };
+  const options = { agentId: "main", env };
+  const database = openOpenClawAgentDatabase(options);
+  closeOpenClawAgentDatabaseByPath(database.path);
+  const rejected = captureOpenClawAgentDatabaseExecution(options);
+  const retained = captureOpenClawAgentDatabaseExecution(options);
+  const refusal = new Error("Original caller revoked before native agent open");
+  const cleanupError = new Error("Original caller cleanup failed after granting open");
+  let sourceCurrent = true;
+  let openRequests = 0;
+  const source: AgentDatabaseRequestExecutionSource = {
+    assertCurrent() {
+      if (!sourceCurrent) {
+        throw refusal;
+      }
+    },
+    createAdmission(binding) {
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          if (request.stage === "open") {
+            openRequests += 1;
+          }
+          binding.authorize(request);
+          if (!grant()) {
+            throw new Error("Cleanup refusal fixture lost its admission");
+          }
+          if (request.stage === "open" && openRequests === 1) {
+            // The broker granted factory entry; the factory must still admit its native open.
+            sourceCurrent = false;
+            throw cleanupError;
+          }
+        }, binding.attachment),
+      });
+    },
+  };
+  try {
+    const opening = rejected.runExisting(source, async () => "not admitted");
+    await expect(opening).rejects.toBeInstanceOf(AggregateError);
+    await expect(opening).rejects.toMatchObject({
+      cause: refusal,
+      errors: [refusal, { errors: [cleanupError] }],
+    });
+    expect(openRequests).toBe(2);
+    sourceCurrent = true;
+    expect(() => retained.assertCurrent()).toThrow("Agent database execution admission is closed");
+    await expect(retained.runExisting(source, async () => "not admitted")).rejects.toThrow(
+      "Agent database execution admission is closed",
+    );
+  } finally {
+    sourceCurrent = true;
+    const released = await Promise.allSettled([rejected.release(), retained.release()]);
+    await closeOpenClawAgentDatabasesAsync();
+    expect(released).toEqual([
+      { status: "fulfilled", value: undefined },
+      { status: "fulfilled", value: undefined },
+    ]);
+  }
+});
 
 it.each(["settled", "pending"] as const)(
   "prepares missing storage after an existing-only miss (%s)",

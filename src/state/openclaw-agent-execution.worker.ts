@@ -437,8 +437,8 @@ function openAgentDatabaseBackend(
         { operationLabel: "session.archive.publish" },
       );
     }
-    if (command.type === "session.transcript.initialize" && transcript) {
-      const kernel: NonNullable<typeof transcript> = transcript;
+    const kernel: typeof transcript = transcript;
+    if (command.type === "session.transcript.initialize" && kernel) {
       kernel.assertIdentity(command.input);
       const opened = openWriter();
       return runOpenClawAgentWriteTransaction(
@@ -485,11 +485,11 @@ function openAgentDatabaseBackend(
               return;
             }
             try {
-              if (!transcript) {
+              if (!kernel) {
                 throw new Error("Session transcript initialization was not prepared");
               }
-              transcript.assertIdentity(initialization);
-              transcript.initialize(
+              kernel.assertIdentity(initialization);
+              kernel.initialize(
                 current,
                 { agentId: input.agentId, path: input.databasePath, ...initialization },
                 initialization.cwd,

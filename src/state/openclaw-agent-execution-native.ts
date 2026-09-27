@@ -17,6 +17,7 @@ import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import {
   closeUnclaimedSharedStateSqliteWorkers,
   isSqliteWorkerStoreAvailable,
@@ -76,7 +77,7 @@ async function settleAgentRegistration<T>(
 
 export type AgentDatabaseExecutionScope = Pick<Store, "execute">;
 export type AgentDatabaseNativeGeneration = {
-  failed(): boolean;
+  failure(): "open-refused" | "native" | undefined;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
@@ -109,7 +110,13 @@ export function createAgentDatabaseNativeGeneration(
   let retiring = false;
   let opening: Promise<Store | undefined> | undefined;
   let openedStore: Store | undefined;
-  let openingFailed = false;
+  let openingFailure: "open-refused" | "native" | undefined;
+  let openingAdmission:
+    | {
+        admission: ReturnType<SqliteWorkerAdmissionFactory>["admission"];
+        settled: Promise<SqliteWorkerOperationSettlement>;
+      }
+    | undefined;
   let closing: Promise<void> | undefined;
   let nativeIdentity: AgentDatabaseExecutionIdentity | undefined;
   let nativeStopped: Promise<void> | undefined;
@@ -377,7 +384,11 @@ export function createAgentDatabaseNativeGeneration(
             stateContext: context,
             stateDatabasePath: context.admission.databasePath,
             assertCurrent,
-            createAdmission: admission(source, registration, assertCallerCurrent),
+            createAdmission: (operation) => {
+              const captured = admission(source, registration, assertCallerCurrent)(operation);
+              openingAdmission = { admission: captured.admission, settled: operation.settled };
+              return captured;
+            },
             onNativeStopped: (stopped, readReceipt) => {
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
@@ -404,10 +415,29 @@ export function createAgentDatabaseNativeGeneration(
         }
         throw error;
       }
-    })().catch((error: unknown) => {
-      openingFailed = true;
-      throw error;
-    });
+    })()
+      .catch(async (error: unknown) => {
+        openingFailure = "native";
+        if (openingAdmission) {
+          const { admission: captured, settled } = openingAdmission;
+          const outcome = await settled;
+          // Only a settled caller refusal can preserve other logical borrowers.
+          // Cleanup aggregates and uncertain native work retain whole-owner retirement.
+          if (
+            captured.failure !== undefined &&
+            error === captured.failure &&
+            outcome.kind !== "unknown" &&
+            !captured.committed &&
+            captured.cleanupFailures.length === 0
+          ) {
+            openingFailure = "open-refused";
+          }
+        }
+        throw error;
+      })
+      .finally(() => {
+        openingAdmission = undefined;
+      });
     const attempt = opening;
     return attempt.then((store) => {
       if (!store && opening === attempt) {
@@ -464,7 +494,7 @@ export function createAgentDatabaseNativeGeneration(
       admission(source, undefined, assertCallerCurrent),
     );
   }
-  const publishCloseCheckpoint = () => {
+  const readConfirmedClose = () => {
     const receipt = readCloseReceipt?.();
     if (
       !receipt ||
@@ -474,31 +504,44 @@ export function createAgentDatabaseNativeGeneration(
       receipt.identity.key !== `file:${nativeIdentity.physicalIdentity}` ||
       receipt.identity.canonicalPath !== nativeIdentity.nativeLocation
     ) {
+      return undefined;
+    }
+    return { receipt, identity: nativeIdentity, lease };
+  };
+  const publishCloseCheckpoint = () => {
+    const closed = readConfirmedClose();
+    if (!closed) {
       return;
     }
+    const { receipt, identity, lease: closedLease } = closed;
     try {
       // Cleanup retains custody after ordinary admission is revoked during shutdown.
       assertCleanupOwned();
       assertExistingDatabaseIdentity(pathname, receipt.identity.key);
-      assertExistingDatabaseIdentity(nativeIdentity.nativeLocation, receipt.identity.key);
-      assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
+      assertExistingDatabaseIdentity(identity.nativeLocation, receipt.identity.key);
+      assertExistingDatabaseIdentity(closedLease.sharedStatePath, closedLease.sharedStateIdentity);
       publishSqliteWalCheckpointObservation(pathname, receipt.checkpoint);
     } catch {
       // A stale diagnostic must not clear another generation's budget or fail native cleanup.
     }
   };
   return {
-    failed: () =>
-      openingFailed || Boolean(openedStore && !isSqliteWorkerStoreAvailable(openedStore)),
+    failure: () =>
+      openingFailure ??
+      (openedStore && !isSqliteWorkerStoreAvailable(openedStore) ? "native" : undefined),
     run,
     close() {
       retiring = true;
       closing ??= (async () => {
         const errors: unknown[] = [];
+        let storeClosed = false;
         if (opening) {
           try {
             await opening.then(
-              (store) => store?.close(),
+              async (store) => {
+                await store?.close();
+                storeClosed = store !== undefined;
+              },
               () =>
                 openedStore
                   ? openedStore.close()
@@ -510,12 +553,20 @@ export function createAgentDatabaseNativeGeneration(
         }
         if (nativeStopped && lease) {
           try {
-            await cleanupRetiredAgentDatabaseLease({
-              context,
-              stopped: nativeStopped,
-              assertOwned: assertCleanupOwned,
-              lease,
-            });
+            await nativeStopped;
+            assertCleanupOwned();
+            // The backend publishes this receipt only after native close and lease release.
+            // A closed client or exited Worker alone still needs orphan recovery.
+            if (storeClosed && readConfirmedClose()) {
+              assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
+            } else {
+              await cleanupRetiredAgentDatabaseLease({
+                context,
+                stopped: nativeStopped,
+                assertOwned: assertCleanupOwned,
+                lease,
+              });
+            }
           } catch (error) {
             errors.push(error);
           }
