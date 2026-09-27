@@ -20,7 +20,7 @@ const ArtifactQueryParamsProperties = {
 };
 
 /** Artifact lookup payload with a required artifact id plus optional scope filters. */
-const ArtifactGetParamsSchema = closedObject({
+export const ArtifactsGetParamsSchema = closedObject({
   ...ArtifactQueryParamsProperties,
   artifactId: NonEmptyString,
 });
@@ -57,9 +57,6 @@ export const ArtifactsListResultSchema = closedObject({
   nextCursor: Type.Optional(NonEmptyString),
   omittedOversized: Type.Optional(Type.Boolean()),
 });
-
-/** Get request payload for one artifact summary. */
-export const ArtifactsGetParamsSchema = ArtifactGetParamsSchema;
 
 /** Get response containing one artifact summary. */
 export const ArtifactsGetResultSchema = closedObject({
