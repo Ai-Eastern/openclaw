@@ -283,7 +283,7 @@ actor MacGatewayProfileStore {
             try self.requireCurrentAttempt(attempt)
             _ = await MacGatewayConnectionFleet.shared.remove(
                 profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
-        } else {
+        } else if !renewsBrowserSession {
             await MacGatewayConnectionFleet.shared.disconnect(
                 profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
         }
@@ -299,8 +299,8 @@ actor MacGatewayProfileStore {
         try self.requireCurrentAttempt(attempt)
         try credentials?.browserSession?.validate(for: attempt.url)
         if credentials?.browserSession != nil {
-            // Join the old socket before revocation so its pending hello cannot
-            // repersist a device token after browser credentials commit.
+            // Join non-renewal sockets before revocation to prevent hello token writes.
+            // Browser renewals cannot use or persist device tokens; keep them up until saved.
             guard let identity = DeviceIdentityStore.loadOrCreatePersisted(),
                   DeviceAuthStore.clearGatewayTokensPersisted(
                       deviceId: identity.deviceId, gatewayID: attempt.profileID)
@@ -316,6 +316,8 @@ actor MacGatewayProfileStore {
         self.credentialTransitions[profile.id] = false
         var renewedBrowserSession = false
         if renewsBrowserSession, let previousSession, let nextSession {
+            await MacGatewayConnectionFleet.shared.disconnect(
+                profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
             do {
                 try await DashboardBrowserSessionStore.renewProfileSession(
                     profileID: profile.id,

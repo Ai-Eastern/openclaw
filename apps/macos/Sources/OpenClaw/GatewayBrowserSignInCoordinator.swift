@@ -45,8 +45,7 @@ final class GatewayBrowserSignInCoordinator {
                       profileID: id, now: Date(), userPresent: Self.userIsPresent, inUse: true)
             else { continue }
             let progress = GatewayBrowserSignInProgress()
-            progress.gatewayHost = profile.url.host ?? ""
-            let task = Task { [weak self] in
+            self.renewals[id] = Task { [weak self] in
                 defer { self?.renewals[id] = nil }
                 do {
                     _ = try await Self.finishSignIn(
@@ -71,7 +70,6 @@ final class GatewayBrowserSignInCoordinator {
                         "automatic browser renewal \(outcome, privacy: .public) profile=\(id, privacy: .public)")
                 }
             }
-            self.renewals[id] = task
         }
     }
 
