@@ -87,6 +87,9 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "tui.lastSession.retiredPointers") {
+    return { ...command, retiredSessionKeys: [...command.retiredSessionKeys] };
+  }
   if (command.type === "userProfiles.avatar.read") {
     return { ...command, expected: { ...command.expected } };
   }
@@ -239,8 +242,23 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "tui.lastSession.read") {
+    return bytes + Buffer.byteLength(command.stateKey, "utf8");
+  }
+  if (command.type === "tui.lastSession.retiredPointers") {
+    return command.retiredSessionKeys.reduce(
+      (total, key) => total + Buffer.byteLength(key, "utf8"),
+      bytes,
+    );
+  }
   if (isChannelIngressReadCommand(command)) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
+  }
+  if (command.type === "capture.readOnlyEvents") {
+    return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;
+  }
+  if (command.type === "capture.readOnlyBlob") {
+    return bytes + Buffer.byteLength(command.blobId, "utf8");
   }
   if (command.type === "cron.jobNames") {
     return command.jobIds.reduce(
@@ -348,6 +366,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         Buffer.byteLength(entry.childSessionKey ?? "", "utf8"),
       bytes,
     );
+  }
+  if (command.type === "tasks.retentionSource") {
+    return bytes + Buffer.byteLength(command.taskId, "utf8");
   }
   if (
     command.type === "githubPublication.request" ||

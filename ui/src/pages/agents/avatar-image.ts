@@ -1,5 +1,3 @@
-// Control UI helper converts picked avatar images into compact data URLs.
-
 import { AVATAR_MAX_BYTES } from "../../../../src/shared/avatar-limits.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";

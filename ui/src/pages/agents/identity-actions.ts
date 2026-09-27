@@ -1,5 +1,3 @@
-// Agent identity draft state and persistence, split out of agents-page.ts.
-
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationNavigationPreferences } from "../../app/context.ts";

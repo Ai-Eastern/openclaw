@@ -2,13 +2,12 @@ import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import { icons } from "../../components/icons.ts";
 import { renderSettingsEmpty, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import type { SkillLibraryController } from "./library-controller.ts";
-import { renderLibraryIdentity } from "./library-detail.ts";
+import { renderLibraryDialogHeader, renderLibraryIdentity } from "./library-detail.ts";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
 import { renderSkillLibraryToolbar } from "./library-toolbar.ts";
@@ -42,16 +41,7 @@ export function renderSkillLibrary(
         ? html`<p class="muted">${t("skillLibrary.signIn")}</p>`
         : nothing
     }
-    ${
-      library.error && !library.draft && !library.importOpen
-        ? html`<div class="callout danger" role="alert">${library.error}</div>`
-        : nothing
-    }
-    ${
-      library.notice && !library.draft
-        ? html`<div class="callout success" role="status">${library.notice}</div>`
-        : nothing
-    }
+    ${renderSkillLibraryFeedback(library)}
     ${
       list && !library.showWorkspace
         ? html`<p class="muted">
@@ -118,6 +108,20 @@ export function renderSkillLibrary(
   `;
 }
 
+function renderLibraryFeedback(error: string | null, notice: string | null = null) {
+  return html`
+    ${error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing}
+    ${notice ? html`<div class="callout success" role="status">${notice}</div>` : nothing}
+  `;
+}
+
+export function renderSkillLibraryFeedback(library: SkillLibraryController) {
+  return renderLibraryFeedback(
+    !library.draft && !library.importOpen ? library.error : null,
+    !library.draft ? library.notice : null,
+  );
+}
+
 export const renderSkillLibraryDialogs = (library: SkillLibraryController) =>
   html`${renderLibraryEditor(library)} ${renderLibraryImport(library)}`;
 
@@ -178,18 +182,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="exec-approval-header">
-        <strong class="exec-approval-title">${draft.entry?.slug ?? t("skillLibrary.create")}</strong
-        ><button
-          type="button"
-          class="btn btn--icon btn--ghost"
-          aria-label=${t("common.close")}
-          ?disabled=${library.busy}
-          @click=${() => library.close()}
-        >
-          ${icons.x}
-        </button>
-      </div>
+      ${renderLibraryDialogHeader(draft.entry?.slug ?? t("skillLibrary.create"), () => library.close(), library.busy)}
       <div
         class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"
@@ -363,16 +356,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
               </div>`
             : nothing
         }
-        ${
-          library.error
-            ? html`<div class="callout danger" role="alert">${library.error}</div>`
-            : nothing
-        }
-        ${
-          library.notice
-            ? html`<div class="callout success" role="status">${library.notice}</div>`
-            : nothing
-        }
+        ${renderLibraryFeedback(library.error, library.notice)}
         <div class="plugins-toolbar">
           ${
             !library.canEdit
@@ -506,18 +490,7 @@ function renderLibraryImport(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="exec-approval-header">
-        <strong class="exec-approval-title">${t("skillLibrary.import")}</strong
-        ><button
-          type="button"
-          class="btn btn--icon btn--ghost"
-          aria-label=${t("common.close")}
-          ?disabled=${library.busy}
-          @click=${close}
-        >
-          ${icons.x}
-        </button>
-      </div>
+      ${renderLibraryDialogHeader(t("skillLibrary.import"), close, library.busy)}
       <div class="skill-reader-dialog__body skill-library-import">
         ${!library.importSource && !library.uploadsEnabled ? html`<p role="status">${uploadsDisabledMessage()}</p>` : nothing}
         <p class="muted">
@@ -628,11 +601,7 @@ function renderLibraryImport(library: SkillLibraryController) {
               </div>`
             : nothing
         }
-        ${
-          library.error
-            ? html`<div class="callout danger" role="alert">${library.error}</div>`
-            : nothing
-        }
+        ${renderLibraryFeedback(library.error)}
         <button
           type="submit"
           class="btn primary"

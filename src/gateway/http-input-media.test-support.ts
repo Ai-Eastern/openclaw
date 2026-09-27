@@ -538,10 +538,14 @@ export function registerOpenResponsesHttpMediaInputTests({
   postResponses,
   firstAgentOpts,
   agentCommandMock,
+  mockAgentOnce,
   ensureResponseConsumed,
   expectInvalidRequest,
   buildUrlInputMessage,
+  buildFileInputMessage,
 }: OpenResponsesMediaSuite & {
+  mockAgentOnce: (payloads: Array<{ text: string }>) => void;
+  buildFileInputMessage: (text: string, filename: string, message?: string) => unknown;
   ensureResponseConsumed: (res: Response) => Promise<void>;
   expectInvalidRequest: (res: Response, pattern: RegExp) => Promise<unknown>;
   buildUrlInputMessage: (params: {
@@ -589,8 +593,7 @@ export function registerOpenResponsesHttpMediaInputTests({
     const pngBase64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+    mockAgentOnce([{ text: "ok" }]);
 
     const res = await postResponses(port, {
       model: "openclaw",
@@ -620,29 +623,12 @@ export function registerOpenResponsesHttpMediaInputTests({
 
   it("accepts file-only input without text, matching image-only", async () => {
     const port = getPort();
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+    mockAgentOnce([{ text: "ok" }]);
 
     const res = await postResponses(port, {
       model: "openclaw",
       instructions: "Summarize the attached document.",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_file",
-              source: {
-                type: "base64",
-                media_type: "text/plain",
-                data: Buffer.from("the quick brown fox").toString("base64"),
-                filename: "doc.txt",
-              },
-            },
-          ],
-        },
-      ],
+      input: buildFileInputMessage("the quick brown fox", "doc.txt"),
     });
 
     expect(res.status).toBe(200);
@@ -658,28 +644,11 @@ export function registerOpenResponsesHttpMediaInputTests({
   it("keeps base64 input_file text truncation UTF-16 safe", async () => {
     const port = getPort();
     const text = `${"a".repeat(59_999)}😀tail`;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+    mockAgentOnce([{ text: "ok" }]);
 
     const res = await postResponses(port, {
       model: "openclaw",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_file",
-              source: {
-                type: "base64",
-                media_type: "text/plain",
-                data: Buffer.from(text).toString("base64"),
-                filename: "emoji-boundary.txt",
-              },
-            },
-          ],
-        },
-      ],
+      input: buildFileInputMessage(text, "emoji-boundary.txt"),
     });
 
     expect(res.status).toBe(200);

@@ -51,7 +51,7 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // Current main plus destination diagnostics measures 370,756 B; retain the fixed allowances.
+  // Approved measured upload-control baseline; retain the fixed growth and variance allowances.
   startupJsGzipBytes: 371_771,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.

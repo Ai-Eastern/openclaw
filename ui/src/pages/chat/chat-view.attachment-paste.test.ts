@@ -187,6 +187,54 @@ describe("chat attachment paste", () => {
 });
 
 describe("chat attachment reading", () => {
+  it("retains a failed attachment slot when uploads are disabled during a file read", async () => {
+    const base = createApplicationConfigCapability({ resourceBasePath: "" });
+    const uploadConfig = { ...base, current: { ...base.current, uploadsEnabled: true } };
+    const readers: FileReader[] = [];
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+      readers.push(this);
+    });
+    const reads = new ChatAttachmentReadLifecycle(() => undefined);
+    const readSignal = reads.readSignal;
+    onTestFinished(() => reads.abortReads());
+    const onAttachmentsChange = vi.fn();
+    const props = {
+      uploadConfig,
+      draft: "Keep this file with the message",
+      attachmentReads: reads,
+      readSignal,
+      getPendingAttachmentReads: () => reads.pendingReads,
+      onPendingReadsChange: (delta: 1 | -1) => reads.updatePending(readSignal, delta),
+      onAttachmentsChange,
+    };
+    const container = renderChatView(props);
+    const input = expectDefined(
+      container.querySelector<HTMLInputElement>(".agent-chat__file-input"),
+      "attachment file input",
+    );
+    Object.defineProperty(input, "files", {
+      value: [new File(["attachment proof"], "proof.png", { type: "image/png" })],
+    });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(readers).toHaveLength(1);
+    expect(reads.pendingReads).toBe(1);
+
+    uploadConfig.current.uploadsEnabled = false;
+    const reader = expectDefined(readers[0], "pending attachment reader");
+    Object.defineProperty(reader, "result", { value: "data:image/png;base64,YWJj" });
+    reader.dispatchEvent(new ProgressEvent("load"));
+    await Promise.resolve();
+
+    expect(reads.pendingReads).toBe(0);
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    const failed = renderChatView(props);
+    expect(failed.querySelectorAll(".chat-attachment-thumb--error")).toHaveLength(1);
+    expect(getComposerTextarea(failed).value).toBe(props.draft);
+    expect(failed.querySelector(".chat-attachment-error")?.getAttribute("aria-label")).toContain(
+      "proof.png",
+    );
+  });
+
   it.each(["clipboard", "file picker", "drop"] as const)(
     "waits for an in-flight %s attachment before accepting an immediate send",
     async (entry) => {

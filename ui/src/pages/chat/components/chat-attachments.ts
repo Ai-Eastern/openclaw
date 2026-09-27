@@ -185,15 +185,8 @@ function readAttachmentFile(
   const reader = new FileReader();
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = CHAT_ATTACHMENT_READ_TIMEOUT_MS;
-  const clearTimer = () => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  const onTimeout = () => {
-    finish("error");
+  const cancel = (outcome: "error" | "aborted") => {
+    finish(outcome);
     try {
       reader.abort();
     } catch {
@@ -205,13 +198,14 @@ function readAttachmentFile(
       return;
     }
     settled = true;
-    clearTimer();
+    clearTimeout(timer);
+    timer = undefined;
     signal.removeEventListener("abort", abort);
     entry.cancel = undefined;
     if (outcome === "ready" && !uploadsEnabled(props.uploadConfig)) {
       showToast({ message: uploadsDisabledMessage() });
-      // Keep a failed slot: an already-requested send must not silently lose its file.
-      reads.fail(entry);
+      // Keep a failed slot visible rather than silently dropping the rejected file.
+      reads.settle(entry, "error");
     } else if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
       const completedAttachment = registerChatAttachmentPayload({
         attachment: entry.attachment,
@@ -227,22 +221,16 @@ function readAttachmentFile(
           .filter(({ attachment }) => readyIds.has(attachment.id))
           .map(({ attachment }) => attachment),
       );
-      reads.complete(entry);
+      reads.settle(entry, "ready");
     } else if (outcome === "aborted" || signal.aborted) {
       reads.remove(entry);
     } else {
-      reads.fail(entry);
+      reads.settle(entry, "error");
     }
     entry.destination.onPendingReadsChange?.(-1);
   };
-  const abort = () => {
-    finish("aborted");
-    try {
-      reader.abort();
-    } catch {
-      // Ignore reader abort errors on stalled handles.
-    }
-  };
+  const abort = () => cancel("aborted");
+  const onTimeout = () => cancel("error");
   entry.cancel = abort;
   signal.addEventListener("abort", abort, { once: true });
   reader.addEventListener("error", () => finish("error"), { once: true });
@@ -251,16 +239,14 @@ function readAttachmentFile(
   reader.addEventListener("progress", (event) => {
     if (!settled && event.lengthComputable && event.total > 0) {
       reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
-      if (timeoutMs > 0 && timer !== undefined) {
-        clearTimer();
-        timer = setTimeout(onTimeout, timeoutMs);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS);
       }
     }
   });
   entry.destination.onPendingReadsChange?.(1);
-  if (timeoutMs > 0) {
-    timer = setTimeout(onTimeout, timeoutMs);
-  }
+  timer = setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS);
   try {
     reader.readAsDataURL(file);
   } catch {
@@ -358,11 +344,6 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   appendChatAttachmentFiles(files, props);
 }
 
-function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
-  e.preventDefault();
-  appendChatAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
-}
-
 type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
   canCompose: boolean;
 };
@@ -438,7 +419,7 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       event.stopPropagation();
       clearActive(event);
       if (props.canCompose) {
-        handleChatAttachmentDrop(event, props);
+        appendChatAttachmentFiles([...(event.dataTransfer?.files ?? [])], props);
       }
     },
   };

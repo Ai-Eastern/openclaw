@@ -68,10 +68,12 @@ import type {
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
+import type { TaskRetentionSource } from "../tasks/task-registry-retention-source.js";
 import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
 } from "../tasks/task-registry.store.types.js";
+import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDeletionJournalPurpose,
@@ -120,9 +122,13 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
+  | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
+  | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
+  | { type: "acpSessions.list" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -162,6 +168,7 @@ export type OpenClawStateReadCommand =
       type: "tasks.mutationSnapshot";
       input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
     }
+  | { type: "tasks.retentionSource"; taskId: string }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
@@ -221,6 +228,13 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | {
+      ok: true;
+      type: "tui.lastSession.read";
+      sourceAdmitted: true;
+      row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
+    }
+  | { ok: true; type: "tui.lastSession.retiredPointers"; sourceAdmitted: true; stateKeys: string[] }
   | ChannelIngressReadReply
   | {
       ok: true;
@@ -239,6 +253,12 @@ export type OpenClawStateReadReply = (
       type: "config.snapshot.read";
       sourceAdmitted: true;
       snapshot: ConfigSnapshotAuditRecord | null;
+    }
+  | {
+      ok: true;
+      type: "acpSessions.list";
+      sourceAdmitted: true;
+      rows: AcpSessionRow[];
     }
   | {
       ok: true;
@@ -268,12 +288,30 @@ export type OpenClawStateReadReply = (
       history: ListTerminalOperatorApprovalsResult;
     }
   | PluginBlobReadReply
+  | {
+      ok: true;
+      type: "capture.readOnlyEvents";
+      sourceAdmitted: true;
+      events: Array<Record<string, unknown>>;
+    }
+  | {
+      ok: true;
+      type: "capture.readOnlyBlob";
+      sourceAdmitted: true;
+      blob: string | null;
+    }
   | { ok: true; type: "subagents.forChildSession"; sourceAdmitted: true; runs: SubagentRunRecord[] }
   | {
       ok: true;
       type: "tasks.mutationSnapshot";
       sourceAdmitted: true;
       snapshot: TaskRegistryStoreSnapshot;
+    }
+  | {
+      ok: true;
+      type: "tasks.retentionSource";
+      sourceAdmitted: true;
+      source: TaskRetentionSource | undefined;
     }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {

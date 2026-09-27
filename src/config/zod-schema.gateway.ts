@@ -73,6 +73,7 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
 });
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const GatewayHttpImagesSchema = z.strictObject(ResponsesEndpointUrlFetchShape).optional();
 
 function validateGatewayPublicOrigin(value: string): boolean {
   if (!validateHttpOrigin(value)) {
@@ -418,11 +419,7 @@ export const GatewayConfigSchema = z
             chatCompletions: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                images: z
-                  .strictObject({
-                    ...ResponsesEndpointUrlFetchShape,
-                  })
-                  .optional(),
+                images: GatewayHttpImagesSchema,
               })
               .optional(),
             responses: z
@@ -442,11 +439,7 @@ export const GatewayConfigSchema = z
                       .optional(),
                   })
                   .optional(),
-                images: z
-                  .strictObject({
-                    ...ResponsesEndpointUrlFetchShape,
-                  })
-                  .optional(),
+                images: GatewayHttpImagesSchema,
               })
               .optional(),
           })

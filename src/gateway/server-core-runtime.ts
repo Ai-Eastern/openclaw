@@ -150,6 +150,7 @@ export async function startGatewayCoreRuntime(input: {
       .measure("runtime.early", () =>
         loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
+            scheduler: runtime.scheduler,
             minimalTestGateway,
             isClosing: () => runtime.lifecycle.closePreludeStarted,
             updateCanary: runtime.opts.updateCanary,
@@ -292,29 +293,17 @@ export async function startGatewayCoreRuntime(input: {
   );
 
   const {
-    execApprovalManager,
-    questionManager,
-    cancelRunBoundApprovals,
-    forwardPluginApprovalRequest,
-    forwardExecApprovalRequest,
-    forwardSystemAgentApprovalRequest,
-    forwardSystemAgentApprovalResolved,
-    execApprovalIosPushDelivery,
-    approvalWebPushDelivery,
-    pluginApprovalIosPushDelivery,
-    pluginApprovalManager,
-    placementStandingGrants,
-    systemAgentApprovalManager,
-    bindApprovalPublicationContext,
     beginCloseApprovalObservers,
     stopOperatorInteractions,
     extraHandlers,
     coreGatewayHandlers,
+    ...approvalRuntime
   } = await startupTrace.measure("gateway.handlers", async () => {
     const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
       await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
     return {
       ...createGatewayAuxHandlers({
+        scheduler: runtime.scheduler,
         log,
         chatAbortControllers,
         hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
@@ -353,6 +342,8 @@ export async function startGatewayCoreRuntime(input: {
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
+  const { execApprovalManager, pluginApprovalManager, systemAgentApprovalManager } =
+    approvalRuntime;
   const requestLifetime = runtime.connectionWork.signal;
   requestLifetime.addEventListener("abort", beginCloseApprovalObservers, { once: true });
   if (requestLifetime.aborted) {
@@ -532,20 +523,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionActivitySummaries,
     channelAdmissionAudit,
     approvalSessionEvents,
-    execApprovalManager,
-    questionManager,
-    cancelRunBoundApprovals,
-    forwardPluginApprovalRequest,
-    forwardExecApprovalRequest,
-    forwardSystemAgentApprovalRequest,
-    forwardSystemAgentApprovalResolved,
-    execApprovalIosPushDelivery,
-    approvalWebPushDelivery,
-    pluginApprovalIosPushDelivery,
-    pluginApprovalManager,
-    placementStandingGrants,
-    systemAgentApprovalManager,
-    bindApprovalPublicationContext,
+    ...approvalRuntime,
     validateAgentRuntimeApprovalAuthority,
     attachedGatewayExtraHandlers,
     getAttachedGatewayMethodRegistry: () => attachedGatewayMethodRegistry,

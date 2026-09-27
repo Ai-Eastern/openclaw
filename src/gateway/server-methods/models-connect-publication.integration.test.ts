@@ -23,9 +23,6 @@ import {
 } from "../test-helpers.e2e.js";
 
 // Optional startup prewarming must not compete with the catalog request drain.
-vi.mock("../server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
 vi.mock("../server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
 }));
@@ -39,13 +36,7 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
     activateGatewayScheduledServices: (
       params: Parameters<typeof actual.activateGatewayScheduledServices>[0],
     ) => actual.activateGatewayScheduledServices({ ...params, minimalTestGateway: true }),
-    scheduleGatewayPostReadyMaintenance: (
-      ...args: Parameters<typeof actual.scheduleGatewayPostReadyMaintenance>
-    ) => {
-      const timer = actual.scheduleGatewayPostReadyMaintenance(...args);
-      clearTimeout(timer);
-      return timer;
-    },
+    scheduleGatewayPostReadyMaintenance: () => {},
   };
 });
 

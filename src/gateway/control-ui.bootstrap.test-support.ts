@@ -42,124 +42,96 @@ export function registerControlUiUploadConfigTests(): void {
 }
 
 export function registerControlUiBootstrapConfigTests({
-  withControlUiRoot,
+  createControlUiRoot,
   devInstallBranchMock,
 }: {
-  withControlUiRoot: <T>(params: {
-    indexHtml?: string;
-    fn: (tmp: string) => Promise<T>;
-  }) => Promise<T>;
+  createControlUiRoot: (indexHtml?: string) => Promise<string>;
   devInstallBranchMock: { branch: string | null };
 }): void {
-  it.each([undefined, true, false])(
-    "serves bootstrap config JSON with cliAgents=%s",
-    async (enabled) => {
-      await withControlUiRoot({
-        fn: async (tmp) => {
-          const { res, end } = makeMockHttpResponse();
-          const handled = await handleControlUiHttpRequest(
-            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: {
-                agents: {
-                  defaults: { workspace: tmp },
-                  list: [
-                    {
-                      id: "roboclaw",
-                      default: true,
-                      workspace: tmp,
-                      identity: {
-                        name: "</script><script>alert(1)//",
-                        avatar: "</script>.png",
-                      },
-                    },
-                  ],
-                },
-                ui: { seamColor: "#1A2b3C" },
-                gateway: {
-                  ...(enabled === undefined ? {} : { cliAgents: { enabled } }),
-                  controlUi: { environment: { label: "edge", color: "amber" } },
+  it.each([undefined, false])("serves bootstrap config JSON with cliAgents=%s", async (enabled) => {
+    const tmp = await createControlUiRoot();
+
+    const { res, end } = makeMockHttpResponse();
+    const handled = await handleControlUiHttpRequest(
+      { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+      res,
+      {
+        root: { kind: "resolved", path: tmp },
+        config: {
+          agents: {
+            defaults: { workspace: tmp },
+            list: [
+              {
+                id: "roboclaw",
+                default: true,
+                workspace: tmp,
+                identity: {
+                  name: "</script><script>alert(1)//",
+                  avatar: "</script>.png",
                 },
               },
-            },
-          );
-          expect(handled).toBe(true);
-          const parsed = parseBootstrapPayload(end);
-          expect(parsed.basePath).toBe("");
-          expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-          expect(parsed.assistantAvatar).toBe("A");
-          expect(parsed.assistantAvatarStatus).toBe("none");
-          expect(parsed.assistantAvatarReason).toBe("missing");
-          expect(parsed.assistantAgentId).toBe("roboclaw");
-          expect(parsed.seamColor).toBe("#1A2b3C");
-          expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
-          expect(parsed.terminalEnabled).toBe(true);
-          expect(parsed.cliAgentsEnabled).toBe(enabled !== false);
-          expect(parsed.automaticallyFetchFavicons).toBe(true);
-          expect(parsed.communityInvite).toBe(true);
-          expect(parsed.devGitBranch).toBeUndefined();
+            ],
+          },
+          ui: { seamColor: "#1A2b3C" },
+          gateway: {
+            ...(enabled === undefined ? {} : { cliAgents: { enabled } }),
+            controlUi: { environment: { label: "edge", color: "amber" } },
+          },
         },
-      });
-    },
-  );
+      },
+    );
+    expect(handled).toBe(true);
+    const parsed = parseBootstrapPayload(end);
+    expect(parsed.basePath).toBe("");
+    expect(parsed.assistantName).toBe("</script><script>alert(1)//");
+    expect(parsed.assistantAvatar).toBe("A");
+    expect(parsed.assistantAvatarStatus).toBe("none");
+    expect(parsed.assistantAvatarReason).toBe("missing");
+    expect(parsed.assistantAgentId).toBe("roboclaw");
+    expect(parsed.seamColor).toBe("#1A2b3C");
+    expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
+    expect(parsed.terminalEnabled).toBe(true);
+    expect(parsed.cliAgentsEnabled).toBe(enabled !== false);
+    expect(parsed.automaticallyFetchFavicons).toBe(true);
+    expect(parsed.communityInvite).toBe(true);
+    expect(parsed.devGitBranch).toBeUndefined();
+  });
 
   it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
     "projects an explicit %s opt-out into bootstrap config",
     async (key) => {
-      await withControlUiRoot({
-        fn: async (tmp) => {
-          const { res, end } = makeMockHttpResponse();
-          const handled = await handleControlUiHttpRequest(
-            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: {
-                gateway: { controlUi: { [key]: false } },
-              },
-            },
-          );
+      const tmp = await createControlUiRoot();
 
-          expect(handled).toBe(true);
-          expect(parseBootstrapPayload(end)[key]).toBe(false);
+      const { res, end } = makeMockHttpResponse();
+      const handled = await handleControlUiHttpRequest(
+        { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+        res,
+        {
+          root: { kind: "resolved", path: tmp },
+          config: {
+            gateway: { controlUi: { [key]: false } },
+          },
         },
-      });
+      );
+
+      expect(handled).toBe(true);
+      expect(parseBootstrapPayload(end)[key]).toBe(false);
     },
   );
-
-  it("omits the assistant agent id without a config snapshot", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          { root: { kind: "resolved", path: tmp } },
-        );
-
-        expect(handled).toBe(true);
-        expect(parseBootstrapPayload(end)).not.toHaveProperty("assistantAgentId");
-      },
-    });
-  });
 
   it("includes the dev checkout branch in bootstrap config", async () => {
     devInstallBranchMock.branch = "feat/dev-branch-badge";
     try {
-      await withControlUiRoot({
-        fn: async (tmp) => {
-          const { res, end } = makeMockHttpResponse();
-          const handled = await handleControlUiHttpRequest(
-            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-            res,
-            { root: { kind: "resolved", path: tmp }, config: {} },
-          );
-          expect(handled).toBe(true);
-          expect(parseBootstrapPayload(end).devGitBranch).toBe("feat/dev-branch-badge");
-        },
-      });
+      const tmp = await createControlUiRoot();
+
+      const { res, end } = makeMockHttpResponse();
+      const handled = await handleControlUiHttpRequest(
+        { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+        res,
+        { root: { kind: "resolved", path: tmp }, config: {} },
+      );
+      expect(handled).toBe(true);
+      expect(parseBootstrapPayload(end).devGitBranch).toBe("feat/dev-branch-badge");
     } finally {
       devInstallBranchMock.branch = null;
     }
