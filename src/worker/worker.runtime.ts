@@ -23,11 +23,9 @@ import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
-import {
-  WorkerInferenceProxyClient,
-  WorkerLiveEventClient,
-  WorkerTranscriptCommitClient,
-} from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
 declare const WORKER_DEPLOY_BUILD: boolean;

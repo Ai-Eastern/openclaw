@@ -5,6 +5,7 @@ import { resolveConfigIncludes, resolveConfigIncludesForTopLevelKey } from "../c
 import { resolveConfigPath, resolveIncludeRoots } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 
@@ -35,7 +36,7 @@ function resolveLoggingConfigSelector(): string {
     env.HOMEPATH,
     env.PREFIX,
     env.ANDROID_DATA,
-    env.OPENCLAW_TEST_FAST,
+    isFastTestRuntimeEnv(env) ? "fast-test" : "normal",
     tryProcessCwd() ?? "",
   ]
     .map((value) => value ?? "")

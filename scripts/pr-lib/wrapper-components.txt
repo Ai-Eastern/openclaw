@@ -460,6 +460,7 @@ src/config/redact-snapshot.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-overrides.ts
+src/config/runtime-session-changes.ts
 src/config/runtime-snapshot.ts
 src/config/runtime-source-projection.ts
 src/config/runtime-write-application.ts
@@ -1052,6 +1053,7 @@ src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
+src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
@@ -1260,6 +1262,7 @@ src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db-read-error.ts
+src/state/openclaw-agent-db-resources.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-validation-cache.ts
 src/state/openclaw-agent-db.paths.ts
