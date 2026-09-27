@@ -109,6 +109,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.services-cron.json",
   },
+  {
+    name: "agents-embedded",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-embedded.json",
+  },
 ] as const;
 
 export const TSGO_CORE_GRAPHS = [

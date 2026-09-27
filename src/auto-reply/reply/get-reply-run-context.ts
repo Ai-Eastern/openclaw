@@ -57,7 +57,10 @@ import {
   resolveBareSessionResetPromptState,
 } from "./session-reset-prompt.js";
 import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
-import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import {
+  isExplicitSourceReplyCommand,
+  resolveSourceReplyExpectation,
+} from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -181,6 +184,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isGroupChat &&
     !isHeartbeat &&
     promptSessionCtx.WasMentioned !== true &&
+    !isExplicitSourceReplyCommand(promptSessionCtx, cfg) &&
     (conversation.activation ?? defaultActivation) === "always" &&
     isDecisionAssistanceEligible(cfg, agentId)
       ? {
