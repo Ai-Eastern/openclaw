@@ -57,6 +57,7 @@ import { projectTaskContentForPersistence } from "../tasks/task-content.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
 import {
   captureTaskRegistryRunSelection,
+  createTaskRegistryReadPreparation,
   prepareTaskRegistryRead,
 } from "../tasks/task-registry-read.js";
 import {
@@ -419,7 +420,8 @@ export function createAgentHarnessTaskRuntime(
       assertRunId(runId);
       assertRuntimeCurrent();
       const adapter = runtimeOwner.runtime;
-      const read = await prepareTaskRegistryRead();
+      const prepareRead = createTaskRegistryReadPreparation();
+      const read = await prepareRead();
       assertRuntimeCurrent();
       if (!read) {
         throw new Error("Harness task read did not stabilize");
@@ -435,7 +437,8 @@ export function createAgentHarnessTaskRuntime(
     },
     async prepareTaskRecordsRead() {
       assertRuntimeCurrent();
-      const read = await prepareTaskRegistryRead();
+      const prepareRead = createTaskRegistryReadPreparation();
+      const read = await prepareRead();
       assertRuntimeCurrent();
       if (!read) {
         throw new Error("Harness task read did not stabilize");

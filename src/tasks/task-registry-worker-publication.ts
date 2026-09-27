@@ -139,7 +139,11 @@ function mergeTaskRegistryWorkerSnapshot(params: {
     ) {
       continue;
     }
-    conflicted = true;
+    // A refresh can install this same native row while readback is pending.
+    // Publication witnesses still retain their independent supersession rights.
+    conflicted ||=
+      !isDeepStrictEqual(snapshot.tasks.get(taskId), current) ||
+      !isDeepStrictEqual(snapshot.deliveryStates.get(taskId), delivery);
     if (current) {
       merged.tasks.set(taskId, current);
     } else {

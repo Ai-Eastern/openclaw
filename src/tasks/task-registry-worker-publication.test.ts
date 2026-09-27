@@ -9,6 +9,7 @@ import { updateTask } from "./task-registry-mutation.js";
 import { createProjectionTransactionDatabase } from "./task-registry-projection.test-support.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { resetTaskRegistryForTests } from "./task-registry-query.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
 import { captureTaskRetentionSelection } from "./task-registry-retention.operation.js";
 import {
@@ -388,6 +389,8 @@ describe("worker publication scope", () => {
     async ({ phase, change }) => {
       const other = { ...task, taskId: "other-task", runId: "other-run" };
       const { store, context, events } = await prepare([task, other]);
+      const read = await prepareTaskRegistryRead();
+      expect(read?.getTaskById(task.taskId)).toEqual(task);
       const receipt = { ...task, task: "Ready" };
       const started = createDeferred();
       const release = createDeferred();
@@ -485,6 +488,9 @@ describe("worker publication scope", () => {
         release.resolve();
         await expect(pending).resolves.toEqual(receipt);
         expect(tasks.get(task.taskId)).toEqual(receipt);
+        if (change === "no-op refresh" || change === "row ABA") {
+          expect(read?.getTaskById(task.taskId)).toEqual(receipt);
+        }
         expect(events).toEqual(
           change === "delivery" ||
             change === "none" ||
@@ -754,6 +760,8 @@ describe("worker publication during canonical reads", () => {
       createdAt: 1,
     };
     const { store, context } = await prepare([task]);
+    const read = await prepareTaskRegistryRead();
+    expect(read?.getTaskById(task.taskId)).toEqual(task);
     const published: string[] = [];
     configureTaskRegistryRuntime({
       observers: {
@@ -792,6 +800,11 @@ describe("worker publication during canonical reads", () => {
     expect(authoritativeTasks.get(task.taskId)?.task).toBe("Original");
     expect(published).toEqual(["Intermediate", "Original"]);
     expect(reads).toBe(1);
+    expect(() => read?.getTaskById(task.taskId)).toThrow(
+      "Task registry read identity requires preparation",
+    );
+    const refreshed = await prepareTaskRegistryRead();
+    expect(refreshed?.getTaskById(task.taskId)).toEqual(task);
   });
 
   it.each(["unrelated read", "same-task read", "before observers"] as const)(

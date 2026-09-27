@@ -1,5 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -224,6 +225,102 @@ it.each(["creation", "progress", "terminal", "delivery", "read", "recovery"] as 
           }
         },
       );
+    });
+  },
+);
+
+it.each(["creation", "progress"] as const)(
+  "prepares harness reads across pending %s publication",
+  async (operation) => {
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      const runtime = createRuntime();
+      const task = runtime.createRunningTaskRun({
+        runId,
+        task: "Original assignment",
+        notifyPolicy: "silent",
+        detail: { generation: "original" },
+      });
+      await runtime.prepareTaskRunRead!(runId);
+      const store = getTaskRegistryStore();
+      const snapshot = store.loadMutationSnapshotAsync.bind(store);
+      const committed = createDeferred<TaskRecord | undefined>();
+      const release = createDeferred();
+      let held = false;
+      const gate = vi
+        .spyOn(store, "loadMutationSnapshotAsync")
+        .mockImplementation(async (...args) => {
+          const result = await snapshot(...args);
+          const scope = args[1];
+          if (
+            !held &&
+            scope &&
+            "taskId" in scope &&
+            (scope.taskId === task.taskId || scope.runId === runId)
+          ) {
+            held = true;
+            committed.resolve(result.tasks.get(task.taskId));
+            await release.promise;
+          }
+          return result;
+        });
+      const mutation =
+        operation === "creation"
+          ? runtime.createRunningTaskRunAsync!({
+              runId,
+              task: task.task,
+              notifyPolicy: "silent",
+              detail: { generation: "replacement" },
+            })
+          : runtime.recordTaskRunProgressByRunIdAsync!({
+              runId,
+              expectedTask: captureAgentHarnessTaskAssignment(task),
+              progressSummary: "Committed progress",
+              lastEventAt: task.createdAt + 1,
+            });
+      const mutationSettled = Promise.allSettled([mutation]);
+      let reads: Promise<PromiseSettledResult<TaskRecord[]>[]> | undefined;
+      try {
+        const expected = {
+          taskId: task.taskId,
+          ...(operation === "creation"
+            ? { detail: { generation: "replacement" } }
+            : { progressSummary: "Committed progress" }),
+        };
+        expect(await committed.promise).toMatchObject(expected);
+        let observed: PromiseSettledResult<TaskRecord[]>[] | undefined;
+        reads = Promise.allSettled([
+          runtime.prepareTaskRunRead!(runId).then((read) => read()),
+          runtime.prepareTaskRecordsRead!().then((read) => read()),
+        ]).then((results) => {
+          observed = results;
+          return results;
+        });
+        // Join the native projection readback before observing the SDK continuations.
+        await prepareTaskRegistryRead();
+        await nextTurn();
+        if (operation === "creation") {
+          expect(observed, "fresh reads must join accepted identity publication").toBeUndefined();
+        } else {
+          expect(observed, "identity-preserving progress must not block reads").toMatchObject([
+            { status: "fulfilled", value: [{ taskId: task.taskId }] },
+            { status: "fulfilled", value: [{ taskId: task.taskId }] },
+          ]);
+        }
+        release.resolve();
+        await mutation;
+        expect(await reads).toMatchObject([
+          { status: "fulfilled", value: [{ taskId: task.taskId }] },
+          { status: "fulfilled", value: [{ taskId: task.taskId }] },
+        ]);
+        expect((await runtime.prepareTaskRunRead!(runId))()).toMatchObject([expected]);
+        expect((await runtime.prepareTaskRecordsRead!())()).toMatchObject([expected]);
+      } finally {
+        release.resolve();
+        await mutationSettled;
+        await reads;
+        gate.mockRestore();
+        await closeOpenClawStateDatabaseAsync();
+      }
     });
   },
 );
