@@ -131,7 +131,7 @@ it("keeps raw unknown sessions excluded from remembered restore", async () => {
 it("refreshes the footer only for an accepted fallback destination without reloading history", async () => {
   const fixture = await startTuiFixture({
     env: {
-      OPENCLAW_TUI_PTY_MODEL: "gpt-4o",
+      OPENCLAW_TUI_PTY_MODEL: "fixture-model",
       OPENCLAW_TUI_PTY_COLS: "100",
       OPENCLAW_TUI_PTY_ROWS: "30",
     },
@@ -148,7 +148,7 @@ it("refreshes the footer only for an accepted fallback destination without reloa
       rows.filter((row) => row.includes("| session main (Main) |"));
     expect(footerRows(before)).toHaveLength(1);
     const initialFooter = footerRows(before)[0]!;
-    expect(initialFooter).toContain("gpt-4o");
+    expect(initialFooter).toContain("fixture-model");
     const backendCalls = (entries: FixtureLogEntry[]) =>
       entries.filter((entry) =>
         ["loadHistory", "describeSession", "listSessions", "patchSession", "sendChat"].includes(
@@ -171,7 +171,7 @@ it("refreshes the footer only for an accepted fallback destination without reloa
       expect(calls).toEqual(initialCalls);
       expect(entries.findLast((entry) => entry.method === "fallbackSelection")?.payload).toEqual({
         step,
-        model: "gpt-4o",
+        model: "fixture-model",
       });
       expect(footerRows(rows)).toHaveLength(1);
       console.info(
@@ -193,7 +193,7 @@ it("refreshes the footer only for an accepted fallback destination without reloa
       } else {
         expect
           .soft(footerRows(rows)[0], "TUI_FALLBACK_FOOTER_DESTINATION")
-          .toBe(initialFooter.replace("gpt-4o", "claude-sonnet-4"));
+          .toBe(initialFooter.replace("fixture-model", "fixture-fallback-model"));
       }
     }
   } finally {
@@ -201,7 +201,7 @@ it("refreshes the footer only for an accepted fallback destination without reloa
       await fixture.run.write("/exit\r", { delay: false });
       const exit = await fixture.run.waitForExit();
       console.info("TUI_FALLBACK_EXIT", JSON.stringify(exit));
-      expect(exit.exitCode).toBe(0);
+      expect(exit.exitCode, fixture.run.output()).toBe(0);
       expect(exit.signal ?? 0).toBe(0);
     } finally {
       await fixture.cleanup();
