@@ -5,8 +5,18 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { runExec } from "./exec.js";
 
-const { execaMock } = vi.hoisted(() => ({ execaMock: vi.fn() }));
-vi.mock("execa", () => ({ execa: execaMock }));
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+vi.mock("./exec-spawn.js", () => ({
+  COMMAND_PROCESS_TREE_KILL_GRACE_MS: 300,
+  resolveCommandProcessSignal: (signal?: AbortSignal) => signal,
+  retainCommandProcessCleanup: vi.fn(),
+  waitForCommandSpawn: vi.fn(),
+  spawnCommand: spawnMock,
+  spawnCommandWithInvocation: (...args: unknown[]) => ({
+    child: spawnMock(...args),
+    invocation: { usesWindowsExitCodeShim: false },
+  }),
+}));
 
 class CommandChild extends ChildProcess {
   override stdout = new PassThrough();
@@ -56,7 +66,7 @@ function createCommand() {
     }
     return true;
   });
-  execaMock.mockImplementation((_file, _args, options: { cancelSignal?: AbortSignal }) => {
+  spawnMock.mockImplementation((_argv, options: { cancelSignal?: AbortSignal }) => {
     options.cancelSignal?.addEventListener("abort", kill, { once: true });
     return Object.assign(completion.promise, {
       nodeChildProcess: child,
@@ -72,7 +82,7 @@ function createCommand() {
 describe("command deadline event ordering", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    execaMock.mockReset();
+    spawnMock.mockReset();
   });
   afterEach(() => {
     vi.useRealTimers();
