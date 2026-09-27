@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { constants } from "node:os";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
@@ -11,6 +13,7 @@ import {
   type TerminalPtyHandle,
   type TerminalPtySpawnParams,
 } from "./terminal-pty.js";
+import { resolveTrustedWindowsCmdExe } from "./windows-command.js";
 
 const handles: TerminalPtyHandle[] = [];
 const descendants: number[] = [];
@@ -264,5 +267,137 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
         });
       },
     );
+  },
+);
+
+describe.runIf(Boolean(process.versions.bun) && process.platform === "win32")(
+  "Bun native Windows ConPTY",
+  () => {
+    async function startWindows(
+      file: string,
+      args: string[],
+      overrides: Partial<TerminalPtySpawnParams> = {},
+    ) {
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      );
+      const { handle, observed } = await start(args, { file, env, cols: 240, ...overrides });
+      const exited = new Promise<{ exitCode: number; signal?: number }>((resolve) => {
+        handle.onExit(resolve);
+      });
+      const output = () => stripVTControlCharacters(observed.output);
+      const waitForOutput = async (pattern: RegExp) => {
+        const { promise, resolve, reject } = createDeferred();
+        const check = () => {
+          if (pattern.test(output())) {
+            resolve();
+          }
+        };
+        const subscription = handle.onData(check);
+        check();
+        void exited.then(() => {
+          if (!pattern.test(output())) {
+            reject(new Error(`Terminal exited before ${pattern}: ${output()}`));
+          }
+        });
+        try {
+          await promise;
+        } finally {
+          subscription?.dispose();
+        }
+      };
+      return { handle, exited, output, waitForOutput };
+    }
+
+    it("preserves cwd, Windows env, input, and exit code", async () => {
+      const cwd = fs.realpathSync(tempDirs.make("openclaw-bun-conpty-"));
+      vi.stubEnv("PTY_VALUE", "custom");
+      vi.stubEnv("PWD", "preserved-pwd");
+      vi.stubEnv("TMUX", "preserved-tmux");
+      vi.stubEnv("TERM", "dumb");
+      const terminal = await startWindows(
+        resolveTrustedWindowsCmdExe(),
+        [
+          "/d",
+          "/q",
+          "/v:on",
+          "/c",
+          "echo CWD:%CD%& echo ENV:%PTY_VALUE%& echo TERM:%TERM%& echo PWD:%PWD%& echo TMUX:%TMUX%& set /p PTY_INPUT=READY:& echo INPUT:!PTY_INPUT!& exit 7",
+        ],
+        { cwd },
+      );
+      await terminal.waitForOutput(/READY:/u);
+      terminal.handle.write("hello ConPTY\r");
+      expect(await terminal.exited).toEqual({ exitCode: 7 });
+      const output = terminal.output();
+      for (const expected of [
+        `CWD:${cwd}`,
+        "ENV:custom",
+        "TERM:xterm-256color",
+        "PWD:preserved-pwd",
+        "TMUX:preserved-tmux",
+        "INPUT:hello ConPTY",
+      ]) {
+        expect(output).toContain(expected);
+      }
+    });
+
+    it("inherits Windows env without rewriting TERM or removing multiplexer state", async () => {
+      vi.stubEnv("TERM", "dumb");
+      vi.stubEnv("TMUX", "inherited-tmux");
+      vi.stubEnv("PWD", "inherited-pwd");
+      const terminal = await startWindows(
+        resolveTrustedWindowsCmdExe(),
+        ["/d", "/q", "/c", "echo TERM:%TERM%& echo TMUX:%TMUX%& echo PWD:%PWD%"],
+        { env: undefined },
+      );
+      expect((await terminal.exited).exitCode).toBe(0);
+      expect(terminal.output()).toContain("TERM:dumb");
+      expect(terminal.output()).toContain("TMUX:inherited-tmux");
+      expect(terminal.output()).toContain("PWD:inherited-pwd");
+    });
+
+    it("passes spaces and permitted cmd metacharacters through a verbatim batch shim", async () => {
+      const cwd = tempDirs.make("openclaw-bun-conpty-shim-");
+      const shim = path.join(cwd, "custom shim.cmd");
+      fs.writeFileSync(shim, "@echo off\r\necho ARG:[%1]\r\nexit /b 0\r\n");
+      const terminal = await startWindows(shim, ["thread (draft) ^ title"]);
+      expect((await terminal.exited).exitCode).toBe(0);
+      expect(terminal.output()).toContain('ARG:["thread (draft) ^ title"]');
+      // Unknown batch wrappers retain the same guarded metacharacter policy as Node.
+      await expect(startWindows(shim, ["Fix A&B and 100%"])).rejects.toThrow(
+        "Unsafe Windows cmd.exe argument",
+      );
+    });
+
+    it("kill terminates the shell and its long-running descendant tree", async () => {
+      const cwd = tempDirs.make("openclaw-bun-conpty-tree-");
+      const script = path.join(cwd, "child.cjs");
+      const shim = path.join(cwd, "tree.cmd");
+      fs.writeFileSync(
+        script,
+        [
+          'const { spawn } = require("node:child_process");',
+          'const child = spawn("ping", ["-n", "60", "127.0.0.1"], { stdio: "ignore" });',
+          "console.log(`CHILD:${child.pid} ROOT:${process.pid}`);",
+          'child.on("exit", () => process.exit(0));',
+        ].join("\n"),
+      );
+      fs.writeFileSync(shim, `@echo off\r\n"${process.execPath}" "${script}"\r\n`);
+      const terminal = await startWindows(shim, []);
+      await terminal.waitForOutput(/CHILD:\d+ ROOT:\d+/u);
+      const match = terminal.output().match(/CHILD:(\d+) ROOT:(\d+)/u);
+      const childPid = Number(match?.[1]);
+      const intermediatePid = Number(match?.[2]);
+      descendants.push(childPid, intermediatePid);
+      expect(isPidAlive(childPid)).toBe(true);
+      terminal.handle.kill();
+      await terminal.exited;
+      expect(isPidAlive(terminal.handle.pid)).toBe(false);
+      expect(isPidAlive(intermediatePid)).toBe(false);
+      expect(isPidAlive(childPid)).toBe(false);
+    });
   },
 );
