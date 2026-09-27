@@ -11,6 +11,7 @@ import {
   exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
+  selectTuiFixtureSession,
   startTuiFixture,
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
@@ -907,11 +908,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   ])(
     "keeps case-distinct $provider conversations out of the visible terminal",
     async ({ sessionKey, message }) => {
-      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
-      );
+      await selectTuiFixtureSession(fixture, sessionKey);
 
       const outputOffset = fixture.run.visibleOutput().length;
       await fixture.run.write(`${message}\r`, { delay: false });
@@ -937,11 +934,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   ])(
     "preserves provider-owned identity when selecting $sessionKey in the terminal",
     async ({ sessionKey, message }) => {
-      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
-      );
+      await selectTuiFixtureSession(fixture, sessionKey);
 
       await fixture.run.write(`${message}\r`, { delay: false });
       const sent = await fixture.waitForLogEntry(
