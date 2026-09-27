@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -73,6 +74,9 @@ internal fun ChatAttachmentMenu(
   permissionModePending: Boolean,
   permissionsEnabled: Boolean,
   onOpenPermissions: () -> Unit,
+  effortDescription: String?,
+  effortEnabled: Boolean,
+  onOpenEffort: () -> Unit,
   onOpenCamera: () -> Unit,
   onBrowseGallery: () -> Unit,
   onPickFile: () -> Unit,
@@ -122,6 +126,16 @@ internal fun ChatAttachmentMenu(
             onClick = { if (admitAction()) onOpenPermissions() },
           ) {
             ChatPermissionIcon(permissionMode, null, Modifier.size(22.dp))
+          }
+          if (effortDescription != null) {
+            AttachmentMenuAction(
+              label = nativeString("Effort"),
+              description = effortDescription,
+              enabled = effortEnabled,
+              onClick = { if (admitAction()) onOpenEffort() },
+            ) {
+              Icon(Icons.Default.Psychology, contentDescription = null, modifier = Modifier.size(22.dp))
+            }
           }
         }
       }

@@ -301,7 +301,7 @@ class ChatComposerLayoutTest {
 
     fun assertToolbarOrder(primaryAction: String) {
       val left =
-        listOf("Add attachment", "Model", "Thinking", "Context").map { label ->
+        listOf("Add attachment", "Model", "Context").map { label ->
           composeRule.onNodeWithContentDescription(nativeString(label)).getUnclippedBoundsInRoot()
         }
       val mic =
@@ -310,11 +310,10 @@ class ChatComposerLayoutTest {
           .getUnclippedBoundsInRoot()
       val primary = composeRule.onNodeWithContentDescription(nativeString(primaryAction)).getUnclippedBoundsInRoot()
       (left + listOf(mic, primary)).zipWithNext().forEach { (first, second) ->
-        assertTrue("Toolbar actions follow +, model, effort, context, mic, primary", first.right <= second.left)
+        assertTrue("Toolbar actions follow +, model, context, mic, primary", first.right <= second.left)
         assertEquals("Toolbar actions stay in one row", first.top.value, second.top.value, 1f)
       }
       assertEquals("The model starts beside +", left[0].right.value, left[1].left.value, 1f)
-      assertEquals("Effort stays beside the model", left[1].right.value, left[2].left.value, 1f)
       composeRule.onNodeWithContentDescription(nativeString("Permissions")).assertDoesNotExist()
     }
     assertComposerControlsVisible()
@@ -2550,9 +2549,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi")
   fun effortSheetSurfaceStaysInsideTheActivityFoldPane() {
     showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
-    composeRule.onNodeWithContentDescription(nativeString("Thinking")).performClick()
-    composeRule.waitForIdle()
-    val dialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    val dialog = openEffortSheet()
     assertNotSame(chatActivity.window, dialog.window)
     assertTrue(dialog.isShowing)
     val cases =
@@ -2565,7 +2562,7 @@ class ChatComposerLayoutTest {
       composeRule.runOnIdle { runBlocking { sheetFeatures.publish(features) } }
       composeRule.waitForIdle()
       val surface = effortSheetSurfaceBounds(dialog, renderedPopoverColor)
-      assertTrue("The rendered Thinking Surface $surface must fit Activity pane $pane", pane.contains(surface))
+      assertTrue("The rendered Effort surface $surface must fit Activity pane $pane", pane.contains(surface))
       assertTrue("A benign remap retains the actual native opening", dialog === ShadowDialog.getLatestDialog())
       composeRule.onNodeWithText(nativeString("Fast mode")).performScrollTo().assertIsDisplayed()
     }
@@ -2596,7 +2593,7 @@ class ChatComposerLayoutTest {
             }
           }
         }
-        assertTrue("The actual Thinking Surface must render", right > left && bottom > top)
+        assertTrue("The actual Effort surface must render", right > left && bottom > top)
         val activityOrigin = IntArray(2).also(chatActivity.window.decorView::getLocationOnScreen)
         val dialogOrigin = IntArray(2).also(root::getLocationOnScreen)
         Rect(left, top, right, bottom).apply {
@@ -3431,7 +3428,7 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun effortHeldDragPreviewsGaugeAndCommitsOnlyOnRelease() =
+  fun effortHeldDragPreviewsAndCommitsOnlyOnRelease() =
     withEffortRequests { model, requests, release ->
       composeRule.runOnIdle {
         controller.handleGatewayEvent(
@@ -3439,34 +3436,29 @@ class ChatComposerLayoutTest {
           """{"reason":"patch","session":{"key":"${controller.sessionKey.value}","fastMode":true,"effectiveFastMode":true}}""",
         )
       }
-      assertEffortGauge("low", fast = true)
-      val lowGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
       val dialog = openEffortSheet()
       val (x, y, time) = startEffortDrag(dialog)
       assertEquals("Preview must not dispatch", 0, requests.size)
       assertEquals("Preview must not mutate the authoritative setting", "low", model.chatThinkingLevel.value)
-      assertEffortGauge("high", fast = true)
-      val previewGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
-      assertFalse("Fast mode must not mask the previewed effort", lowGauge.sameAs(previewGauge))
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("High")))
       composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, x, y, time, time + 80) }
       composeRule.waitUntil { requests.size == 1 }
       assertEquals(JsonPrimitive("high"), requests.single().second["thinkingLevel"])
       composeRule.runOnIdle { release.complete(Unit) }
       composeRule.waitUntil { model.chatThinkingLevel.value == "high" }
-      assertEffortGauge("high", fast = true)
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("High")))
       assertTrue(dialog.isShowing)
     }
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun effortCancelledDragAndRejectedReleaseRestoreAuthoritativeGauge() =
+  fun effortCancelledDragAndRejectedReleaseRestoreAuthoritativeLevel() =
     withEffortRequests { model, requests, release ->
       val dialog = openEffortSheet()
       val (x, y, time) = startEffortDrag(dialog)
       composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_CANCEL, x, y, time, time + 80) }
       composeRule.waitForIdle()
       assertEquals("A cancelled drag must not dispatch", 0, requests.size)
-      assertEffortGauge("low")
       effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
 
       val (nextX, nextY, nextTime) = startEffortDrag(dialog)
@@ -3478,7 +3470,6 @@ class ChatComposerLayoutTest {
       composeRule.waitUntil {
         composeRule.runOnIdle { model.chatThinkingLevel.value == "low" && model.chatPendingSessionSettingsKeys.value.isEmpty() }
       }
-      assertEffortGauge("low")
       effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
       assertTrue(dialog.isShowing)
     }
@@ -3504,7 +3495,6 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       assertTrue("A model change must preserve the same native sheet", dialog.isShowing)
       assertTrue(dialog === ShadowDialog.getLatestDialog())
-      assertEffortGauge("low")
       effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
       composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, x, y, time, time + 80) }
       composeRule.waitForIdle()
@@ -3516,24 +3506,6 @@ class ChatComposerLayoutTest {
       composeRule.waitUntil { model.chatThinkingLevel.value == "high" }
       assertTrue(dialog.isShowing)
     }
-
-  private fun assertEffortGauge(
-    level: String,
-    fast: Boolean = false,
-  ) {
-    composeRule
-      .onNode(hasContentDescription(nativeString("Thinking")) and hasAnyDescendant(hasTestTag("chat-thinking-gauge")), useUnmergedTree = true)
-      .assert(
-        SemanticsMatcher.expectValue(
-          SemanticsProperties.StateDescription,
-          chatThinkingChipStateDescription(
-            fast,
-            level,
-            listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("low", "low"), ChatThinkingLevelOption("high", "high")),
-          ),
-        ),
-      )
-  }
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
@@ -3581,16 +3553,8 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun effortOpeningBRejectsSavedASelectionAndDismissal() =
+  fun effortOpeningRejectsRetiredCommandsAndPreservesReplacement() =
     withEffortRequests { _, requests, _ ->
-      val open =
-        checkNotNull(
-          composeRule
-            .onNodeWithContentDescription(nativeString("Thinking"))
-            .fetchSemanticsNode()
-            .config[SemanticsActions.OnClick]
-            .action,
-        )
       val old = openEffortSheet()
       val select = checkNotNull(effortSlider().fetchSemanticsNode().config[SemanticsActions.SetProgress].action)
       val fast =
@@ -3615,17 +3579,15 @@ class ChatComposerLayoutTest {
           sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
           sheetFeatures.publish(emptyList())
         }
-        assertTrue("B opens before deferred removal of the still-attached A", old.isShowing)
-        assertTrue(open())
-        // Material's saved actions still belong to attached A, never to logical opening B.
         select(2f)
         fast()
         dismiss()
-        old.onBackPressedDispatcher.onBackPressed()
       }
       composeRule.mainClock.autoAdvance = true
       composeRule.waitForIdle()
-      val fresh = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+      val fresh = openEffortSheet()
+      composeRule.runOnUiThread { old.onBackPressedDispatcher.onBackPressed() }
+      composeRule.waitForIdle()
       assertNotSame(old.window, fresh.window)
       assertEquals(0, requests.size)
       assertTrue("A's late dismissal cannot close B", fresh.isShowing)
@@ -3660,6 +3622,32 @@ class ChatComposerLayoutTest {
       }
       composeRule.waitForIdle()
       assertEquals("Old effort actions cannot target either session", 0, requests.size)
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+    }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun effortMenuRejectsSavedOpeningAfterSessionChangeBeforeRecomposition() =
+    withEffortRequests { model, requests, _ ->
+      val owner = model.captureChatShareOwner()
+      val effort = openEffortMenuItem()
+      val open = checkNotNull(effort.fetchSemanticsNode().config[SemanticsActions.OnClick].action)
+      val dialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+      val other = model.chatSessions.value.first { it.key != controller.sessionKey.value }
+      composeRule.mainClock.autoAdvance = false
+      try {
+        composeRule.runOnUiThread {
+          model.switchChatSession(other.key, other.ownerAgentId)
+          assertFalse("The authoritative session must change before the saved click", model.isCurrentChatComposerOwner(owner))
+          assertTrue("The original menu must remain attached until its click is delivered", dialog.isShowing)
+          assertTrue(checkNotNull(dialog.window).decorView.isAttachedToWindow)
+          assertTrue(open())
+        }
+      } finally {
+        composeRule.mainClock.autoAdvance = true
+      }
+      composeRule.waitForIdle()
+      assertEquals("The previous menu cannot mutate either session", 0, requests.size)
       composeRule.onNode(isDialog()).assertDoesNotExist()
     }
 
@@ -3725,6 +3713,7 @@ class ChatComposerLayoutTest {
       }
       composeRule.waitUntil { requests.size == 1 }
       assertFalse(release.isCompleted)
+      composeRule.onNodeWithContentDescription(nativeString("Fast mode")).assertIsNotEnabled()
       composeRule.runOnUiThread {
         runBlocking {
           sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
@@ -3758,8 +3747,13 @@ class ChatComposerLayoutTest {
 
   private fun effortSlider() = composeRule.onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
 
+  private fun openEffortMenuItem(): SemanticsNodeInteraction {
+    composeRule.onNodeWithContentDescription(nativeString("Add attachment")).performClick()
+    return composeRule.onNodeWithContentDescription(nativeString("Effort")).performScrollTo().assertIsDisplayed()
+  }
+
   private fun openEffortSheet(): ComponentDialog {
-    composeRule.onNodeWithContentDescription(nativeString("Thinking")).performClick()
+    openEffortMenuItem().assertIsEnabled().performClick()
     composeRule.waitForIdle()
     composeRule.onNodeWithText(nativeString("Effort")).assertIsDisplayed()
     return checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
@@ -4059,10 +4053,9 @@ class ChatComposerLayoutTest {
     }
     val editor = composerEditor()
     val editorBounds = editor.getUnclippedBoundsInRoot()
-    val thinking = composeRule.onNodeWithContentDescription(nativeString("Thinking"))
-    assertComposerControlsVisible(talkActive = true, thinkingLabel = "Ultra")
+    assertComposerControlsVisible(talkActive = true)
 
-    thinking.performClick()
+    openEffortSheet()
     composeRule.onNode(isDialog()).assertIsDisplayed()
     composeRule.onNode(isPopup()).assertDoesNotExist()
     composeRule.onNodeWithText(nativeString("Effort")).assertIsDisplayed()
@@ -4133,7 +4126,7 @@ class ChatComposerLayoutTest {
     composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
     assertEquals("Dismissing composer settings must preserve the draft", editorBounds, editor.getUnclippedBoundsInRoot())
-    assertComposerControlsVisible(talkActive = true, thinkingLabel = "Ultra")
+    assertComposerControlsVisible(talkActive = true)
 
     composeRule.runOnIdle {
       controller.handleGatewayEvent(
@@ -4141,7 +4134,8 @@ class ChatComposerLayoutTest {
         """{"reason":"patch","session":{"key":"${AndroidScreenshotFixture.mainSessionKey}","thinkingLevel":"max","thinkingLevels":[{"id":"max","label":"max"}]}}""",
       )
     }
-    thinking.assert(
+    val effort = openEffortMenuItem()
+    effort.assert(
       SemanticsMatcher.expectValue(
         SemanticsProperties.StateDescription,
         nativeString(
@@ -4152,7 +4146,7 @@ class ChatComposerLayoutTest {
         ),
       ),
     )
-    thinking.performClick()
+    effort.performClick()
     composeRule.onNode(hasText(nativeString("Max")) and hasClickAction()).assertIsDisplayed().assertIsSelected()
   }
 
@@ -4279,120 +4273,94 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun fastModeGaugeTracksEffortAndRetainsASeparateFastCue() {
-    val direction = mutableStateOf(LayoutDirection.Ltr)
-    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp }, layoutDirection = { direction.value })
+  @Config(qualifiers = "en-rUS-w390dp-h844dp-mdpi")
+  fun effortMenuShowsCurrentCapabilitiesAndRejectsRevokedAccessWithoutSending() {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(stableId = AndroidScreenshotFixture.gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Test gateway"),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { 1.5f })
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"${controller.sessionKey.value}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
+      )
+    }
+    composeRule.runOnIdle { assertEquals(0, model.pendingRunCount.value) }
+    val editor = composerEditor()
+    editor.performTextReplacement("Keep this draft while choosing effort")
+    editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(5, 15, false)) }
+    val editorId = editor.fetchSemanticsNode().id
 
-    fun publishEffort(
-      level: String,
-      fastMode: Boolean = true,
-    ) {
+    @Suppress("UNCHECKED_CAST")
+    val scopes =
+      NodeRuntime::class.java
+        .getDeclaredField("_operatorScopes")
+        .apply { isAccessible = true }
+        .get(runtime) as MutableStateFlow<List<String>>
+    val originalScopes = scopes.value
+
+    withChatSendRequests { sent ->
+      val effort = openEffortMenuItem()
+      effort.assertIsEnabled().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Low, Fast mode: Off"))
+      composeRule.onNodeWithText("Low, Fast mode: Off").assertIsDisplayed()
+      val open = checkNotNull(effort.fetchSemanticsNode().config[SemanticsActions.OnClick].action)
       composeRule.runOnIdle {
         controller.handleGatewayEvent(
           "sessions.changed",
-          """
-          {"reason":"patch","session":{
-            "key":"${AndroidScreenshotFixture.mainSessionKey}",
-            "thinkingLevel":"$level",
-            "thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"}],
-            "fastMode":$fastMode,"effectiveFastMode":$fastMode
-          }}
-          """.trimIndent(),
+          """{"session":{"key":"${controller.sessionKey.value}","thinkingLevel":"high","fastMode":true,"effectiveFastMode":true}}""",
         )
       }
+      effort.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "High, Fast mode: On"))
+      composeRule.onNodeWithText("High, Fast mode: On").assertIsDisplayed()
+      composeRule.runOnIdle { scopes.value = listOf("operator.read", "operator.write") }
+      composeRule.runOnIdle { assertFalse("operator.admin" in model.operatorScopes.value) }
+      effort.assertIsNotEnabled()
+      composeRule.runOnUiThread { open() }
       composeRule.waitForIdle()
-    }
+      composeRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, nativeString("Effort"))).assertDoesNotExist()
 
-    fun capture(label: String) {
-      System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { path ->
-        val folder = File(path).apply { mkdirs() }
-        val image = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
-        assertTrue(image.width > 0 && image.height > 0)
-        File(folder, "fast-effort-$label.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+      composeRule.runOnIdle {
+        scopes.value = originalScopes
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"session":{"key":"${controller.sessionKey.value}","thinkingLevels":[],"fastMode":true,"effectiveFastMode":true}}""",
+        )
       }
-    }
-
-    fun assertFastBoltInsideWedge() {
-      val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-      val bolt = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-      val touchTarget = composeRule.onNodeWithContentDescription(nativeString("Thinking")).fetchSemanticsNode().boundsInRoot
-      val pixelsPerDp = composeRule.density.density
-      val pivotX = gauge.center.x
-      val pivotY = gauge.top + gauge.height * 0.72f
-      val innerArcRadius = gauge.width * 0.43f - pixelsPerDp // Half the 2dp stroke sits inside the red arc.
-      val tipX = bolt.left + bolt.width * 0.58f
-      val leftX = bolt.left + bolt.width * 0.2f
-      val leftY = bolt.top + bolt.height * 0.56f
-      val rightX = bolt.left + bolt.width * 0.86f
-      val rightY = bolt.top + bolt.height * 0.38f
-      assertTrue("Fast bolt must be legible at 360dp: at least 6.5dp wide", bolt.width + 0.5f >= 6.5f * pixelsPerDp)
-      assertTrue("The dial needs room for a readable bolt", gauge.width + 0.5f >= 26f * pixelsPerDp)
-      assertTrue("The 48dp touch target must remain intact", touchTarget.width + 0.5f >= 48f * pixelsPerDp)
-      assertTrue("Fast bolt must be fully inside the dial", bolt.left > gauge.left && bolt.right < gauge.right && bolt.top > gauge.top && bolt.bottom < gauge.bottom)
-      assertTrue("Fast bolt must clear the needle pivot", leftX > pivotX + 1.5f * pixelsPerDp)
-      assertTrue("Fast bolt must occupy the right wedge", bolt.top < pivotY && bolt.center.y < pivotY + 1.5f * pixelsPerDp)
-      assertTrue("The lower bolt tip must align with the needle pivot", kotlin.math.abs(bolt.bottom - pivotY) <= 0.75f * pixelsPerDp)
-      val tipDx = tipX - pivotX
-      val tipDy = bolt.top - pivotY
-      val rightDx = rightX - pivotX
-      val rightDy = rightY - pivotY
-      assertTrue("Fast bolt must not cover the red arc", maxOf(tipDx * tipDx + tipDy * tipDy, rightDx * rightDx + rightDy * rightDy) < innerArcRadius * innerArcRadius)
-      val highNeedleAtTop = pivotX + (pivotY - bolt.top) * 0.5774f + pixelsPerDp // High: 300 degrees, 2dp stroke.
-      val highNeedleAtLeft = pivotX + (pivotY - leftY) * 0.5774f + pixelsPerDp
-      assertTrue("Fast bolt must not cover the High needle", tipX > highNeedleAtTop && leftX > highNeedleAtLeft)
-    }
-
-    publishEffort("off")
-    val offGaugeImage = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage()
-    val offGauge = offGaugeImage.asAndroidBitmap()
-    capture("off")
-    assertFastBoltInsideWedge()
-    val pixels = offGaugeImage.toPixelMap()
-    // The bolt sits below this quadrant; only the original Fast red-zone arc paints it red.
-    val redZonePixels =
-      (pixels.width * 3 / 4 until pixels.width * 19 / 20).sumOf { x ->
-        (pixels.height * 3 / 8 until pixels.height / 2).count { y ->
-          val color = pixels[x, y]
-          color.red > 0.6f && color.red > color.green * 1.4f && color.red > color.blue * 1.2f
-        }
+      composeRule.runOnIdle {
+        assertTrue("operator.admin" in model.operatorScopes.value)
+        assertTrue(
+          model.chatThinkingLevelSelection.value.options
+            .isEmpty(),
+        )
       }
-    assertTrue("The right red sector must remain visible independently of the Fast badge", redZonePixels >= 3)
-    publishEffort("high")
-    val highGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
-    capture("high")
-    assertFalse("Effort changes must move the needle even while Fast stays on", offGauge.sameAs(highGauge))
-    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertIsDisplayed()
-    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
-      SemanticsMatcher.expectValue(
-        SemanticsProperties.StateDescription,
-        chatThinkingChipStateDescription(true, "high", listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("high", "high"))),
-      ),
-    )
+      val fastOnly = openEffortMenuItem()
+      fastOnly.assertIsEnabled().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Unavailable, Fast mode: On"))
+      composeRule.onNodeWithText("Unavailable, Fast mode: On").assertIsDisplayed()
+      fastOnly.performClick()
+      composeRule.onNodeWithContentDescription(nativeString("Fast mode")).assertIsEnabled()
+      effortSlider().assertDoesNotExist()
+      val dialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+      composeRule.runOnIdle { dialog.onBackPressedDispatcher.onBackPressed() }
 
-    composeRule.runOnIdle { direction.value = LayoutDirection.Rtl }
-    publishEffort("off")
-    capture("rtl-off")
-    assertFastBoltInsideWedge()
-    val fastOnGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().toPixelMap()
-    publishEffort("off", fastMode = false)
-    capture("rtl-fast-off")
-    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
-    val fastOffGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().toPixelMap()
-    val paintedBoltColumns =
-      (0 until fastOnGauge.width).count { x ->
-        (0 until fastOnGauge.height).any { y ->
-          val on = fastOnGauge[x, y]
-          val off = fastOffGauge[x, y]
-          on.red > off.red + 0.2f && on.red > on.green * 1.3f
-        }
+      composeRule.runOnIdle {
+        val catalog = controllerFlow<List<GatewayModelSummary>>("_modelCatalog")
+        catalog.value = catalog.value.map { it.copy(supportsFastMode = false) }
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"session":{"key":"${controller.sessionKey.value}","thinkingLevels":[],"fastMode":null,"effectiveFastMode":false}}""",
+        )
       }
-    assertTrue("Fast bolt must paint at least 3.5dp of red width at normal scale", paintedBoltColumns >= 3.5f * composeRule.density.density)
-    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
-      SemanticsMatcher.expectValue(
-        SemanticsProperties.StateDescription,
-        chatThinkingChipStateDescription(false, "off", listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("high", "high"))),
-      ),
-    )
+      composeRule.onNodeWithContentDescription(nativeString("Add attachment")).performClick()
+      composeRule.onNodeWithContentDescription(nativeString("Effort")).assertDoesNotExist()
+      composeRule.onNodeWithContentDescription(nativeString("Permissions")).assertIsEnabled()
+      val attachments = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+      composeRule.runOnIdle { attachments.onBackPressedDispatcher.onBackPressed() }
+      assertTrue("Opening settings must not send a message", sent.isEmpty())
+      editor.assertTextEquals("Keep this draft while choosing effort")
+      assertEquals(editorId, editor.fetchSemanticsNode().id)
+      assertEquals(TextRange(5, 15), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+    }
   }
 
   @Test
@@ -4411,7 +4379,7 @@ class ChatComposerLayoutTest {
       )
     }
 
-    composeRule.onNodeWithContentDescription(nativeString("Thinking")).performClick()
+    openEffortSheet()
     composeRule
       .onNodeWithText(nativeString("Faster responses, higher usage of limits."))
       .performScrollTo()
@@ -4924,7 +4892,8 @@ class ChatComposerLayoutTest {
       openContextPicker()
       composeRule.onNodeWithText(nativeString("Latest run tokens").uppercase()).assertIsDisplayed()
       composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { assertTrue(it()) }
-      composeRule.onNodeWithContentDescription(nativeString("Thinking")).assertIsEnabled()
+      val effort = openEffortSheet()
+      composeRule.runOnIdle { effort.onBackPressedDispatcher.onBackPressed() }
 
       composeRule.runOnIdle {
         controller.handleGatewayEvent(
@@ -6410,7 +6379,6 @@ class ChatComposerLayoutTest {
 
   private fun assertComposerControlsVisible(
     talkActive: Boolean = false,
-    thinkingLabel: String = nativeString("Low"),
     modelLabel: String = "GPT-5.2",
     primaryAction: String? = "Stop",
   ) {
@@ -6420,6 +6388,8 @@ class ChatComposerLayoutTest {
     assertTrue("Editor must retain a visible line: $editor inside $viewport", editor.bottom > editor.top)
     val compact = composeRule.onAllNodesWithContentDescription(nativeString("Details")).fetchSemanticsNodes().isNotEmpty()
     composeRule.onNodeWithContentDescription(nativeString("Permissions")).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Effort")).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assertDoesNotExist()
     val settings =
       listOf(composeRule.onNodeWithContentDescription(nativeString("Context")).assertIsDisplayed().assertHasClickAction()) +
         if (compact) listOf(composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed().assertHasClickAction()) else emptyList()
@@ -6435,21 +6405,6 @@ class ChatComposerLayoutTest {
             .assertIsDisplayed()
             .assertHasClickAction()
             .assertTextEquals(modelLabel),
-          composeRule
-            .onNodeWithContentDescription(nativeString("Thinking"))
-            .assertIsDisplayed()
-            .assertHasClickAction()
-            .assert(
-              SemanticsMatcher.expectValue(
-                SemanticsProperties.StateDescription,
-                nativeString(
-                  "\$selectedLabel, \$fastModeLabel: \$fastModeState",
-                  thinkingLabel,
-                  nativeString("Fast mode"),
-                  nativeString("Off"),
-                ),
-              ),
-            ),
         )
     val controlBounds = controls.map { it.getUnclippedBoundsInRoot() }.toMutableList()
     val primary = primaryAction?.let { composeRule.onNodeWithContentDescription(nativeString(it)).getUnclippedBoundsInRoot() }

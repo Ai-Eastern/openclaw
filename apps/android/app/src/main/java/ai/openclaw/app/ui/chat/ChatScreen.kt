@@ -117,7 +117,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -203,7 +202,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -213,12 +211,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -577,15 +572,6 @@ internal fun ChatScreen(
   }
 
   val effortPicker = rememberChatPicker(viewModel) { expected -> canChangeThinking() || canChangeFastMode(expected) }
-  var effortPreview by remember(
-    effortPicker.visible,
-    composerOwner,
-    selectedModelRef,
-    selectionGeneration,
-    thinkingLevel,
-    thinkingLevelSelection.options,
-    canAdminSessionSettings,
-  ) { mutableStateOf<String?>(null) }
   val backgroundTasks = rememberChatPicker(viewModel)
   val reviewDiff = rememberChatPicker(viewModel)
   val attachmentPicker = rememberChatPicker(viewModel)
@@ -1072,12 +1058,6 @@ internal fun ChatScreen(
         inputDrafts[composerOwner] = it
       },
       attachments = attachments,
-      thinkingLevel = effortPreview ?: thinkingLevel,
-      thinkingOptions = thinkingLevelSelection.options,
-      thinkingSupported = thinkingSupported,
-      thinkingLevelEnabled = canAdminSessionSettings,
-      fastMode = fastMode,
-      fastModeEnabled = fastModeEnabled,
       contextUsage = contextUsage,
       selectedModelLabel = selectedModelLabel,
       modelPickerEnabled = gatewayConnectionDisplay.isConnected && canWriteSessionSettings,
@@ -1096,7 +1076,6 @@ internal fun ChatScreen(
         composerState.clearAttachmentOmission(composerOwner)
       },
       commands = chatCommands,
-      onOpenEffortPicker = { effortPicker.open(composerOwner, sessionKey) },
       onOpenModelPicker = { openComposerPicker(ChatComposerPickerPage.Models) },
       onOpenContext = { contextPicker.open(composerOwner, sessionKey) },
       onOpenAttachments = { attachmentPicker.open(composerOwner, sessionKey) },
@@ -1205,6 +1184,19 @@ internal fun ChatScreen(
         permissionMode = activeSession?.permissionMode,
         permissionModePending = permissionModePending,
         permissionsEnabled = gatewayConnectionDisplay.isConnected && canWriteSessionSettings,
+        effortDescription =
+          if (thinkingSupported || fastModeEnabled || fastMode) {
+            chatEffortStateDescription(thinkingSupported, fastMode, thinkingLevel, thinkingLevelSelection.options, currentAppLanguage().languageTag)
+          } else {
+            null
+          },
+        effortEnabled = (thinkingSupported && canAdminSessionSettings) || fastModeEnabled,
+        onOpenEffort = {
+          if (attachmentPicker.admit(opening)) {
+            attachmentPicker.retire(opening)
+            effortPicker.open(opening.composerOwner, opening.sessionKey)
+          }
+        },
         onOpenCamera = {
           if (attachmentPicker.admit(opening)) {
             captureCamera()
@@ -1291,11 +1283,6 @@ internal fun ChatScreen(
         thinkingLevelEnabled = canAdminSessionSettings,
         fastMode = fastMode,
         fastModeEnabled = canChangeFastMode(opening.composerOwner),
-        onPreviewChange = { level ->
-          if (level == null || (selectionIsCurrent() && effortPicker.admit(opening) && canChangeThinking())) {
-            effortPreview = level
-          }
-        },
         onSelect = { level ->
           if (selectionIsCurrent() && effortPicker.admit(opening) && canChangeThinking()) {
             viewModel.setChatThinkingLevel(level)
@@ -3246,12 +3233,6 @@ private fun ChatComposer(
   value: String,
   onValueChange: (String) -> Unit,
   attachments: List<PendingAttachment>,
-  thinkingLevel: String,
-  thinkingOptions: List<ChatThinkingLevelOption>,
-  thinkingSupported: Boolean,
-  thinkingLevelEnabled: Boolean,
-  fastMode: Boolean,
-  fastModeEnabled: Boolean,
   contextUsage: ChatContextUsage,
   selectedModelLabel: String,
   modelPickerEnabled: Boolean,
@@ -3266,7 +3247,6 @@ private fun ChatComposer(
   modelUnavailableMessage: NativeText?,
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
-  onOpenEffortPicker: () -> Unit,
   onOpenModelPicker: () -> Unit,
   onOpenContext: () -> Unit,
   onOpenAttachments: () -> Unit,
@@ -3437,13 +3417,6 @@ private fun ChatComposer(
             contextPickerEnabled = ownerReady && contextPickerEnabled,
             onOpenModelPicker = onOpenModelPicker,
             onOpenContext = onOpenContext,
-            thinkingLevel = thinkingLevel,
-            thinkingOptions = thinkingOptions,
-            thinkingSupported = thinkingSupported,
-            thinkingLevelEnabled = thinkingLevelEnabled,
-            fastMode = fastMode,
-            fastModeEnabled = fastModeEnabled,
-            onOpenEffortPicker = onOpenEffortPicker,
             contextUsage = contextUsage,
             modifier = Modifier.weight(1f).onGloballyPositioned(onInputPositioned),
           )
@@ -3482,14 +3455,6 @@ private fun ChatComposer(
   }
 }
 
-internal data class ChatEffortPosition(
-  val optionIndex: Int,
-  val fraction: Float?,
-) {
-  val anchored: Boolean
-    get() = fraction != null
-}
-
 internal fun chatEffortStopFractions(optionCount: Int): List<Float> =
   when {
     optionCount <= 0 -> emptyList()
@@ -3497,111 +3462,10 @@ internal fun chatEffortStopFractions(optionCount: Int): List<Float> =
     else -> List(optionCount) { index -> index.toFloat() / (optionCount - 1) }
   }
 
-internal fun resolveChatEffortPosition(
-  selectedId: String,
-  options: List<ChatThinkingLevelOption>,
-): ChatEffortPosition {
-  val normalizedSelected = selectedId.trim().lowercase(Locale.US)
-  val selectedIndex = options.indexOfFirst { it.id.trim().lowercase(Locale.US) == normalizedSelected }
-  val stopFractions = chatEffortStopFractions(options.size)
-  val fraction =
-    when {
-      selectedIndex < 0 -> null
-      normalizedSelected == "off" -> 0f
-      else -> stopFractions[selectedIndex]
-    }
-  return ChatEffortPosition(optionIndex = selectedIndex, fraction = fraction)
-}
-
-internal fun chatEffortNeedleAngle(position: ChatEffortPosition): Float? = position.fraction?.let { 180f + it * 120f }
-
 internal fun chatEffortVisualFraction(
   fraction: Float,
   layoutDirection: LayoutDirection,
 ): Float = if (layoutDirection == LayoutDirection.Rtl) 1f - fraction else fraction
-
-@Composable
-private fun ChatThinkingLevelPicker(
-  options: List<ChatThinkingLevelOption>,
-  selectedId: String,
-  thinkingSupported: Boolean,
-  thinkingLevelEnabled: Boolean,
-  fastMode: Boolean,
-  fastModeEnabled: Boolean,
-  onOpen: () -> Unit,
-) {
-  val enabled = (thinkingSupported && thinkingLevelEnabled) || fastModeEnabled
-  val languageTag = currentAppLanguage().languageTag
-  val position = resolveChatEffortPosition(selectedId, options)
-  val description = nativeString("Thinking")
-  val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
-  val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
-  val fastZoneColor = ClawTheme.colors.danger.copy(alpha = if (enabled) 1f else 0.5f)
-  val boltColor = ClawTheme.colors.danger
-  Surface(
-    onClick = onOpen,
-    enabled = enabled,
-    modifier =
-      Modifier.size(ClawTheme.spacing.touchTarget).semantics {
-        contentDescription = description
-        stateDescription = chatThinkingChipStateDescription(fastMode, selectedId, options, languageTag)
-      },
-    shape = CircleShape,
-    color = Color.Transparent,
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Box(modifier = Modifier.size(28.dp).testTag("chat-thinking-gauge")) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-          val radius = size.width * 0.43f
-          val hub = Offset(center.x, size.height * 0.72f)
-          val bounds = Offset(hub.x - radius, hub.y - radius)
-          val dialSize = Size(radius * 2, radius * 2)
-          val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Butt)
-          for (start in listOf(180f, 225f, 270f)) {
-            drawArc(dialColor, start, 39f, false, bounds, dialSize, style = stroke)
-          }
-          // The red Fast zone remains part of the dial; the bolt separately marks Fast as active.
-          drawArc(fastZoneColor, 315f, 45f, false, bounds, dialSize, style = stroke)
-          chatEffortNeedleAngle(position)?.let { angle ->
-            rotate(angle, pivot = hub) {
-              drawLine(
-                color = needleColor,
-                start = hub,
-                end = Offset(hub.x + radius * 0.83f, hub.y),
-                strokeWidth = 2.dp.toPx(),
-                cap = StrokeCap.Round,
-              )
-            }
-            drawCircle(color = needleColor, radius = 1.5.dp.toPx(), center = hub)
-          }
-        }
-        if (fastMode) {
-          Canvas(
-            modifier =
-              Modifier
-                .align(AbsoluteAlignment.TopLeft)
-                .absoluteOffset(x = 16.75.dp, y = 13.dp)
-                .size(7.dp)
-                .testTag("chat-fast-mode-badge"),
-          ) {
-            // Use the wedge width: the stock Bolt vector is mostly transparent at this scale.
-            val bolt =
-              Path().apply {
-                moveTo(size.width * 0.58f, 0f)
-                lineTo(size.width * 0.2f, size.height * 0.56f)
-                lineTo(size.width * 0.47f, size.height * 0.56f)
-                lineTo(size.width * 0.34f, size.height)
-                lineTo(size.width * 0.86f, size.height * 0.38f)
-                lineTo(size.width * 0.57f, size.height * 0.38f)
-                close()
-              }
-            drawPath(bolt, color = boltColor)
-          }
-        }
-      }
-    }
-  }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -3609,16 +3473,16 @@ internal fun ChatEffortSliderControl(
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
   enabled: Boolean,
-  onPreviewChange: (String?) -> Unit = {},
   onSelect: (String) -> Unit,
 ) {
   val languageTag = currentAppLanguage().languageTag
-  val selectedPosition = resolveChatEffortPosition(selectedId, options)
+  val normalizedSelected = selectedId.trim().lowercase(Locale.US)
+  val selectedIndex = options.indexOfFirst { it.id.trim().lowercase(Locale.US) == normalizedSelected }
   var previewing by remember(selectedId, options, enabled) { mutableStateOf(false) }
   val sliderState =
     remember(selectedId, options, enabled) {
       SliderState(
-        value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat(),
+        value = selectedIndex.coerceAtLeast(0).toFloat(),
         steps = (options.size - 2).coerceAtLeast(0),
         valueRange = 0f..options.lastIndex.coerceAtLeast(0).toFloat(),
       )
@@ -3626,9 +3490,8 @@ internal fun ChatEffortSliderControl(
   var active by remember(sliderState) { mutableStateOf(true) }
 
   fun resetPreview() {
-    sliderState.value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat()
+    sliderState.value = selectedIndex.coerceAtLeast(0).toFloat()
     previewing = false
-    onPreviewChange(null)
   }
   val interactionSource =
     remember(sliderState) {
@@ -3657,7 +3520,6 @@ internal fun ChatEffortSliderControl(
     if (active && enabled) {
       sliderState.value = value
       previewing = true
-      onPreviewChange(options.getOrNull(sliderState.value.roundToInt())?.id)
     }
   }
   sliderState.onValueChangeFinished = {
@@ -3675,7 +3537,7 @@ internal fun ChatEffortSliderControl(
       ?.let(options::getOrNull)
       ?.let { option -> chatThinkingOptionLabel(option, languageTag) }
       ?: chatThinkingOptionLabel(
-        options.getOrNull(selectedPosition.optionIndex) ?: ChatThinkingLevelOption(selectedId, selectedId),
+        options.getOrNull(selectedIndex) ?: ChatThinkingLevelOption(selectedId, selectedId),
         languageTag,
       )
 
@@ -3690,7 +3552,7 @@ internal fun ChatEffortSliderControl(
     }
     // Material treats two endpoints as continuous; use explicit choices for binary
     // profiles and unknown selections so accessibility can reach every option.
-    if (options.size > 2 && selectedPosition.anchored) {
+    if (options.size > 2 && selectedIndex >= 0) {
       Slider(
         state = sliderState,
         enabled = enabled,
@@ -3721,7 +3583,7 @@ internal fun ChatEffortSliderControl(
       }
     } else {
       options.forEachIndexed { index, option ->
-        val optionSelected = selectedPosition.optionIndex == index
+        val optionSelected = selectedIndex == index
         Surface(
           onClick = { if (!optionSelected) onSelect(option.id) },
           enabled = enabled,
@@ -3791,7 +3653,6 @@ private fun ChatEffortPopover(
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
-  onPreviewChange: (String?) -> Unit,
   onSelect: (String) -> Unit,
   onFastModeChange: (Boolean) -> Unit,
   onDismiss: () -> Unit,
@@ -3813,7 +3674,6 @@ private fun ChatEffortPopover(
             options = thinkingOptions,
             selectedId = selectedId,
             enabled = thinkingLevelEnabled,
-            onPreviewChange = { if (it == null || admitAction()) onPreviewChange(it) },
             onSelect = { if (admitAction()) onSelect(it) },
           )
         }
@@ -4282,13 +4142,6 @@ private fun ChatInputPill(
   contextPickerEnabled: Boolean,
   onOpenModelPicker: () -> Unit,
   onOpenContext: () -> Unit,
-  thinkingLevel: String,
-  thinkingOptions: List<ChatThinkingLevelOption>,
-  thinkingSupported: Boolean,
-  thinkingLevelEnabled: Boolean,
-  fastMode: Boolean,
-  fastModeEnabled: Boolean,
-  onOpenEffortPicker: () -> Unit,
   contextUsage: ChatContextUsage,
   modifier: Modifier = Modifier,
 ) {
@@ -4396,7 +4249,6 @@ private fun ChatInputPill(
       BoxWithConstraints(Modifier.fillMaxWidth()) {
         val toolbarInset = if (maxWidth >= 360.dp) 4.dp else 0.dp
         val iconWidth = if (onOpenDetails != null) 36.dp else ClawTheme.spacing.touchTarget
-        val showEffort = thinkingSupported || fastModeEnabled || fastMode
         val primaryAction = resolveChatComposerPrimaryAction(talkActive, runActive, hasContent)
         Row(Modifier.fillMaxWidth().padding(horizontal = toolbarInset), verticalAlignment = Alignment.CenterVertically) {
           if (onOpenDetails != null) {
@@ -4414,17 +4266,6 @@ private fun ChatInputPill(
               onClick = onOpenModelPicker,
               modifier = Modifier.weight(1f, fill = false).widthIn(max = 160.dp),
             )
-            if (showEffort) {
-              ChatThinkingLevelPicker(
-                options = thinkingOptions,
-                selectedId = thinkingLevel,
-                thinkingSupported = thinkingSupported,
-                thinkingLevelEnabled = thinkingLevelEnabled,
-                fastMode = fastMode,
-                fastModeEnabled = fastModeEnabled,
-                onOpen = onOpenEffortPicker,
-              )
-            }
           }
           ChatComposerContextButton(
             enabled = inputEnabled && contextPickerEnabled,
@@ -4635,7 +4476,8 @@ internal fun latestChatMessageCost(messages: List<ChatMessage>): ChatMessageCost
   return null
 }
 
-internal fun chatThinkingChipStateDescription(
+internal fun chatEffortStateDescription(
+  thinkingSupported: Boolean,
   fastMode: Boolean,
   thinkingLevel: String,
   thinkingOptions: List<ChatThinkingLevelOption>,
@@ -4645,7 +4487,7 @@ internal fun chatThinkingChipStateDescription(
   val selectedOption =
     thinkingOptions.firstOrNull { it.id.trim().equals(normalizedLevel, ignoreCase = true) }
       ?: ChatThinkingLevelOption(id = normalizedLevel, label = normalizedLevel)
-  val selectedLabel = chatThinkingOptionLabel(selectedOption, languageTag)
+  val selectedLabel = if (thinkingSupported) chatThinkingOptionLabel(selectedOption, languageTag) else nativeString("Unavailable")
   val fastModeState =
     if (fastMode) {
       nativeString("On")

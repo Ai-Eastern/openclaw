@@ -20,16 +20,16 @@ import org.junit.Test
 
 class ChatScreenTest {
   @Test
-  fun thinkingGaugeSemanticsExposeEffortAndFastModeState() {
+  fun effortDescriptionLabelsReasoningAndFastModeSeparately() {
     val options = listOf("off", "medium").map { ChatThinkingLevelOption(id = it, label = it) }
 
     assertEquals(
       "Medium, Fast mode: On",
-      chatThinkingChipStateDescription(fastMode = true, thinkingLevel = "medium", thinkingOptions = options),
+      chatEffortStateDescription(thinkingSupported = true, fastMode = true, thinkingLevel = "medium", thinkingOptions = options),
     )
     assertEquals(
       "High, Fast mode: Off",
-      chatThinkingChipStateDescription(fastMode = false, thinkingLevel = "high", thinkingOptions = emptyList()),
+      chatEffortStateDescription(thinkingSupported = true, fastMode = false, thinkingLevel = "high", thinkingOptions = emptyList()),
     )
   }
 
