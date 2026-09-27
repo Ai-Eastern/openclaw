@@ -436,6 +436,17 @@ describe("subagent orphan recovery — faithful restart path", () => {
         completion: { required: true, resultText: null, capturedAt: now },
       });
       addSubagentRunForTests(entry);
+      if (owner === "original" || owner === "unclassified") {
+        persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+        expect(
+          loadSubagentRegistryFromSqlite().get(runId)?.execution.interruptionReason,
+        ).toBeUndefined();
+        resetSubagentRegistryForTests({ persist: false });
+        await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
+        rotateAgentEventLifecycleGeneration();
+        initSubagentRegistry();
+        activateGatewayRuntime();
+      }
       const announce = vi.mocked(runSubagentAnnounceFlow);
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
       let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
@@ -455,7 +466,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
           expect(loadExactSessionEntry({ storePath, sessionKey: childSessionKey })?.entry).toEqual(
             before,
           );
-          expect(entry.execution.interruptionReason).toBeUndefined();
+          expect(
+            getSubagentRunByChildSessionKey(childSessionKey)?.execution.interruptionReason,
+          ).toBeUndefined();
           return;
         }
         await vi.waitFor(() =>
@@ -478,7 +491,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
           ).toMatchObject({
             status: "interrupted",
           });
-          expect(entry.execution.interruptionReason).toBe("gateway-restart");
+          expect(
+            getSubagentRunByChildSessionKey(childSessionKey)?.execution.interruptionReason,
+          ).toBe("gateway-restart");
         }
       } finally {
         admission?.release();

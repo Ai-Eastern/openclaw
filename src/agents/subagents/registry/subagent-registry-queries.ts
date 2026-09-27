@@ -37,12 +37,13 @@ function isDeliveryTerminalForRequesterSettle(entry: Pick<SubagentRunRecord, "de
   );
 }
 
-/** Lists requester-owned runs, optionally scoped to the lifetime of a requester run. */
+/** Lists requester-owned runs, optionally scoped to a requester run or session incarnation. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,
   options?: {
     requesterRunId?: string;
+    requesterSessionId?: string;
     requesterAgentId?: string;
     requesterStorePath?: string | null;
   },
@@ -60,11 +61,19 @@ export function listRunsForRequesterFromRuns(
   const lowerBound =
     requesterRunMatchesScope?.execution.startedAt ?? requesterRunMatchesScope?.createdAt;
   const upperBound = requesterRunMatchesScope?.execution.endedAt;
+  // A newer owner outside this incarnation must still supersede its older row.
+  const latestRuns =
+    options?.requesterSessionId === undefined
+      ? undefined
+      : buildLatestSubagentRunReadIndexFromRuns(runs);
 
   const results: SubagentRunRecord[] = [];
   for (const entry of runs.values()) {
     if (
       entry.requesterSessionKey === key &&
+      (options?.requesterSessionId === undefined ||
+        entry.completionRequesterSessionId === options.requesterSessionId) &&
+      (!latestRuns || latestRuns.getLatestSubagentRun(entry.childSessionKey) === entry) &&
       (!options?.requesterAgentId || entry.requesterAgentId === options.requesterAgentId) &&
       (options?.requesterStorePath === undefined ||
         (entry.requesterStorePath ?? null) === options.requesterStorePath) &&

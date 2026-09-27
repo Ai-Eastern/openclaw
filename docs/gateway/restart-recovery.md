@@ -622,7 +622,8 @@ through their normal completion path. They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer
-child run are omitted. Large lists show the first 32 children and tell the parent
+child run are omitted, as are records from another store or parent session
+incarnation. Large lists show the first 32 children and tell the parent
 to inspect the remaining children.
 
 The parent must reconcile each unfinished child with its saved history and the

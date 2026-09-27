@@ -424,6 +424,7 @@ async function resumeMainSessionWithinAdmission(
         buildSubagentRestartRecoveryRoster(
           listSubagentRunsForRequester(dispatchSessionKey, {
             requesterAgentId: params.agentId,
+            requesterSessionId: params.entry.sessionId,
             requesterStorePath,
           }),
         ),
