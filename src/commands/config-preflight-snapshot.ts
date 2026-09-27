@@ -23,6 +23,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
+  isAgentDatabaseOwnershipMismatchError,
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
@@ -312,9 +313,13 @@ export async function readAdmittedConfigSnapshot(params: {
       }
       return { ...read, ...(recovery ? { recovery } : {}) };
     } catch (error) {
-      // Only an explicit maintenance refusal can park a managed Gateway.
+      // Only explicit maintenance or a proven owner mismatch can park a managed Gateway.
       // Unavailable reads, scratch allocation, and cleanup retain their ordinary failure.
-      if (error instanceof ExitError || !findStartupMaintenanceRequiredError(error)) {
+      if (
+        error instanceof ExitError ||
+        (!findStartupMaintenanceRequiredError(error) &&
+          !isAgentDatabaseOwnershipMismatchError(error))
+      ) {
         throw error;
       }
       return throwStartupMigrationRefusal(formatErrorMessage(error), error);

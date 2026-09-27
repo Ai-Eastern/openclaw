@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
@@ -8,6 +9,11 @@ import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrati
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../plugins/test-helpers/installed-plugin-index.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+  inspectAgentDatabaseAdmission,
+} from "../state/agent-database-admission.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../state/openclaw-state-db-schema-migration-required.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -18,61 +24,97 @@ import { readAdmittedConfigSnapshot } from "./config-preflight-snapshot.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
-it.each(["SQLite inspection", "initial config read", "inspection with offline maintenance"])(
-  "preserves failed %s during startup admission",
-  async (phase) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const configPath =
-        process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
-          ...(phase === "initial config read" ? { $include: "missing.json" } : {}),
+it.each([
+  "SQLite inspection",
+  "initial config read",
+  "inspection with offline maintenance",
+  "ownership mismatch",
+  "wrapped ownership mismatch",
+  "aggregate ownership mismatch",
+  "pending inspection",
+  "failed inspection",
+])("preserves failed %s during startup admission", async (phase) => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const configPath =
+      process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+        ...(phase === "initial config read" ? { $include: "missing.json" } : {}),
+      }),
+    );
+    const inspectionFailure = createSqliteReadOnlyWorkerError(
+      "failed while creating its private snapshot",
+      "",
+    );
+    let failure: Error =
+      phase === "inspection with offline maintenance"
+        ? new AggregateError(
+            [
+              inspectionFailure,
+              new OpenClawStateDatabaseSchemaMigrationRequiredError(
+                "audit-events-v2",
+                "/synthetic/state.sqlite",
+              ),
+            ],
+            "startup inspection and maintenance failed",
+          )
+        : inspectionFailure;
+    if (phase.includes("ownership mismatch")) {
+      const mismatch = new AgentDatabaseAdmissionError(
+        expectDefined(
+          inspectAgentDatabaseAdmission({
+            agentId: "requested",
+            path: "/synthetic/agent.sqlite",
+            metadata: { role: "agent", agentId: "actual" },
+          }),
+          "Expected an ownership mismatch",
+        ),
+      );
+      failure =
+        phase === "wrapped ownership mismatch"
+          ? new Error("read admission failed", { cause: mismatch })
+          : phase === "aggregate ownership mismatch"
+            ? new AggregateError([inspectionFailure, mismatch], "read admission failed")
+            : mismatch;
+    } else if (phase === "pending inspection" || phase === "failed inspection") {
+      failure = new AgentDatabaseAdmissionError(
+        createAgentDatabaseInspectionRefusal({
+          agentId: "requested",
+          paths: ["/synthetic/agent.sqlite"],
+          reason: "storage unavailable",
+          pending: phase === "pending inspection",
         }),
       );
-      const inspectionFailure = createSqliteReadOnlyWorkerError(
-        "failed while creating its private snapshot",
-        "",
-      );
-      const failure =
-        phase === "inspection with offline maintenance"
-          ? new AggregateError(
-              [
-                inspectionFailure,
-                new OpenClawStateDatabaseSchemaMigrationRequiredError(
-                  "audit-events-v2",
-                  "/synthetic/state.sqlite",
-                ),
-              ],
-              "startup inspection and maintenance failed",
-            )
-          : inspectionFailure;
-      const read = readAdmittedConfigSnapshot({
-        env: process.env,
-        readSnapshot: async () => {
-          throw failure;
+    }
+    const read = readAdmittedConfigSnapshot({
+      env: process.env,
+      readSnapshot: async () => {
+        throw failure;
+      },
+    });
+    if (phase === "initial config read") {
+      await expect(read).resolves.toMatchObject({
+        snapshot: {
+          valid: false,
+          issues: [
+            { errorCode: "CONFIG_READ_FAILED", message: expect.stringContaining("missing.json") },
+          ],
         },
       });
-      if (phase === "initial config read") {
-        await expect(read).resolves.toMatchObject({
-          snapshot: {
-            valid: false,
-            issues: [
-              { errorCode: "CONFIG_READ_FAILED", message: expect.stringContaining("missing.json") },
-            ],
-          },
-        });
-      } else if (phase === "inspection with offline maintenance") {
-        await expect(read).rejects.toMatchObject({ code: 78, cause: failure });
-      } else {
-        await expect(read).rejects.toBe(failure);
-      }
-    });
-  },
-);
+    } else if (
+      phase === "inspection with offline maintenance" ||
+      phase.includes("ownership mismatch")
+    ) {
+      await expect(read).rejects.toMatchObject({ code: 78, cause: failure });
+    } else {
+      await expect(read).rejects.toBe(failure);
+    }
+  });
+});
 
 it("reads discovery policy and index from one generation, then releases it before readiness guards", async () => {
   await withDoctorConfigPreflightHome(async (home) => {

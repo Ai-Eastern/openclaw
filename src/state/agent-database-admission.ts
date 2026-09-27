@@ -5,6 +5,7 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migrations.agent-owner-guidance.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -331,6 +332,15 @@ export class AgentDatabaseAdmissionError extends Error {
     super(`${refusal.reason}\n${refusal.repairHint}`);
     this.name = "AgentDatabaseAdmissionError";
   }
+}
+
+/** A proven owner mismatch needs operator action; unavailable inspections prove no mismatch. */
+export function isAgentDatabaseOwnershipMismatchError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) =>
+      candidate instanceof AgentDatabaseAdmissionError &&
+      candidate.refusal.code === "agent-database-ownership-mismatch",
+  );
 }
 
 export function assertAgentDatabaseAdmitted(agentId: string, options: AdmissionOptions = {}): void {

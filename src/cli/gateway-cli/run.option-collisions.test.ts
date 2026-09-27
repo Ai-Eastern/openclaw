@@ -2236,7 +2236,7 @@ describe("gateway run option collisions", () => {
           ]),
         });
       }
-      const error = await runGatewayCli(["gateway", "run"]).catch((error: unknown) => error);
+      const error = await runGatewayCli(["gateway", "run"]).catch((caught: unknown) => caught);
       if (kind === "rejected") {
         expect(error).toBe(failure);
       } else {
