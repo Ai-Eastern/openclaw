@@ -32,6 +32,125 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
+  it("loads provider styles and hands first-run API keys to the selected setup method", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "light",
+        locale: "en-US",
+        reducedMotion: "reduce",
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 900 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "openclaw.setup.detect",
+            "openclaw.setup.activate.start",
+            "wizard.next",
+          ],
+          methodResponses: {
+            "openclaw.setup.detect": {
+              candidates: [],
+              manualProviders: [
+                {
+                  id: "setup-token",
+                  brandId: "anthropic",
+                  groupLabel: "Anthropic",
+                  label: "Anthropic setup-token",
+                },
+                {
+                  id: "api-key",
+                  brandId: "anthropic",
+                  groupLabel: "Anthropic",
+                  label: "Anthropic API key",
+                },
+              ],
+              workspace: "/tmp/openclaw-e2e",
+              setupComplete: false,
+            },
+            "models.authStatus": {
+              ts: 1,
+              providers: [],
+              providerCapabilities: [
+                { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+                {
+                  provider: "openai",
+                  apiKeySupported: true,
+                  quickApiKeySetup: true,
+                  loginOptions: [
+                    {
+                      id: "openai-login",
+                      brandId: "openai",
+                      label: "Sign in with ChatGPT",
+                      kind: "oauth",
+                      featured: true,
+                    },
+                  ],
+                },
+              ],
+            },
+            "openclaw.setup.activate.start": { done: false, status: "running" },
+            "wizard.next": { done: true, status: "cancelled" },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+        await page.locator(".model-setup__manual").waitFor();
+        await page.locator("[data-models-connect]").click();
+        const dialog = page.locator(".model-provider-login");
+        await dialog.locator('[data-models-login-provider="openai"]').waitFor();
+        if (recordVisuals) {
+          await writeFile(
+            path.join(suite.artifactDir, "first-run-provider-picker.png"),
+            await takeControlUiViewportScreenshot(
+              page,
+              page.locator("openclaw-modal-dialog dialog"),
+              [dialog],
+            ),
+          );
+        }
+        expect(
+          await dialog.locator("ul").evaluate((element) => getComputedStyle(element).listStyleType),
+        ).toBe("none");
+        expect(await dialog.locator('[data-models-login-provider="anthropic"]').isVisible()).toBe(
+          true,
+        );
+        expect(
+          await dialog
+            .locator('[data-models-login-provider="anthropic"] .provider-brand-icon')
+            .evaluate((element) => element.getBoundingClientRect().width),
+        ).toBeGreaterThan(0);
+        await dialog.locator('[data-models-login-provider="anthropic"]').click();
+        expect(
+          await dialog
+            .getByRole("button", { name: "Anthropic setup-token", exact: true })
+            .isVisible(),
+        ).toBe(true);
+        await dialog.getByRole("button", { name: "Anthropic API key", exact: true }).click();
+        const keyInput = page.locator('.model-setup__manual input[type="password"]');
+        await expect
+          .poll(() => keyInput.evaluate((element) => document.activeElement === element))
+          .toBe(true);
+        expect(
+          await page.locator('.model-setup-provider-select [slot="trigger"]').textContent(),
+        ).toContain("Anthropic API key");
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+        await captureProviderProof("first-run-anthropic-key-form.png", keyInput);
+        await keyInput.fill("synthetic-anthropic-api-key");
+        await page.locator(".model-setup__manual button.primary").click();
+        const activation = await gateway.waitForRequest("openclaw.setup.activate.start");
+        expect(activation.params).toEqual({
+          sessionId: expect.any(String),
+          agentId: "main",
+          kind: "api-key",
+          authChoice: "api-key",
+          apiKey: "synthetic-anthropic-api-key",
+        });
+        expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
+        expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
+      },
+    );
+  });
   it.each(["chat", "new"])(
     "opens existing provider settings from %s without starting a connection",
     async (origin) => {
