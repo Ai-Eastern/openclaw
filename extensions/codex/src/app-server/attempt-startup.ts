@@ -77,6 +77,7 @@ import {
   startOrResumeThread,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
+import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -630,6 +631,8 @@ export async function startCodexAttemptThread(params: {
             const clientRetired = error instanceof CodexThreadClientReplacementError;
             if (
               startupAbandonController.signal.aborted ||
+              // Physical startup already owns the bounded unopened-socket retries.
+              isCodexWebSocketOpenFailure(error) ||
               (clientRetired && replacedSettledFailureClient) ||
               (!clientRetired && !selectionChanged && !isCodexAppServerConnectionClosedError(error))
             ) {
