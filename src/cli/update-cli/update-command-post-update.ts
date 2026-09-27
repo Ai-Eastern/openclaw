@@ -518,7 +518,7 @@ export async function finishUpdate(
       let restartContext: Awaited<ReturnType<typeof prepareUpdateRestart>>;
       try {
         restartContext = await prepareUpdateRestart(
-          { ...params, shouldRestart, result: resultWithPostUpdate },
+          { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
           restartConfigSnapshot,
         );
       } catch (error) {
@@ -669,6 +669,7 @@ export async function finishUpdate(
               result: resultWithPostUpdate,
               shouldRestart,
               preManagedServiceStop: currentServiceStop(),
+              assertCurrent,
             },
             postUpdateConfigSnapshot ?? restartConfigSnapshot,
           );

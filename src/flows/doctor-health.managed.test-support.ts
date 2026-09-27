@@ -50,6 +50,7 @@ const { mocks } = await import("./doctor-health.test-support.js");
 type DoctorManagedRepairOutcome =
   | "ready"
   | "clean-repair"
+  | "clean-stopped-repair"
   | "clean-inspect"
   | "clean-force-repair"
   | "clean-force-inspect"
@@ -144,7 +145,12 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         });
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
-        let running = outcome !== "update-no-restart-stopped";
+        const initiallyStopped =
+          outcome === "clean-stopped-repair" || outcome === "update-no-restart-stopped";
+        let running = !initiallyStopped;
+        if (initiallyStopped) {
+          releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+        }
         const pid = outcome === "ancestor-blocked" ? process.pid : 4200;
         mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
         const packageRoot = process.cwd();
@@ -273,9 +279,6 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         try {
           const modernUpdate = outcome.startsWith("update-") && outcome !== "update-legacy";
           if (modernUpdate) {
-            if (!running) {
-              releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
-            }
             const parentRestarts = outcome === "update-parent-stopped";
             const prepared = await maybeStopManagedServiceBeforeMutableUpdate({
               updateInstallKind: "package",
@@ -355,6 +358,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             outcome === "ready" ||
             outcome === "restart-unhealthy" ||
             outcome === "clean-repair" ||
+            outcome === "clean-stopped-repair" ||
             outcome === "clean-force-repair" ||
             outcome === "approvals-migrated" ||
             outcome === "update-legacy";
@@ -362,14 +366,18 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             inspectionOnly
               ? ["repair"]
               : shouldRestart
-                ? ["stop", "repair", "restart"]
+                ? [...(initiallyStopped ? [] : ["stop"]), "repair", "restart"]
                 : ["stop", "repair"],
           );
-          expect(stop).toHaveBeenCalledTimes(inspectionOnly ? 0 : 1);
+          expect(stop).toHaveBeenCalledTimes(inspectionOnly || initiallyStopped ? 0 : 1);
           expect(restart).toHaveBeenCalledTimes(shouldRestart ? 1 : 0);
           if (shouldRestart) {
+            expect(running).toBe(true);
             expect(restart).toHaveBeenCalledWith(
               expect.objectContaining({ preserveDefinition: true }),
+            );
+            expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+              expect.objectContaining({ requireRunningService: true }),
             );
           }
           if (clean) {
