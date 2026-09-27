@@ -82,64 +82,12 @@ function buildInboundReplyDispatchBase(params: {
 
 type BuildInboundReplyDispatchBaseParams = Parameters<typeof buildInboundReplyDispatchBase>[0];
 type RecordInboundSessionAndDispatchReplyParams = {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId?: string;
-  agentId: string;
-  routeSessionKey: string;
-  storePath: string;
-  ctxPayload: FinalizedMsgContext;
-  recordInboundSession: RecordInboundSessionFn;
-  dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   deliver: (payload: OutboundReplyPayload) => Promise<void>;
   durable?: false | DurableInboundReplyDeliveryOptions;
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
   replyOptions?: ReplyOptionsWithoutModelSelected;
 };
-
-async function recordInboundSessionAndDispatchReply(
-  params: RecordInboundSessionAndDispatchReplyParams,
-): Promise<void> {
-  await dispatchChannelInboundReply({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    agentId: params.agentId,
-    routeSessionKey: params.routeSessionKey,
-    storePath: params.storePath,
-    ctxPayload: params.ctxPayload,
-    recordInboundSession: params.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      preparePayload: (payload): OutboundReplyPayload =>
-        payload && typeof payload === "object" ? normalizeOutboundReplyPayloadCore(payload) : {},
-      deliver: async (payload, info) => {
-        if (params.durable) {
-          const durable = await deliverInboundReplyWithMessageSendContextCore({
-            cfg: params.cfg,
-            channel: params.channel,
-            accountId: params.accountId,
-            agentId: params.agentId,
-            ctxPayload: params.ctxPayload,
-            payload,
-            info,
-            ...params.durable,
-          });
-          throwIfDurableInboundReplyDeliveryFailed(durable);
-          if (isDurableInboundReplyDeliveryHandled(durable)) {
-            return durable.delivery;
-          }
-        }
-        return await params.deliver(payload as OutboundReplyPayload);
-      },
-      onError: params.onDispatchError,
-    },
-    replyPipeline: {},
-    replyOptions: params.replyOptions,
-    record: { onRecordError: params.onRecordError },
-  });
-}
 
 export async function dispatchInboundReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
@@ -148,14 +96,37 @@ export async function dispatchInboundReplyWithBase(
       "deliver" | "durable" | "onRecordError" | "onDispatchError" | "replyOptions"
     >,
 ): Promise<void> {
-  const dispatchBase = buildInboundReplyDispatchBase(params);
-  await recordInboundSessionAndDispatchReply({
-    ...dispatchBase,
-    deliver: params.deliver,
-    durable: params.durable,
-    onRecordError: params.onRecordError,
-    onDispatchError: params.onDispatchError,
-    replyOptions: params.replyOptions,
+  const base = buildInboundReplyDispatchBase(params);
+  const { deliver, durable, onDispatchError, onRecordError, replyOptions } = params;
+  await dispatchChannelInboundReply({
+    ...base,
+    delivery: {
+      preparePayload: (payload): OutboundReplyPayload =>
+        payload && typeof payload === "object" ? normalizeOutboundReplyPayloadCore(payload) : {},
+      deliver: async (payload, info) => {
+        if (durable) {
+          const result = await deliverInboundReplyWithMessageSendContextCore({
+            cfg: base.cfg,
+            channel: base.channel,
+            accountId: base.accountId,
+            agentId: base.agentId,
+            ctxPayload: base.ctxPayload,
+            payload,
+            info,
+            ...durable,
+          });
+          throwIfDurableInboundReplyDeliveryFailed(result);
+          if (isDurableInboundReplyDeliveryHandled(result)) {
+            return result.delivery;
+          }
+        }
+        return await deliver(payload as OutboundReplyPayload);
+      },
+      onError: onDispatchError,
+    },
+    replyPipeline: {},
+    replyOptions,
+    record: { onRecordError },
   });
 }
 
