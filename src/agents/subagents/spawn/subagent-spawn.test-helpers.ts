@@ -3,10 +3,14 @@
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-launch-record.js";
-import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
+import type {
+  RegisterSubagentRunOptions,
+  SubagentRegistrationScope,
+} from "../registry/subagent-registry.types.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -24,6 +28,22 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: MockFn;
 };
+
+export function createSubagentRegistrationScopeForTest(
+  overrides: Partial<SubagentRegistrationScope> &
+    Pick<SubagentRegistrationScope, "settleFailedLaunch">,
+): SubagentRegistrationScope {
+  return {
+    canLaunch: () => true,
+    canAcceptLaunch: () => true,
+    canAbortAcceptedRun: () => true,
+    canCleanupSession: () => true,
+    canRetireReservation: () => true,
+    waitForClaim: () => undefined,
+    waitForRetirementPublication: () => undefined,
+    ...overrides,
+  };
+}
 
 export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
@@ -495,18 +515,13 @@ export async function loadSubagentSpawnModuleForTest(params: {
         return Promise.resolve(result).then(() => {
           // Successful queued registration transfers custody; stricter test scopes win.
           if (!retained) {
-            options.retainOwnership?.({
-              canLaunch: () => true,
-              canAcceptLaunch: () => true,
-              canAbortAcceptedRun: () => true,
-              canCleanupSession: () => true,
-              canRetireReservation: () => true,
-              waitForClaim: () => undefined,
-              waitForRetirementPublication: () => undefined,
-              settleFailedLaunch: async (error) => {
-                params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
-              },
-            });
+            options.retainOwnership?.(
+              createSubagentRegistrationScopeForTest({
+                settleFailedLaunch: async (error) => {
+                  params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
+                },
+              }),
+            );
           }
         });
       },
@@ -523,3 +538,93 @@ export async function loadSubagentSpawnModuleForTest(params: {
     resetSubagentRegistryForTests,
   };
 }
+
+type InheritedSpawnPreferenceCase = {
+  name: string;
+  task: string;
+  requesterState: Readonly<Record<string, unknown>>;
+  preferenceKey: "thinkingLevel" | "fastMode";
+  expected: string | boolean;
+  agentDefaults?: Readonly<Record<string, unknown>>;
+  requesterAgent?: Readonly<Record<string, unknown>>;
+  collect?: boolean;
+  requesterRunId?: string;
+  requesterThinkingLevel?: ThinkLevel;
+  thinkingOverride?: string;
+};
+
+const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
+  {
+    name: "inherits active-turn Ultra instead of the stored session thinking level",
+    task: "inherit active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "ultra",
+  },
+  {
+    name: "inherits active-turn off instead of a stored Ultra override",
+    task: "inherit active thinking off",
+    requesterState: { thinkingLevel: "ultra" },
+    requesterThinkingLevel: "off",
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "keeps explicit child thinking ahead of active-turn Ultra",
+    task: "override active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    thinkingOverride: "low",
+    preferenceKey: "thinkingLevel",
+    expected: "low",
+  },
+  {
+    name: "inherits requester fast mode for collector children",
+    task: "inherit fast mode",
+    requesterState: { fastMode: "auto" },
+    preferenceKey: "fastMode",
+    expected: "auto",
+    collect: true,
+    requesterRunId: "parent-run",
+  },
+  {
+    name: "inherits requester fast mode for ordinary children with default Swarm config",
+    task: "inherit ordinary fast mode",
+    requesterState: { fastMode: true },
+    preferenceKey: "fastMode",
+    expected: true,
+  },
+  {
+    name: "persists inherited requester thinking off",
+    task: "inherit thinking off",
+    requesterState: { thinkingLevel: "off" },
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
+    task: "inherit global thinking default",
+    requesterState: {},
+    agentDefaults: { thinkingDefault: "medium" },
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+  {
+    name: "applies requester-agent subagent thinking before active-turn thinking",
+    task: "requester policy thinking",
+    requesterState: { thinkingLevel: "high" },
+    requesterAgent: { subagents: { thinking: "medium" } },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+];
+
+export const inheritedSpawnCases = {
+  preferences: inheritedSpawnPreferenceCases,
+  permissionModes: [
+    { label: "default", mode: undefined },
+    { label: "guarded", mode: "guarded" },
+  ] as const,
+};
