@@ -189,62 +189,66 @@ export function prepareProjectedSessionPresentation(
         record.fallbackModel,
       ]);
     let views = publicationRows?.get(record);
-    let row = signature === undefined ? undefined : views?.get(signature);
-    if (!row) {
-      row = projection.present(record, {
-        ...options,
-        now,
-        subagentRuns,
-        active: run?.active,
-        excludedChildKeys,
-        preparedFacts,
-      });
-      if (swarm) {
-        row.swarm = swarm;
+    const cached = signature === undefined ? undefined : views?.get(signature);
+    const projectModels = (row: GatewaySessionRow) => {
+      const projected = models?.session(row) ?? row;
+      if (projected === row || !views || signature === undefined) {
+        return projected;
       }
-      if (run) {
-        Object.assign(
-          row,
-          projectGatewaySessionActiveRun(run, row.status),
-          run.runIds === undefined ? {} : { activeRunIds: run.runIds },
-        );
+      const modelSignature =
+        signature +
+        JSON.stringify([
+          projected.modelProvider,
+          projected.model,
+          projected.activeModelProvider,
+          projected.activeModel,
+          projected.contextBudgetStatus,
+        ]);
+      const existing = views.get(modelSignature);
+      if (existing) {
+        return existing;
       }
-      if (options.includeActivitySummary === false) {
-        row.activitySummary = undefined;
-      }
-      if (viewerFacts) {
-        Object.assign(row, viewerFacts);
-        if (row.activitySummary) {
-          row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
-        }
-      }
-      if (publicationRows && signature !== undefined) {
-        if (!views) {
-          views = new Map();
-          publicationRows.set(record, views);
-        }
-        views.set(signature, row);
-      }
-    }
-    const projected = models?.session(row) ?? row;
-    if (projected === row || !views || signature === undefined) {
+      views.set(modelSignature, projected);
       return projected;
+    };
+    if (cached) {
+      return projectModels(cached);
     }
-    const modelSignature =
-      signature +
-      JSON.stringify([
-        projected.modelProvider,
-        projected.model,
-        projected.activeModelProvider,
-        projected.activeModel,
-        projected.contextBudgetStatus,
-      ]);
-    const existing = views.get(modelSignature);
-    if (existing) {
-      return existing;
+    const row = projection.present(record, {
+      ...options,
+      now,
+      subagentRuns,
+      active: run?.active,
+      excludedChildKeys,
+      preparedFacts,
+    });
+    if (swarm) {
+      row.swarm = swarm;
     }
-    views.set(modelSignature, projected);
-    return projected;
+    if (run) {
+      Object.assign(
+        row,
+        projectGatewaySessionActiveRun(run, row.status),
+        run.runIds === undefined ? {} : { activeRunIds: run.runIds },
+      );
+    }
+    if (options.includeActivitySummary === false) {
+      row.activitySummary = undefined;
+    }
+    if (viewerFacts) {
+      Object.assign(row, viewerFacts);
+      if (row.activitySummary) {
+        row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
+      }
+    }
+    if (publicationRows && signature !== undefined) {
+      if (!views) {
+        views = new Map();
+        publicationRows.set(record, views);
+      }
+      views.set(signature, row);
+    }
+    return projectModels(row);
   };
   return {
     rowContext: { ...rowContext, subagentRuns },
