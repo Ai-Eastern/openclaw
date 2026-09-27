@@ -17,6 +17,7 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   createCanonicalSubagentRunFixture,
   settleSubagentRegistryPersistenceWork,
@@ -82,7 +83,9 @@ export function useSubagentRestartRecoveryFixture() {
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
-  const settle = () => settleSubagentRegistryPersistenceWork();
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  const settle = (keepObserving = true) =>
+    settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
 
   beforeEach(async () => {
     // Retained stores still belong to the previous case until its cleanup succeeds.
@@ -95,6 +98,7 @@ export function useSubagentRestartRecoveryFixture() {
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
     vi.mocked(onAgentEvent).mockImplementation(() => () => undefined);
+    settleRootWork = observeRootWork();
     activateGatewayRuntime();
     dispatchAgent.mockReset();
   });
@@ -102,7 +106,7 @@ export function useSubagentRestartRecoveryFixture() {
   afterEach(async () => {
     const failures: unknown[] = [];
     try {
-      await settle();
+      await settle(false);
     } catch (error) {
       failures.push(error);
     }

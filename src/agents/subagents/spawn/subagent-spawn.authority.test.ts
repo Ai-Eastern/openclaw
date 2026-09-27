@@ -342,7 +342,9 @@ describe("pending spawn invocation authority", () => {
         if (
           closure === "abort during registration" &&
           !registrationAbortRequested &&
-          [...subagentRuns.values()].some((run) => run.requesterTurnRunId === parentRunId)
+          [...subagentRuns.values()].some(
+            (run) => run.requesterTurnRunId === parentRunId && run.queuedLaunch !== undefined,
+          )
         ) {
           registrationAbortRequested = true;
           cancellation = abortParent();
@@ -423,6 +425,9 @@ describe("pending spawn invocation authority", () => {
         // The source can finish its handoff even when the outer native wrapper is aborted.
         const accepted = await forwarded;
         expect(accepted).toMatchObject({ details: { status: "accepted" } });
+        if (closure === "abort during registration") {
+          expect(registrationAbortRequested).toBe(true);
+        }
         const { runId } = (accepted as { details: { runId: string } }).details;
         expect(subagentRuns.get(runId)?.requesterTurnRunId).toBe(parentRunId);
         expect(dispatch).not.toHaveBeenCalled();

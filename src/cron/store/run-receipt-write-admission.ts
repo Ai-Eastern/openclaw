@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 
 /** Snapshot facts for one locked write; never retain them across transaction admission. */
 export type CronRunReceiptWriteSchema = Readonly<{
@@ -11,19 +12,10 @@ export function prepareCronRunReceiptWriteSchema(db: DatabaseSync): CronRunRecei
   if (!db.isTransaction) {
     throw new Error("Cron receipt schema admission requires the owning write transaction");
   }
-  // No handle cache: another connection can allocate the opt-in table, and a
-  // failed first binding can roll its DDL back. Each admission uses its own
-  // locked snapshot; receipt kernels and pruning consume only the carried fact.
-  // sqlite-allow-raw -- Feature write admission captures optional table presence, never runtime kernels.
-  const rows = db
-    .prepare(
-      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('execution_owner_lifecycle_bindings', 'cron_run_receipts')",
-    )
-    .all();
+  // The schema owner observes foreign commits and rolled-back DDL while
+  // preserving this locked snapshot; kernels consume only the carried facts.
   return {
-    executionOwnerLifecycleBindings: rows.some(
-      (row) => row.name === "execution_owner_lifecycle_bindings",
-    ),
-    cronRunReceipts: rows.some((row) => row.name === "cron_run_receipts"),
+    executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
+    cronRunReceipts: tableExists(db, "cron_run_receipts"),
   };
 }

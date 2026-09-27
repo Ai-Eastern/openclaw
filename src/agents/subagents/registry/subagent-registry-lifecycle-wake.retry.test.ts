@@ -29,8 +29,6 @@ vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
   buildSafeLifecycleErrorMeta: (error: unknown) => ({
     message: error instanceof Error ? error.message : String(error),
   }),
-  clearSubagentPendingDelivery: vi.fn(),
-  markRequesterSettleWakePending: vi.fn(),
   maskLifecycleIdentifier: () => "synthetic",
   refreshFrozenResultFromSession: vi.fn(),
 }));

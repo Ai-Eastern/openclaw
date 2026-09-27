@@ -4,8 +4,12 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { emitAgentEvent, emitAgentEventForRunContext } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { buildStatusReplyForTest } from "./commands-status.test-support.js";
 
 vi.mock("../../status/status-plugin-health.runtime.js", () => ({
@@ -52,6 +56,7 @@ describe("buildStatusReply execution observations", () => {
         stream: "tool",
         data: { phase: "start", name: "read", toolCallId: "status-read" },
       });
+      registerAgentRunContext(runId, { verboseLevel: "on" });
       const running = await buildStatusReplyForTest({});
       const runningDetail = running?.text
         ?.split("\n")
@@ -75,7 +80,18 @@ describe("buildStatusReply execution observations", () => {
       emitAgentEvent({
         runId,
         stream: "execution",
+        data: { approval: { id: "overlapping-approval", state: "pending" } },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "execution",
         data: { approval: { id: "status-approval", state: "resolved" } },
+      });
+      expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
+      emitAgentEvent({
+        runId,
+        stream: "execution",
+        data: { approval: { id: "overlapping-approval", state: "resolved" } },
       });
       emitAgentEvent({
         runId,
@@ -90,6 +106,43 @@ describe("buildStatusReply execution observations", () => {
       expect(resumedDetail).toMatch(/\bread\b/);
       expect(resumedDetail).not.toMatch(/approval/i);
       expect(resumed?.text).toContain("Subagents: 1 active");
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: { phase: "result", name: "read", toolCallId: "status-read" },
+      });
+      const settledTool = await buildStatusReplyForTest({});
+      const settledDetail = settledTool?.text
+        ?.split("\n")
+        .find((line) => line.includes("• observed worker"));
+      expect(settledDetail).toMatch(/running/i);
+      expect(settledDetail).not.toMatch(/\bread\b/);
+      emitAgentEvent({
+        runId,
+        stream: "execution",
+        data: {
+          state: "waiting",
+          wait: { kind: "approval" },
+          sourceId: "native-observer",
+          executionId: "native-turn",
+        },
+      });
+      expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
+      emitAgentEvent({
+        runId,
+        stream: "execution",
+        data: { state: "running", sourceId: "native-observer", executionId: "native-turn" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "execution",
+        data: { state: "unknown", sourceId: "retired-observer", invalidate: true },
+      });
+      const nativeResumed = await buildStatusReplyForTest({});
+      expect(nativeResumed?.text).toContain("Subagents: 1 active");
+      expect(
+        nativeResumed?.text?.split("\n").find((line) => line.includes("• observed worker")),
+      ).toMatch(/running/i);
     } finally {
       clearAgentRunContext(runId);
     }
@@ -118,41 +171,74 @@ describe("buildStatusReply execution observations", () => {
     expect(detail).not.toMatch(/\b(running|queued)\b/i);
   });
 
-  it.each(["task", "generation"] as const)(
-    "does not borrow approval activity from a different canonical %s in the same child session",
+  it.each(["task", "generation", "incarnation"] as const)(
+    "does not borrow activity from a different canonical %s in the same child session",
     async (replacement) => {
       const childSessionKey = "agent:main:subagent:status-replaced";
+      const previousRunId = replacement === "incarnation" ? "status-current" : "status-previous";
       const now = Date.now();
       addSubagentRunForTests({
-        runId: "status-previous",
+        runId: previousRunId,
         generation: 1,
         childSessionKey,
         task: "previous worker",
         createdAt: now - 2_000,
         startedAt: now - 2_000,
       });
-      emitAgentEvent({
-        runId: "status-previous",
-        stream: "execution",
-        data: { approval: { id: "previous-approval", state: "pending" } },
+      registerAgentRunContext(previousRunId, {
+        sessionKey: childSessionKey,
+        projectSessionActive: true,
       });
-      addSubagentRunForTests({
-        runId: "status-current",
-        taskRunId: replacement === "generation" ? "status-previous" : "status-current",
-        generation: 2,
-        childSessionKey,
-        task: "replacement worker",
-        createdAt: now - 1_000,
-        startedAt: now - 1_000,
-      });
+      try {
+        const previousContext = getAgentRunContext(previousRunId);
+        if (!previousContext) {
+          throw new Error("Expected previous execution context");
+        }
+        emitAgentEvent({
+          runId: previousRunId,
+          stream: "tool",
+          data: { phase: "start", name: "old-tool", toolCallId: "previous-tool" },
+        });
+        emitAgentEvent({
+          runId: previousRunId,
+          stream: "execution",
+          data: { approval: { id: "previous-approval", state: "pending" } },
+        });
+        expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
+        addSubagentRunForTests({
+          runId: "status-current",
+          taskRunId: replacement === "generation" ? previousRunId : "status-current",
+          generation: 2,
+          childSessionKey,
+          task: "replacement worker",
+          createdAt: now - 1_000,
+          startedAt: now - 1_000,
+        });
+        if (replacement === "incarnation") {
+          clearAgentRunContext(previousRunId);
+          registerAgentRunContext("status-current", { ...previousContext });
+          emitAgentEventForRunContext(
+            {
+              runId: "status-current",
+              stream: "execution",
+              data: { approval: { id: "late-previous-approval", state: "pending" } },
+            },
+            previousContext,
+          );
+        }
+        const reply = await buildStatusReplyForTest({});
+        const detail = reply?.text
+          ?.split("\n")
+          .find((line) => line.includes("• replacement worker"));
 
-      const reply = await buildStatusReplyForTest({});
-      const detail = reply?.text?.split("\n").find((line) => line.includes("• replacement worker"));
-
-      expect(reply?.text).toContain("Subagents: 1 active");
-      expect(detail).toMatch(/unknown|unavailable/i);
-      expect(detail).not.toMatch(/approval/i);
-      expect(reply?.text).not.toContain("• previous worker");
+        expect(reply?.text).toContain("Subagents: 1 active");
+        expect(detail).toMatch(replacement === "incarnation" ? /running/i : /unknown|unavailable/i);
+        expect(detail).not.toMatch(/approval|old-tool/i);
+        expect(reply?.text).not.toContain("• previous worker");
+      } finally {
+        clearAgentRunContext(previousRunId);
+        clearAgentRunContext("status-current");
+      }
     },
   );
 

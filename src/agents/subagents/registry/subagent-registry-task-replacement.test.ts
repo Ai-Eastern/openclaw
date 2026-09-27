@@ -367,6 +367,7 @@ it("rearms native execution for an interrupted run's successor", async () => {
   expect(
     await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
   ).toBe(1);
+  await fixture.settle();
   expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(previous);
 
   const observerSnapshots: Array<{ run?: string }> = [];

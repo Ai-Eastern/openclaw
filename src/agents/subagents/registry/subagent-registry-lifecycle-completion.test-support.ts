@@ -4,11 +4,11 @@ import type {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
+import { clearSubagentPendingDelivery } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { clearSubagentPendingDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,

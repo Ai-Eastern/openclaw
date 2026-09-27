@@ -115,7 +115,7 @@ describe("cron receipt execution-binding admission", () => {
           const { db: retainedDb } = database;
           expect(
             runOpenClawStateWriteTransaction(({ db }) => prepareCronRunReceiptWriteSchema(db)),
-          ).toEqual({ executionOwnerLifecycleBindings: false });
+          ).toEqual({ executionOwnerLifecycleBindings: false, cronRunReceipts: true });
           if (enabled) {
             const sibling = openNodeSqliteDatabase(database.path);
             try {
@@ -196,7 +196,7 @@ describe("cron receipt execution-binding admission", () => {
           }
           expect(
             runOpenClawStateWriteTransaction(({ db }) => prepareCronRunReceiptWriteSchema(db)),
-          ).toEqual({ executionOwnerLifecycleBindings: enabled });
+          ).toEqual({ executionOwnerLifecycleBindings: enabled, cronRunReceipts: true });
           releaseLocalCronRunReceiptOwnership(receipt);
         },
       );

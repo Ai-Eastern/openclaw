@@ -11,9 +11,11 @@ import {
 } from "../../../infra/session-delivery-queue.records.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
-import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+} from "../registry/subagent-delivery-state.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../registry/subagent-registry-helpers.js";
-import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
 import {
   getSubagentRunsForChildSession,
   subagentRuns,

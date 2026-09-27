@@ -593,11 +593,18 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     await waitForAssertion(() => expect(launchCount).toBe(1));
 
     expect(markSubagentRunTerminated({ runId: firstRunId, reason: "manual kill" })).toBe(1);
-    const killedTask = structuredClone(subagentRuns.get(firstRunId!));
     const killedEntry = expectDefined(subagentRuns.get(firstRunId!), "killed collector");
+    const killedSnapshot = structuredClone(killedEntry);
     const killedExecution = structuredClone(killedEntry.execution);
     const killedReconciliation = structuredClone(killedEntry.killReconciliation);
-    expect(killedTask).toMatchObject({ status: "cancelled", endedAt: expect.any(Number) });
+    expect(killedSnapshot).toMatchObject({
+      endedReason: "subagent-killed",
+      execution: {
+        status: "terminal",
+        endedAt: expect.any(Number),
+        outcome: { status: "error", error: "manual kill" },
+      },
+    });
     releaseFirstLaunch();
 
     await waitForAssertion(() => {
@@ -614,7 +621,25 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       expect(subagentRuns.get(firstRunId!)?.queuedLaunch).toBeUndefined();
       expect(subagentRuns.get(firstRunId!)?.execution).toEqual(killedExecution);
       expect(subagentRuns.get(firstRunId!)?.killReconciliation).toEqual(killedReconciliation);
-      expect(subagentRuns.get(firstRunId!)).toEqual(killedTask);
+      expect(subagentRuns.get(firstRunId!)).toEqual({
+        ...killedSnapshot,
+        swarmLaunchPending: false,
+        queuedLaunch: undefined,
+        collectorLaunchCleanupPending: false,
+        completion: {
+          required: false,
+          resultText: "manual kill",
+          capturedAt: killedExecution.endedAt,
+        },
+        collectorCompletion: { status: "killed" },
+        structuredOutput: undefined,
+        archiveAtMs: expectDefined(killedExecution.endedAt, "killed run end") + 60 * 60_000,
+        cleanupCompletedAt: expect.any(Number),
+        contextEngineCleanupCompletedAt: expect.any(Number),
+      });
+      const settledEntry = expectDefined(subagentRuns.get(firstRunId!), "settled collector");
+      expect(settledEntry.cleanupCompletedAt).toBe(settledEntry.contextEngineCleanupCompletedAt);
+      expect(settledEntry.cleanupCompletedAt).toBeGreaterThanOrEqual(killedExecution.endedAt!);
       expect(subagentRuns.get("gateway-run-2")).toMatchObject({
         swarmRunId: results[1]!.runId,
         swarmLaunchPending: false,

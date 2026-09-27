@@ -1763,7 +1763,13 @@ describe("createBackupArchive", () => {
 
       const sqlite = requireNodeSqlite();
       const database = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
+      let originalUserVersion: unknown;
+      let originalSchemaMetadata: unknown;
       try {
+        originalUserVersion = database.prepare("PRAGMA user_version").get();
+        originalSchemaMetadata = database
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get();
         database.exec("PRAGMA foreign_keys = OFF;");
         database
           .prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)")
@@ -1794,12 +1800,12 @@ describe("createBackupArchive", () => {
           { task_id: "missing-task" },
         ]);
         expect(unchanged.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
-        expect(unchanged.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+        expect(unchanged.prepare("PRAGMA user_version").get()).toEqual(originalUserVersion);
         expect(
           unchanged
             .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
             .get(),
-        ).toEqual({ schema_version: 18 });
+        ).toEqual(originalSchemaMetadata);
       } finally {
         unchanged.close();
       }

@@ -67,6 +67,7 @@ import {
   withRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
+import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -82,7 +83,6 @@ import {
   registerPrivateCompletionSettlementTests,
   registerNativeCompletionAuthorityTest,
 } from "./subagent-registry-lifecycle-completion.test-support.js";
-import { loadPendingFinalDeliveryPayload } from "./subagent-registry-lifecycle-delivery.js";
 import {
   SubagentLifecycleController,
   type SubagentLifecycleOptions,

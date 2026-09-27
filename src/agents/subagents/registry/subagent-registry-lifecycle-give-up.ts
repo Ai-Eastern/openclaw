@@ -2,6 +2,7 @@ import {
   getDeliveryLastError,
   ensureDeliveryState,
   ensureCompletionState,
+  clearSubagentPendingDelivery,
 } from "./subagent-delivery-state.js";
 import {
   resolveCleanupCompletionReason,
@@ -13,10 +14,7 @@ import {
   retireSupersededCleanupIfNeeded,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
-import {
-  clearSubagentPendingDelivery,
-  emitCompletionEndedHookIfNeeded,
-} from "./subagent-registry-lifecycle-delivery.js";
+import { emitCompletionEndedHookIfNeeded } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export const finalizeResumedAnnounceGiveUp = async (

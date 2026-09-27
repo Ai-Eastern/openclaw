@@ -403,9 +403,11 @@ export function registerRequiredQueuedSubagent(params: {
         return;
       }
       try {
-        params.assertCurrent?.();
-        if (!gatewayCurrent()) {
-          throw new Error("Queued registration lost its original Gateway owner");
+        if (!registrationAcknowledged) {
+          params.assertCurrent?.();
+          if (!gatewayCurrent()) {
+            throw new Error("Queued registration lost its original Gateway owner");
+          }
         }
         assertLaunchCurrent();
       } catch (error) {

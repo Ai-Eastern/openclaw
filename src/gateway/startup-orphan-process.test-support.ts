@@ -48,7 +48,6 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
     "yielded",
     "queued",
     "recovering",
-    "retired-task-session",
     "registry-queued",
     "registry-recovering",
     "registry-completion",

@@ -7,7 +7,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
+import { loadPendingFinalDeliveryPayload } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";

@@ -103,8 +103,9 @@ export function registerAgentRunSequenceResetHandler(handler: (runId: string) =>
 }
 
 function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
-  // Callers supply a fresh record; scheduler leases never transfer with its metadata.
+  // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
+  context.executionActivity = undefined;
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);

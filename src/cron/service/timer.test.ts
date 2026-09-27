@@ -24,7 +24,7 @@ import {
   createDueIsolatedAgentJob,
   createDueMainJob,
   createDueScriptJob,
-  findCronTaskByBaseRunId,
+  findCronRunByBaseRunId,
 } from "./timer.seam.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -197,7 +197,7 @@ describe("cron service timer seam coverage", () => {
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(now + 60_000);
-    const task = findCronTaskByBaseRunId(`cron:main-heartbeat-job:${now}`);
+    const task = findCronRunByBaseRunId(storePath, `cron:main-heartbeat-job:${now}`);
     if (!task) {
       throw new Error("expected cron task ledger record");
     }
@@ -279,7 +279,7 @@ describe("cron service timer seam coverage", () => {
     expect(liveError).toBeUndefined();
     expect(emittedStartedAt).toBe(persistedReservation);
     expect(
-      findCronTaskByBaseRunId(`cron:isolated-agent-job:${persistedReservation}`),
+      findCronRunByBaseRunId(storePath, `cron:isolated-agent-job:${persistedReservation}`),
     ).toMatchObject({
       startedAt: emittedStartedAt,
       status: "succeeded",

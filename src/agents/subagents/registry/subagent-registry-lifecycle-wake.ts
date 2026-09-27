@@ -16,7 +16,10 @@ import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announ
 import { settleRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
-import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
+import {
+  isCompletedRequesterDeliveryBlocked,
+  markRequesterSettleWakePending,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type {
   CleanupBookkeepingParams,
@@ -24,7 +27,6 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
-  markRequesterSettleWakePending,
   maskLifecycleIdentifier,
 } from "./subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";

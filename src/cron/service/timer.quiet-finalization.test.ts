@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration } from "../active-jobs.js";
-import { cronRunRecordStoreKey } from "../run-history-detail.js";
-import { readCronRunRecordsForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -12,6 +10,7 @@ import type { CronJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
+import { findCronRunByBaseRunId } from "./timer.seam.test-support.js";
 import { onTimer } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -32,13 +31,6 @@ function createDueIsolatedAgentJob(params: { now: number }): CronJob {
     payload: { kind: "agentTurn", message: "run isolated cron" },
     state: { nextRunAtMs: params.now - 1 },
   };
-}
-
-function findCronRunByBaseRunId(storePath: string, baseRunId: string) {
-  const storeKey = cronStoreKey(storePath);
-  return readCronRunRecordsForTests().find(
-    (row) => cronRunRecordStoreKey(row) === storeKey && row.runId?.startsWith(`${baseRunId}:`),
-  );
 }
 
 describe("cron quiet outcome finalization", () => {

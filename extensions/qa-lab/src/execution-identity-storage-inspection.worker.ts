@@ -6,6 +6,7 @@ import {
   tableExists,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import type { QaExecutionIdentityStorageOperations } from "./execution-identity-storage-inspection.js";
 
@@ -15,18 +16,25 @@ type QaExecutionIdentityDatabase = {
   execution_decision_facts: { run_id: string; action_family: string; reason_code: string };
 };
 
-const nativeRunSchema = z.object({
-  runId: z.string().min(1),
-  childSessionKey: z.string().min(1),
-  requesterSessionKey: z.string().min(1),
-  label: z.string().optional(),
-  execution: z.object({
-    status: z.string(),
-    endedAt: z.number().optional(),
-    outcome: z.object({ status: z.string() }).optional(),
+const nativeRunSchema = z.preprocess(
+  (stored) => {
+    // Private completions are wrapped so released readers cannot deliver them publicly.
+    const parentCompletion = asOptionalRecord(asOptionalRecord(stored)?.parentCompletion);
+    return parentCompletion?.completionTarget === "parent" ? parentCompletion : stored;
+  },
+  z.object({
+    runId: z.string().min(1),
+    childSessionKey: z.string().min(1),
+    requesterSessionKey: z.string().min(1),
+    label: z.string().optional(),
+    execution: z.object({
+      status: z.string(),
+      endedAt: z.number().optional(),
+      outcome: z.object({ status: z.string() }).optional(),
+    }),
+    delivery: z.object({ status: z.string(), disposition: z.string().optional() }).optional(),
   }),
-  delivery: z.object({ status: z.string(), disposition: z.string().optional() }).optional(),
-});
+);
 
 export function createSqliteWorkerBackend(
   _input: undefined,

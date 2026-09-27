@@ -185,6 +185,7 @@ it.each(["resume", "cancel"] as const)(
     persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
     subagentRuns.set(previousRunId, loadSubagentRegistryFromSqlite().get(previousRunId)!);
     publishSystemEventStoreResolver(() => storePath);
+    await fixture.settle();
     expect(shouldResumeParentSubagent(state)).toBe(false);
     if (action === "resume") {
       const resume = bindParentSubagentResume({ ...state, childSessionId: sessionId });

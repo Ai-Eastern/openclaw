@@ -21,6 +21,7 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import * as registryState from "./subagent-registry-state.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
 
@@ -48,7 +49,9 @@ export const { persistSubagentRunsToDiskOrThrow } = await vi.importActual<typeof
 export function useSubagentControlFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
-  const settle = () => settleSubagentRegistryPersistenceWork();
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  const settle = (keepObserving = true) =>
+    settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
   const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
   const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
   const gateway = vi.mocked(callGateway);
@@ -98,11 +101,12 @@ export function useSubagentControlFixture() {
         throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
       }
     });
+    settleRootWork = observeRootWork();
   });
   afterEach(async () => {
     const failures: unknown[] = [];
     try {
-      await settle();
+      await settle(false);
     } catch (error) {
       failures.push(error);
     } finally {

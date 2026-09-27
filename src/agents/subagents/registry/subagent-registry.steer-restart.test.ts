@@ -350,7 +350,8 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("honors persisted steer suppression and only announces the replacement run", async () => {
-    {
+    const settleRootWork = observeRootWork();
+    try {
       await registerRun({
         runId: "run-old",
         childSessionKey: "agent:main:subagent:steer",
@@ -363,7 +364,7 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-old");
 
-      await settleSubagentRegistryPersistenceWork();
+      await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       expect(announceSpy).not.toHaveBeenCalled();
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
       expect(emitSessionLifecycleEventMock).not.toHaveBeenCalled();
@@ -376,7 +377,7 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-new");
 
-      await settleSubagentRegistryPersistenceWork();
+      await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       expect(announceSpy).toHaveBeenCalledTimes(1);
       const matchingCalls = runSubagentEndedHookMock.mock.calls.filter((call) => {
         const ctx = call[1] as { runId?: string } | undefined;
@@ -389,6 +390,8 @@ describe("subagent registry steer restarts", () => {
 
       const announce = requireFirstAnnounceCall();
       expect(announce.childRunId).toBe("run-new");
+    } finally {
+      await settleRootWork();
     }
   });
 

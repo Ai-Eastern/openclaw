@@ -1,4 +1,5 @@
 import { isAgentRunWaitingForCapacity } from "../../../infra/agent-run-capacity-wait.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -13,8 +14,9 @@ import {
 
 export type SubagentExecutionObservation = {
   state: "queued" | "running" | "waiting" | "finished" | "unknown";
+  currentTool?: { name: string };
   wait?: {
-    kind: "children" | "external";
+    kind: "approval" | "user_input" | "agent_messages" | "children" | "external";
     dependencies?: Array<{ runId: string; sessionKey: string; label?: string }>;
     pendingCount?: number;
   };
@@ -91,12 +93,26 @@ export function observeSubagentExecution(
     return { state: "unknown" };
   }
   if (isSubagentRunLive(current)) {
-    return {
-      state:
-        current.execution.status === "queued" || isAgentRunWaitingForCapacity(current.runId)
-          ? "queued"
-          : "running",
-    };
+    if (current.execution.status === "queued" || isAgentRunWaitingForCapacity(current.runId)) {
+      return { state: "queued" };
+    }
+    const context = getAgentRunContext(current.runId);
+    const activity =
+      context?.sessionKey === current.childSessionKey ? context.executionActivity : undefined;
+    if (activity?.approvalOverflow) {
+      return { state: "unknown" };
+    }
+    if (activity?.pendingApprovalIds.length) {
+      return { state: "waiting", wait: { kind: "approval" } };
+    }
+    if (activity?.execution?.state === "unknown") {
+      return { state: "unknown" };
+    }
+    if (activity?.execution?.state === "waiting") {
+      return { state: "waiting", wait: { kind: activity.execution.wait ?? "external" } };
+    }
+    const tool = activity?.tools.at(-1);
+    return { state: "running", ...(tool ? { currentTool: { name: tool.name } } : {}) };
   }
   if (isSubagentRunQueued(current)) {
     return { state: "queued" };

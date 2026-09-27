@@ -26,11 +26,11 @@ import {
   requesterWakeDriver,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
+import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
-import { loadPendingFinalDeliveryPayload } from "./subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";

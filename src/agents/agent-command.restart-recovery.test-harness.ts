@@ -7,6 +7,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { agentCommand } from "./agent-command.js";
 import type { CommandSessionEntryFixture } from "./agent-command.live-model-switch.test-helpers.js";
 import {
@@ -29,6 +30,7 @@ type AgentCommandRecoveryFixture = {
     emitAgentEventMock: Mock;
     deliverAgentCommandResultMock: Mock;
     persistSessionEntryMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+    loadSessionEntryMock: Mock;
     resolvedSessionKeyMock?: string;
   };
   agentCommand: typeof agentCommand;
@@ -40,6 +42,30 @@ type AgentCommandRecoveryFixture = {
   ) => { entry: SessionEntry; store: Record<string, SessionEntry> };
   makeSuccessResult: (provider: string, model: string) => unknown;
 };
+
+export async function withStoredAgentCommandRecoverySession(
+  fixture: AgentCommandRecoveryFixture,
+  run: (scope: { agentId: string; sessionKey: string; storePath: string }) => Promise<void>,
+): Promise<void> {
+  await withOpenClawTestState({ label: "command-recovery-delivery" }, async (testState) => {
+    const scope = {
+      agentId: "default",
+      sessionKey: "agent:default:main",
+      storePath: path.join(testState.sessionsDir("default"), "sessions.json"),
+    };
+    const { entry } = fixture.setupBareStoredSession({}, scope.storePath, scope.sessionKey);
+    fixture.state.resolvedSessionKeyMock = scope.sessionKey;
+    await sessionAccessor.replaceSessionEntry(scope, entry);
+    const { persistAgentSession: persist } = await vi.importActual<
+      typeof import("./command/attempt-execution.shared.js")
+    >("./command/attempt-execution.shared.js");
+    fixture.state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) =>
+      persist(args[0] as Parameters<typeof persist>[0]),
+    );
+    fixture.state.loadSessionEntryMock.mockImplementation(sessionAccessor.loadSessionEntry);
+    await run(scope);
+  });
+}
 
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,

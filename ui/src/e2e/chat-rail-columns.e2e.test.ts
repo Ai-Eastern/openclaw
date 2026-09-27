@@ -496,10 +496,10 @@ suite.define(() => {
                 }),
             )
             .toEqual({
-              baseDeltas: [0, 0, 0, 0, 0, 0, 0],
-              boxes: Array.from({ length: 7 }, () => [16, 16]),
+              baseDeltas: [0, 0, 0, 0, 0, 0],
+              boxes: Array.from({ length: 6 }, () => [16, 16]),
               centerSpread: 0,
-              glyphs: Array.from({ length: 7 }, () => [15, 15]),
+              glyphs: Array.from({ length: 6 }, () => [15, 15]),
             });
           const filesTab = sidePanel(page).locator("wa-tab").filter({ hasText: "Files" });
           const filesClose = sidePanel(page).getByRole("button", {

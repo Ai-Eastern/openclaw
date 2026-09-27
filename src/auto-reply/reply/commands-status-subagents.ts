@@ -1,3 +1,4 @@
+import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
 import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
 // Formats subagent status rows for the status command response.
 import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
@@ -7,12 +8,20 @@ import { formatRunLabel } from "./subagents-utils.js";
 
 function formatExecutionObservation(observation: SubagentExecutionObservation): string {
   switch (observation.state) {
-    case "running":
-      return "running";
+    case "running": {
+      const tool = sanitizeRunStatusText(observation.currentTool?.name, { maxChars: 60 });
+      return tool ? `running ${tool}` : "running";
+    }
     case "queued":
       return "queued";
     case "waiting":
       switch (observation.wait?.kind) {
+        case "approval":
+          return "waiting for approval";
+        case "user_input":
+          return "waiting for input";
+        case "agent_messages":
+          return "waiting for agent messages";
         case "children":
           return "waiting for child tasks";
         default:

@@ -3,6 +3,7 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { testing as schedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
@@ -38,7 +39,9 @@ vi.mock("../../context-engine/registry.js", async (importOriginal) => ({
 export function useChatAbortRegistryFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
-  const settle = () => settleSubagentRegistryPersistenceWork();
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  const settle = (keepObserving = true) =>
+    settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
   beforeEach(async () => {
     // A failed drain retains its stores; the next case must not replace their owner.
     if (stateDir) {
@@ -56,11 +59,12 @@ export function useChatAbortRegistryFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    settleRootWork = observeRootWork();
   });
   afterEach(async () => {
     const failures: unknown[] = [];
     try {
-      await settle();
+      await settle(false);
     } catch (error) {
       failures.push(error);
     }

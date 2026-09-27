@@ -16,13 +16,11 @@ import {
   ensureCompletionState,
   ensureDeliveryState,
   isCompletedRequesterDeliveryBlocked,
-} from "../registry/subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import {
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
   markRequesterSettleWakePending,
-} from "../registry/subagent-registry-lifecycle-delivery.js";
+} from "../registry/subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import {
   deleteSubagentRunRowInDatabase,

@@ -424,11 +424,8 @@ describe("historical model disclosure", () => {
                     limit: 1,
                     ...(stage.startsWith("delta") ? { cursor } : {}),
                   },
-                  ...(stage === "retained"
-                    ? {
-                        retainedSessionId: scope.sessionId,
-                      }
-                    : {}),
+                  retainedTranscript:
+                    stage === "retained" ? { sessionId: scope.sessionId } : undefined,
                 });
       try {
         await Promise.race([

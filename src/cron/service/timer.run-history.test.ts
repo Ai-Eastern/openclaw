@@ -4,7 +4,7 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/servic
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.test-support.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { createDueIsolatedAgentJob, findCronTaskByBaseRunId } from "./timer.seam.test-support.js";
+import { createDueIsolatedAgentJob, findCronRunByBaseRunId } from "./timer.seam.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-run-history",
@@ -61,7 +61,7 @@ describe("cron service timer run history", () => {
         message: "run isolated cron",
       }),
     );
-    const task = findCronTaskByBaseRunId(`cron:isolated-agent-job:${now}`);
+    const task = findCronRunByBaseRunId(storePath, `cron:isolated-agent-job:${now}`);
     if (!task) {
       throw new Error("expected isolated cron history record");
     }
@@ -113,7 +113,7 @@ describe("cron service timer run history", () => {
 
     await onTimer(state);
 
-    const task = findCronTaskByBaseRunId(`cron:isolated-agent-job:${now}`);
+    const task = findCronRunByBaseRunId(storePath, `cron:isolated-agent-job:${now}`);
     if (!task) {
       throw new Error("expected current-bound cron history record");
     }

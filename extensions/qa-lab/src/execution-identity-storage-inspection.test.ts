@@ -50,19 +50,25 @@ describe("inspectQaExecutionIdentityStorage", () => {
         "CREATE TABLE subagent_runs (payload_json TEXT NOT NULL, requester_session_key TEXT NOT NULL, created_at INTEGER NOT NULL)",
       );
       for (const requesterSessionKey of ["parent", "other-parent"]) {
-        database.prepare("INSERT INTO subagent_runs VALUES (?, ?, ?)").run(
-          JSON.stringify({
-            runId: requesterSessionKey + "-run",
-            childSessionKey: "child",
+        for (const privateCompletion of [false, true]) {
+          const run = {
+            runId: `${requesterSessionKey}-${privateCompletion ? "private" : "public"}`,
+            childSessionKey: `${requesterSessionKey}-child`,
             requesterSessionKey,
+            ...(privateCompletion ? { completionTarget: "parent" } : {}),
             label: "native-child",
             execution: { status: "terminal", endedAt: 42, outcome: { status: "ok" } },
             delivery: { status: "not_required", disposition: "intentional_non_delivery" },
             task: "private fixture prompt must not be returned",
-          }),
-          requesterSessionKey,
-          1,
-        );
+          };
+          database
+            .prepare("INSERT INTO subagent_runs VALUES (?, ?, ?)")
+            .run(
+              JSON.stringify(privateCompletion ? { parentCompletion: run } : run),
+              requesterSessionKey,
+              privateCompletion ? 2 : 1,
+            );
+        }
       }
       database.close();
 
@@ -97,7 +103,7 @@ describe("inspectQaExecutionIdentityStorage", () => {
               { set: "runs", value: { expr: "readNativeQaSubagentRuns(env, 'parent')" } },
               {
                 assert:
-                  "runs.length === 1 && runs[0].requesterSessionKey === 'parent' && runs[0].createdAt === 1 && runs[0].execution.outcome.status === 'ok' && runs[0].delivery.disposition === 'intentional_non_delivery' && !('task' in runs[0])",
+                  "runs.length === 2 && runs[0].runId === 'parent-private' && runs[0].createdAt === 2 && runs[1].runId === 'parent-public' && runs[1].createdAt === 1 && runs.every(run => run.requesterSessionKey === 'parent' && run.childSessionKey === 'parent-child' && run.execution.outcome.status === 'ok' && run.delivery.disposition === 'intentional_non_delivery' && !('task' in run) && !('completionTarget' in run))",
               },
             ],
           },
@@ -143,6 +149,18 @@ describe("inspectQaExecutionIdentityStorage", () => {
       for (const nativeCall of nativeCalls) {
         expect(nativeCall).not.toHaveBeenCalled();
       }
+
+      const malformed = new DatabaseSync(databasePath);
+      try {
+        malformed.exec(`
+          UPDATE subagent_runs
+          SET payload_json = json_remove(payload_json, '$.parentCompletion.completionTarget')
+          WHERE created_at = 2
+        `);
+      } finally {
+        malformed.close();
+      }
+      await expect(readNativeQaSubagentRuns({ gateway }, "parent")).rejects.toThrow();
     } finally {
       await fs.rm(stateDir, { force: true, recursive: true });
     }

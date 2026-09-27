@@ -8,6 +8,8 @@ import {
   ensureDeliveryState,
   getDeliveryLastError,
   isDeliverySuspended,
+  clearSubagentPendingDelivery,
+  loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
 import {
   resolveAnnounceDeliveryDeadline,
@@ -34,11 +36,9 @@ import {
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
-  clearSubagentPendingDelivery,
   emitCompletionEndedHookIfNeeded,
   formatAnnounceDeliveryError,
   hasPriorRequesterDeliveryMirror,
-  loadPendingFinalDeliveryPayload,
   markPendingFinalDelivery,
   maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,

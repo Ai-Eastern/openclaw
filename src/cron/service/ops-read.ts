@@ -174,7 +174,6 @@ export async function recordExternalFailure(
         return { upsertJobIds: [current.id], value: current };
       },
     });
-    runPostPersistCronNotifications(state, postPersistNotifications);
     if (committedJob) {
       await emitCronRunFinished(state, {
         jobId: committedJob.id,
@@ -188,6 +187,7 @@ export async function recordExternalFailure(
       });
       applyCronRuntimeRowsToState(state, [committedJob]);
     }
+    runPostPersistCronNotifications(state, postPersistNotifications);
     armTimer(state);
   });
 }

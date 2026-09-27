@@ -15,6 +15,7 @@ import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   readSubagentSessionStore,
@@ -47,6 +48,7 @@ describe("subagent timing completion", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let stateDir: string;
   let logFile: string;
+  let settleRootWork: ReturnType<typeof observeRootWork>;
 
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
@@ -58,6 +60,7 @@ describe("subagent timing completion", () => {
     vi.mocked(callGateway).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
+    settleRootWork = observeRootWork();
   });
 
   afterEach(async () => {
@@ -65,6 +68,7 @@ describe("subagent timing completion", () => {
       stateDir,
       resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
       closeDatabases: () => {},
+      settleOwnedWork: () => settleRootWork(),
     });
     setLoggerOverride(null);
     clearRuntimeConfigSnapshot();
@@ -135,7 +139,7 @@ describe("subagent timing completion", () => {
       }
     };
     const waitForCleanup = async () => {
-      await settleSubagentRegistryPersistenceWork();
+      await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
     };
     if (mode === "overlap") {
@@ -193,7 +197,7 @@ describe("subagent timing completion", () => {
       await waitForCleanup();
       if (mode === "sequential") {
         emitTerminal();
-        await settleSubagentRegistryPersistenceWork();
+        await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       }
     }
 

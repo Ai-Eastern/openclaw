@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-store.js";
+import {
+  readNativeHookRelayBridgeRecord,
+  writeNativeHookRelayBridgeRecord,
+  type NativeHookRelayBridgeRecord,
+} from "../agents/harness/native-hook-relay-store.js";
 import { captureCoordinatorDatabase } from "../infra/sqlite-coordinator.test-support.js";
 import * as coordinatorDelegate from "../infra/state-database-coordinator-delegate.js";
 import * as stateCoordinator from "../infra/state-database-coordinator.js";
@@ -92,6 +96,7 @@ describe("Doctor maintenance with shared-state workers", () => {
           openOpenClawStateDatabase();
           let execute = executeOpenClawStateWorker;
           let capture = captureOpenClawStateWorkerContext;
+          let write = writeNativeHookRelayBridgeRecord;
           if (alreadyOpen) {
             await execute(capture(), {
               type: "nativeHookRelay.read",
@@ -102,14 +107,16 @@ describe("Doctor maintenance with shared-state workers", () => {
           if (reload) {
             await closeOpenClawStateDatabaseAsync();
             vi.resetModules();
-            const [doctor, worker, contexts] = await Promise.all([
+            const [doctor, worker, contexts, relay] = await Promise.all([
               import("./doctor-maintenance.js"),
               import("../state/openclaw-state-worker-store.js"),
               import("../state/openclaw-state-worker-context.js"),
+              import("../agents/harness/native-hook-relay-store.js"),
             ]);
             enterMaintenance = doctor.beginDoctorMaintenance;
             execute = worker.executeOpenClawStateWorker;
             capture = contexts.captureOpenClawStateWorkerContext;
+            write = relay.writeNativeHookRelayBridgeRecord;
           }
           const maintenance = await enterMaintenance({
             options: { repair: true, nonInteractive: true },
@@ -119,10 +126,7 @@ describe("Doctor maintenance with shared-state workers", () => {
           const record = relayRecord(1);
           try {
             await maintenance!.run(async () => {
-              await execute(capture(), {
-                type: "nativeHookRelay.write",
-                input: { record, updatedAtMs: 1 },
-              });
+              await write({ record, updatedAtMs: 1 });
               expect(
                 await execute(capture(), {
                   type: "nativeHookRelay.read",
@@ -141,10 +145,7 @@ describe("Doctor maintenance with shared-state workers", () => {
             }),
           ).toEqual(record);
           const successor = relayRecord(2);
-          await execute(capture(), {
-            type: "nativeHookRelay.write",
-            input: { record: successor, updatedAtMs: 2 },
-          });
+          await write({ record: successor, updatedAtMs: 2 });
           expect(
             await execute(capture(), {
               type: "nativeHookRelay.read",
@@ -202,9 +203,10 @@ describe("Doctor maintenance with shared-state workers", () => {
               });
             const created = relayRecord(1);
             try {
-              await executeOpenClawStateWorker(context, {
-                type: "nativeHookRelay.write",
-                input: { record: created, updatedAtMs: 1 },
+              await writeNativeHookRelayBridgeRecord({
+                stateDbPath: context.admission.databasePath,
+                record: created,
+                updatedAtMs: 1,
               });
             } finally {
               spy.mockRestore();
@@ -212,9 +214,9 @@ describe("Doctor maintenance with shared-state workers", () => {
             await closeOpenClawStateDatabaseAsync();
             expect(receipt.delegate?.closed).toBe(true);
             expect(
-              await executeOpenClawStateWorker(context, {
-                type: "nativeHookRelay.read",
-                input: { relayId: "doctor" },
+              await readNativeHookRelayBridgeRecord({
+                stateDbPath: context.admission.databasePath,
+                relayId: "doctor",
               }),
             ).toEqual(created);
           });
@@ -291,11 +293,19 @@ describe("Doctor maintenance with shared-state workers", () => {
                 });
               try {
                 await expect(
-                  executeOpenClawStateWorker(context, {
-                    type: "nativeHookRelay.write",
-                    input: { record: relayRecord(1), updatedAtMs: 1 },
+                  writeNativeHookRelayBridgeRecord({
+                    stateDbPath: context.admission.databasePath,
+                    record: relayRecord(1),
+                    updatedAtMs: 1,
                   }),
-                ).rejects.toThrow("Synthetic delegate setup failure");
+                ).rejects.toMatchObject({
+                  message: "SQLite worker failure and cleanup failed",
+                  cause: { message: "Synthetic delegate setup failure" },
+                  errors: [
+                    expect.objectContaining({ message: "Synthetic delegate setup failure" }),
+                    expect.objectContaining({ message: "Synthetic retained release failure" }),
+                  ],
+                });
               } finally {
                 send.mockRestore();
                 delegate.mockRestore();
@@ -303,21 +313,22 @@ describe("Doctor maintenance with shared-state workers", () => {
               await closeOpenClawStateDatabaseAsync();
               expect(receipt.retained?.closed).toBe(true);
               expect(
-                await executeOpenClawStateWorker(context, {
-                  type: "nativeHookRelay.read",
-                  input: { relayId: "doctor" },
+                await readNativeHookRelayBridgeRecord({
+                  stateDbPath: context.admission.databasePath,
+                  relayId: "doctor",
                 }),
               ).toBeUndefined();
               const created = relayRecord(2);
-              await executeOpenClawStateWorker(context, {
-                type: "nativeHookRelay.write",
-                input: { record: created, updatedAtMs: 2 },
+              await writeNativeHookRelayBridgeRecord({
+                stateDbPath: context.admission.databasePath,
+                record: created,
+                updatedAtMs: 2,
               });
               await closeOpenClawStateDatabaseAsync();
               expect(
-                await executeOpenClawStateWorker(context, {
-                  type: "nativeHookRelay.read",
-                  input: { relayId: "doctor" },
+                await readNativeHookRelayBridgeRecord({
+                  stateDbPath: context.admission.databasePath,
+                  relayId: "doctor",
                 }),
               ).toEqual(created);
             });

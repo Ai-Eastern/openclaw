@@ -21,6 +21,7 @@ import {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   createBackgroundMaintenanceEngine,
@@ -182,10 +183,7 @@ describe("runContextEngineMaintenance", () => {
         rewrittenEntries: 0,
       };
     });
-    const sessionManager = {
-      appendMessage: vi.fn(),
-      getSessionTarget: () => undefined,
-    } as unknown as Parameters<typeof runContextEngineMaintenance>[0]["sessionManager"];
+    const sessionManager = SessionManager.inMemory();
     rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
       events.push("rewrite");
       return {

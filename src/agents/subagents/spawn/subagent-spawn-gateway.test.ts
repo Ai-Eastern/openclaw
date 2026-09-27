@@ -109,6 +109,7 @@ describe("native subagent Gateway transport ownership", () => {
       }),
     ).resolves.toEqual({
       response: { runId: "remote-run", status: "accepted" },
+      registrationRequired: false,
     });
     expect(callGateway).toHaveBeenCalledOnce();
   });
