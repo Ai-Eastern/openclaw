@@ -14,7 +14,10 @@ import android.graphics.Rect
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Condition
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.junit.Assert.assertEquals
@@ -36,22 +39,25 @@ class SidebarGatewayTouchTest {
     val app = instrumentation.targetContext.applicationContext as NodeApp
     val device = UiDevice.getInstance(instrumentation)
     val registry = app.prefs.gatewayRegistry
+    val previousEntries = registry.entries.value
     val previousActive = registry.activeStableId.value
+    val previousConnections = registry.connectedStableIds.value
     val previousTheme = app.prefs.appearanceThemeMode.value
     val entries =
       (1..30).map { index ->
         val id = if (index == 1) AndroidScreenshotFixture.gatewayId else "touch-proof-$index"
         GatewayRegistryEntry(id, GatewayRegistryEntryKind.MANUAL, "Research %02d".format(index), "gateway-$index.example", 443, true)
       }
-    entries.forEach(registry::upsert)
-    registry.setActive(entries.first().stableId)
-    app.prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
     val proofDirectory = checkNotNull(app.getExternalFilesDir(null))
 
     fun capture(name: String) {
       assertTrue(device.takeScreenshot(File(proofDirectory, "gateway-touch-$name.png")))
     }
     try {
+      previousEntries.forEach { assertTrue(registry.remove(it.stableId)) }
+      entries.forEach(registry::upsert)
+      registry.setActive(entries.first().stableId)
+      app.prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
       app.startActivity(
         Intent(app, MainActivity::class.java)
           .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -102,7 +108,13 @@ class SidebarGatewayTouchTest {
       field.text = "Research 2"
       assertTrue(device.wait(Until.hasObject(By.text("Research 20")), 5000))
       device.waitForIdle()
-      val keyboard = instrumentation.uiAutomation.windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+      val keyboard =
+        device.wait(
+          Condition<UiDevice, AccessibilityWindowInfo?> {
+            instrumentation.uiAutomation.windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+          },
+          5000,
+        )
       assertNotNull("Search should open the real Android keyboard", keyboard)
       val keyboardBounds = Rect().also { checkNotNull(keyboard).getBoundsInScreen(it) }
       val resultsTop = field.visibleBounds.bottom + 20
@@ -118,6 +130,19 @@ class SidebarGatewayTouchTest {
       device.findObject(By.text("30 gateways")).click()
       assertTrue(device.wait(Until.hasObject(By.text("Search gateways")), 5000))
       device.pressHome()
+      assertTrue(
+        "Home must stop the native owner before resuming it",
+        device.wait(
+          Condition<UiDevice, Boolean> {
+            var stopped = false
+            instrumentation.runOnMainSync {
+              stopped = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.STOPPED).any { it is MainActivity }
+            }
+            stopped
+          },
+          5000,
+        ),
+      )
       app.startActivity(
         Intent(app, MainActivity::class.java)
           .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
@@ -127,9 +152,16 @@ class SidebarGatewayTouchTest {
       assertEquals(focused, runtime.gatewayConnectionHandoff.value.focusedStableId)
       capture("owner-revoked")
     } finally {
-      entries.forEach { registry.remove(it.stableId) }
+      registry.entries.value.forEach { assertTrue(registry.remove(it.stableId)) }
+      previousEntries.forEach(registry::upsert)
       registry.setActive(previousActive)
+      // setActive enables its entry; restore the original connection list independently.
+      previousActive?.let { registry.setConnectionEnabled(it, false) }
+      previousConnections.forEach { registry.setConnectionEnabled(it, true) }
       app.prefs.setAppearanceThemeMode(previousTheme)
+      assertEquals(previousEntries, registry.entries.value)
+      assertEquals(previousActive, registry.activeStableId.value)
+      assertEquals(previousConnections, registry.connectedStableIds.value)
     }
   }
 }
