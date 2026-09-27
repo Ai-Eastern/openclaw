@@ -845,6 +845,50 @@ const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-infra-process", 35],
 ]);
 
+// Exact 6a0571 storage-child replay on a four-CPU Testbox: native module
+// setup + collection + suite elapsed time, not case sums or eight-CPU CI walls.
+// Keep these config-scoped work hints through file regrouping. The two-slot
+// work estimate was 369.995s; its 389.731s wrapper included 12.745s preparation.
+const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
+  ["src/infra/sqlite-readonly-location.copy.test.ts", 0.852],
+  ["src/infra/sqlite-snapshot-staging-cancelled-owner.test.ts", 0.368],
+  ["src/infra/sqlite-worker-client.test.ts", 0.379],
+  ["src/infra/sqlite-worker-store.generation.test.ts", 2.427],
+  ["src/infra/state-migrations.caller-mode.refusal.test.ts", 20.635],
+  ["src/infra/state-migrations.media-persistence.canonical-archives.test.ts", 9.166],
+  ["src/infra/state-migrations.retained-deleted-agent.test.ts", 36.507],
+  ["src/channels/message/ingress-drain.async-work.test.ts", 2.656],
+  ["src/tui/tui-last-session.test.ts", 5.299],
+  ["src/worker/worker.chat-abort.test.ts", 15.867],
+  ["src/agents/bash-tools.exec-background-followup.test.ts", 2.969],
+  ["src/channels/message-access/operator-authority.test.ts", 31.775],
+  ["src/agents/subagents/registry/subagent-registry.persistence.test.ts", 23.639],
+  ["src/auto-reply/reply/session.acp-reset-routing.test.ts", 8.938],
+  ["src/agents/tools/skill-workshop-tool.support-paths.test.ts", 1.686],
+  ["src/claws/package-update.test.ts", 4.164],
+  ["src/cli/update-cli.git-service.test.ts", 24.578],
+  ["src/flows/doctor-health.fleet-preflight.test.ts", 8.648],
+  ["src/agents/embedded-agent-runner/run/attempt-prompt-submit.retention.test.ts", 6.452],
+  ["src/agents/embedded-agent-runner/compact.delegate.test.ts", 16.151],
+  ["src/cli/plugins-cli.update.test.ts", 9.511],
+  ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],
+  ["src/agents/tools/transcripts-tool.selection.test.ts", 14.535],
+  ["src/agents/main-session-recovery/main-session-restart-recovery-admission.test.ts", 16.187],
+  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 279.963],
+  ["test/runtime-agent.codex-initialization.integration.test.ts", 45.303],
+  ["src/tasks/task-executor.test.ts", 7.528],
+  ["src/agents/agent-harness-native-custody.test.ts", 27.986],
+  ["src/system-agent/setup-inference-activate.test.ts", 69.039],
+  ["src/plugins/install-record-commit.retention.test.ts", 7.563],
+  ["src/infra/device-pairing-node.lifecycle.test.ts", 4.165],
+  ["src/agents/tools-effective-inventory.cold-provider.test.ts", 9.37],
+  ["src/meeting-bot/participation.capacity-race.test.ts", 0.909],
+  ["test/imessage-reply-alias.integration.test.ts", 6.901],
+  ["test/plugins/memory-dreaming-cron.test.ts", 2.991],
+  ["src/config/sessions/session-accessor.sqlite-history-query-plan.test.ts", 5.374],
+]);
+const STORAGE_WRAPPER_SECONDS = 20;
+
 const DEFAULT_WHOLE_GROUP_SECONDS = 25;
 const DEFAULT_SECONDS_PER_TEST_FILE = 0.5;
 const COMPACT_PUSH_EXCLUDED_SHARDS = new Set([
@@ -3533,6 +3577,32 @@ function selectHostedToolingTailDonation(
   return best;
 }
 
+function hasStorageModuleWork(group: NodeTestShardGroup): boolean {
+  return group.configs.length === 1 && group.configs[0] === "test/vitest/vitest.infra.config.ts";
+}
+
+function storageModuleWorkFloor(
+  group: NodeTestShardGroup,
+  runnerBackend: string | undefined,
+): number {
+  if (runnerBackend === "github" || !hasStorageModuleWork(group)) {
+    return 0;
+  }
+  const measured = (group.includePatterns ?? []).flatMap((file) => {
+    const seconds = STORAGE_MODULE_WORK_SECONDS.get(file);
+    return seconds === undefined ? [] : [seconds];
+  });
+  if (measured.length === 0) {
+    return 0;
+  }
+  // Packed children keep two workers. Additional solo capacity cannot divide
+  // the longest file; compiler and wrapper work are charged once per child.
+  return (
+    STORAGE_WRAPPER_SECONDS +
+    Math.max(...measured, measured.reduce((sum, seconds) => sum + seconds, 0) / 2)
+  );
+}
+
 function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
@@ -3563,6 +3633,7 @@ function splitOversizedCompactGroup(
   const measuredProfileSeconds = Math.max(
     estimateCompactGroupSeconds(group, runnerBackend),
     observedSeconds,
+    storageModuleWorkFloor(group, runnerBackend),
   );
   const measuredHostedSeconds = Math.max(
     estimateCompactGroupSeconds(group, "github"),
@@ -3629,7 +3700,12 @@ function splitOversizedCompactGroup(
   const weightForFile = isTooling
     ? toolingFileWeight
     : (file: string) =>
-        !agentsCoreFiles || agentsCoreFiles.has(file) ? stripeFileWeight(file) : 0;
+        !agentsCoreFiles || agentsCoreFiles.has(file)
+          ? Math.max(
+              stripeFileWeight(file),
+              hasStorageModuleWork(group) ? (STORAGE_MODULE_WORK_SECONDS.get(file) ?? 0) : 0,
+            )
+          : 0;
   const totalWeight =
     includePatterns?.reduce((seconds, file) => seconds + weightForFile(file), 0) ?? 0;
   // A measured whole-config parent can lag newly cataloged files. Its old
@@ -3953,9 +4029,11 @@ function splitOversizedCompactGroup(
       ];
     }
     const measuredChild = estimateCompactStripeSeconds(child, runnerBackend);
-    if (measuredChild > 0) {
+    const fileWorkFloor = storageModuleWorkFloor(child, runnerBackend);
+    const childFloor = Math.max(measuredChild, fileWorkFloor);
+    if (childFloor > 0) {
       if (
-        measuredChild > COMPACT_SERIAL_NODE_TEST_JOB_SECONDS &&
+        childFloor > COMPACT_SERIAL_NODE_TEST_JOB_SECONDS &&
         !child.requiresDist &&
         !child.pretestBuildMode &&
         patterns.length > 1 &&
@@ -3966,10 +4044,12 @@ function splitOversizedCompactGroup(
         return splitOversizedCompactGroup(
           { ...child, env: { ...child.env, ...PINNED_COMPACT_GROUP_ENV } },
           runnerBackend,
-          measuredChild,
+          childFloor,
         );
       }
-      return [{ group: child, seconds: measuredChild }];
+      if (measuredChild > 0) {
+        return [{ group: child, seconds: childFloor }];
+      }
     }
     const childWorkers = isAutoReplyReplyGroup(child)
       ? compactEffectiveFileWorkers(child, patterns.length)
@@ -4008,6 +4088,7 @@ function splitOversizedCompactGroup(
               )
             : 0,
           projectedSeconds,
+          fileWorkFloor,
           previousWorkerTimingKeys[index]
             ? estimateCompactStripeSeconds(
                 { ...group, timing_key: previousWorkerTimingKeys[index] },
@@ -4453,6 +4534,12 @@ function createCompactNodeTestShardBundles(
         },
         options.runnerBackend ?? "blacksmith",
       );
+      if (
+        storageModuleWorkFloor(planned.group, options.runnerBackend) > COMPACT_EXCLUSIVE_JOB_SECONDS
+      ) {
+        // Retain the measured storage allocation when splitting leaves an outlier alone.
+        planned.group.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
+      }
       // Ordinary packed self-hosted jobs already receive the 32-class. Share
       // those slots across logical classes while keeping runtime owners separate.
       const sharesOrdinaryCapacity =
@@ -4506,6 +4593,7 @@ function createCompactNodeTestShardBundles(
       const seconds = Math.max(
         synthesizedSplitSeconds.get(compactGroupTimingKey(group)) ?? 0,
         estimateCompactStripeSeconds(group, options.runnerBackend),
+        storageModuleWorkFloor(group, options.runnerBackend),
       );
       facts = {
         // Worker selection after packing may lower a price, never introduce a

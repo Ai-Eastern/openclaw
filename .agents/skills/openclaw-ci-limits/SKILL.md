@@ -278,7 +278,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   eligible PR, or uses hosted Ubuntu under the outage override. Main/manual
   matrices remain complete. The monitor starts after preflight, observes failures
   while the installed check planner waits, and uses the planner's successful
-  versioned count step for exact completion rather than its early reservations.
+  versioned count step for exact inventory rather than its early reservations.
+  With that inventory and exactly one unfinished job, it retires: no sibling work
+  remains to cancel. The aggregate still awaits and checks the final job;
+  polling bounds and cancellation authority stay unchanged.
   Existing critical-path routing serves hybrid failures; only the uncovered
   default/explicit-Blacksmith failure case adds the same 4-class route. Retries,
   ordinary manual dispatches and the GitHub override retain hosted aggregation.

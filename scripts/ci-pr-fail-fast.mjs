@@ -270,6 +270,15 @@ export async function monitorPrFailure(options) {
     if (finalJobCount !== undefined && completedCount >= finalJobCount) {
       return "completed";
     }
+    if (
+      finalJobCount !== undefined &&
+      selectedRows.length === finalJobCount &&
+      completedCount === finalJobCount - 1 &&
+      selectedRows.length - completedCount === 1
+    ) {
+      // The gate still awaits this job; no sibling workload remains to cancel.
+      return "last-job-remaining";
+    }
     // Keep broad observation cheap; an admitted final tail must not add another 30s to CI.
     const nearCompletion =
       finalJobCount !== undefined &&

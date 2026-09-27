@@ -426,10 +426,14 @@ export function createExtensionTestTimingKey(
   config: string,
   files: readonly string[],
   env: Readonly<Record<string, string>> = { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+  kind: "envelope" | "singleton-invocation" | "wrapper-overhead" = "envelope",
 ): string | undefined {
   if (
     !/^test\/vitest\/vitest\.extensions?(?:-[^/]+)?\.config\.ts$/u.test(config) ||
-    !isRuntimePlacementIncludePatterns(files) ||
+    (kind === "wrapper-overhead"
+      ? files.length !== 0
+      : !isRuntimePlacementIncludePatterns(files) ||
+        (kind === "singleton-invocation" && files.length !== 1)) ||
     !/^[1-9]\d*$/u.test(env.OPENCLAW_VITEST_MAX_WORKERS ?? "")
   ) {
     return undefined;
@@ -437,7 +441,7 @@ export function createExtensionTestTimingKey(
   return createCompactSplitTimingGeneration({
     configs: [config],
     env,
-    parentShardName: `extension-test:${config}#workers-${env.OPENCLAW_VITEST_MAX_WORKERS}`,
+    parentShardName: `extension-test:${config}#workers-${env.OPENCLAW_VITEST_MAX_WORKERS}${kind === "envelope" ? "" : `#${kind}`}`,
     stripes: [files],
   }).timingKeys[0];
 }
@@ -464,10 +468,37 @@ export function estimateExtensionTestCost(
       : 0;
   const key =
     files.length === testFileCount ? createExtensionTestTimingKey(config, files) : undefined;
-  const measured = key ? readCompactGroupTimings("blacksmith")[key] : undefined;
+  const timings = readCompactGroupTimings("blacksmith");
+  const measured = key ? timings[key] : undefined;
+  const processes = key ? splitExtensionTestProcessTargets(config, [...files]) : [];
+  let singletonSeconds = 0;
+  if (processes.length === files.length && processes.every((process) => process.length === 1)) {
+    let observed = false;
+    for (const file of files) {
+      const fileKey = createExtensionTestTimingKey(
+        config,
+        [file],
+        undefined,
+        "singleton-invocation",
+      )!;
+      const fileSeconds = timings[fileKey];
+      observed ||= fileSeconds !== undefined;
+      singletonSeconds += Math.max(
+        fileSeconds ?? 0,
+        config === DATABASE_WORKER_CONFIG && file.startsWith("extensions/codex/src/app-server/")
+          ? 17.31
+          : multiplier,
+      );
+    }
+    const overheadKey = createExtensionTestTimingKey(config, [], undefined, "wrapper-overhead");
+    singletonSeconds = observed
+      ? singletonSeconds + (overheadKey ? (timings[overheadKey] ?? 0) : 0)
+      : 0;
+  }
   return Math.max(
     1,
     measured ?? 0,
+    Math.ceil(singletonSeconds),
     Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)),
   );
 }

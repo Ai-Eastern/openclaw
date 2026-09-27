@@ -167,6 +167,16 @@ describe("PR failure monitor", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(f.fetchMock).toHaveBeenCalledTimes(2);
+    if (scenario.pending === 1 && scenario.plannerReady && !scenario.missing) {
+      await monitor;
+      expect(completion).toBe("last-job-remaining");
+      expect(waiting[0]?.status).toBe("in_progress");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.fetchMock).toHaveBeenCalledTimes(2);
+      expect(f.events).toEqual([]);
+      return;
+    }
+    expect(completion).toBeUndefined();
     for (const row of waiting) {
       Object.assign(row, job(row.id));
     }
@@ -186,18 +196,23 @@ describe("PR failure monitor", () => {
     expect(f.events).toEqual([]);
   });
 
-  it("bounds extra API reads when the last job takes more than a minute", async () => {
+  it("bounds extra API reads when the last jobs take more than a minute", async () => {
     vi.useFakeTimers();
     const last = job(3, null);
-    const f = fixture({ jobs: [job(1), job(2), last, plannedChecks(0)], checkPlanExpected: true });
+    const sibling = job(4, null);
+    const f = fixture({
+      jobs: [job(1), job(2), last, sibling, plannedChecks(0)],
+      checkPlanExpected: true,
+    });
     let completion: string | undefined;
-    const monitor = f.monitor().then((reason) => {
+    const monitor = f.monitor(5).then((reason) => {
       completion = reason;
     });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(completion).toBeUndefined();
     expect(f.fetchMock).toHaveBeenCalledTimes(14);
     Object.assign(last, job(3));
+    Object.assign(sibling, job(4));
     await vi.advanceTimersByTimeAsync(29_999);
     expect(f.fetchMock).toHaveBeenCalledTimes(14);
     await vi.advanceTimersByTimeAsync(1);
@@ -209,9 +224,12 @@ describe("PR failure monitor", () => {
   it("retains failure cancellation authority during the final observation cadence", async () => {
     vi.useFakeTimers();
     const last = job(3, null);
-    const f = fixture({ jobs: [job(1), job(2), last, plannedChecks(0)], checkPlanExpected: true });
+    const f = fixture({
+      jobs: [job(1), job(2), last, job(4, null), plannedChecks(0)],
+      checkPlanExpected: true,
+    });
     let completion: string | undefined;
-    const monitor = f.monitor().then((reason) => {
+    const monitor = f.monitor(5).then((reason) => {
       completion = reason;
     });
     await vi.advanceTimersByTimeAsync(0);

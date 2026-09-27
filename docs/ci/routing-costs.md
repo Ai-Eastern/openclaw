@@ -45,8 +45,10 @@ two-CPU reservation admitted two compilers. The 527-second check comprised
 plugins. The 32-class delivers eight CPUs, allowing four compilers under that
 same policy. It adds no jobs or registrations. At the observed 569-second job
 duration, doubling the class would add 151.7 class-vCPU-minutes, or 1.17% of
-that run's 12,921.2 total; any speedup still requires native measurement. Hosted,
-retry, trust, and cache policies remain unchanged.
+that run's 12,921.2 total. The later complete green run `36269840991` measured
+301 seconds and 160.5 class-vCPU-minutes with all 125 plugins checked. Upstream
+compiler optimization also contributed, so this is not an isolated runner
+speedup. Hosted, retry, trust, and cache policies remain unchanged.
 
 Exact plugin envelopes and unsplit two-worker command envelopes now feed the
 existing timing owner using config, complete file inventory, and worker-bound
@@ -57,6 +59,22 @@ are explicitly labeled in the committed timing provenance. An exact measured
 multi-file core child above 300 seconds can split again without repricing its
 siblings or combining unlike capacity samples into a parent. A single-file
 overrun remains visible.
+
+Process-bounded plugin owners also retain per-file invocation prices across
+envelope changes. These prices have distinct keys from whole-envelope walls;
+shared wrapper overhead is charged once. Only complete successful receipts
+with one declared file per process qualify. Other process owners and missing
+measurements keep their existing estimates.
+
+Storage balancing additionally uses 36 config-scoped module-work hints from an
+unchanged two-worker replay of the exact tested merge. Setup, collection, and
+suite elapsed time guide placement; the longest file is never divided by the
+worker count. A separate 20-second allowance covers compiler and wrapper work
+once per child. These conservative four-CPU Testbox hints are not eight-CPU
+native CI file walls. Existing whole-envelope observations remain authoritative
+floors, unknown files retain their prior estimates, and worker policies stay
+unchanged. Heavy storage children retain their measured 32-class allocation
+when splitting leaves them alone; isolation does not imply a smaller runner.
 
 | Test family                               | Available complete-job evidence                                                    | Placement and remaining measurement                                                        |
 | ----------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |

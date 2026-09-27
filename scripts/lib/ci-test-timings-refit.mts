@@ -7,7 +7,10 @@ import {
   type CiTestTimings,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
-import { createExtensionTestTimingKey } from "./extension-test-plan.mts";
+import {
+  createExtensionTestTimingKey,
+  splitExtensionTestProcessTargets,
+} from "./extension-test-plan.mts";
 import { isConstrainedCiCheckHost } from "./local-check-runtime.mts";
 import {
   createCompactSplitTimingGeneration,
@@ -247,6 +250,115 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   }
 }
 
+function readSingletonExtensionInvocations(
+  lines: readonly string[],
+  config: string,
+  files: readonly string[],
+): Map<string, number> | undefined {
+  const declared = new Set(files);
+  const measured = new Map<string, number>();
+  let active:
+    | {
+        started: number;
+        files: Set<string>;
+        runs: number;
+        summaries: number;
+        durations: number;
+        duration?: number;
+      }
+    | undefined;
+  let verified = false;
+  let passed = false;
+  const finish = (ended: number) => {
+    if (!active) {
+      return false;
+    }
+    const [file] = active.files;
+    const elapsed = (ended - active.started) / 1000;
+    if (
+      active.files.size !== 1 ||
+      file === undefined ||
+      !declared.has(file) ||
+      measured.has(file) ||
+      active.runs !== 1 ||
+      active.summaries !== 1 ||
+      active.durations !== 1 ||
+      active.duration === undefined ||
+      !Number.isFinite(active.duration) ||
+      !Number.isFinite(elapsed) ||
+      active.duration > elapsed ||
+      elapsed <= 0
+    ) {
+      return false;
+    }
+    measured.set(file, elapsed);
+    active = undefined;
+    return true;
+  };
+  for (const line of lines) {
+    const record = /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:[^\]]+\]\s+(.*)$/u.exec(line);
+    if (!record) {
+      continue;
+    }
+    const timestamp = Date.parse(record[1]!);
+    if (!Number.isFinite(timestamp)) {
+      return undefined;
+    }
+    const body = record[2]!.trim();
+    const start = /^\[test\] starting (\S+)$/u.exec(body);
+    if (start) {
+      if (verified || start[1] !== config || (active && !finish(timestamp))) {
+        return undefined;
+      }
+      active = { started: timestamp, files: new Set(), runs: 0, summaries: 0, durations: 0 };
+      continue;
+    }
+    if (body === "[vitest-workers] verifying completed generation before cleanup") {
+      if (verified || !finish(timestamp)) {
+        return undefined;
+      }
+      verified = true;
+      continue;
+    }
+    const completion = /^\[test\] passed (\d+) Vitest shards? in [\d.]+s$/u.exec(body);
+    if (completion) {
+      if (!verified || passed || Number(completion[1]) !== files.length) {
+        return undefined;
+      }
+      passed = true;
+      continue;
+    }
+    if (/^RUN\s+v\S+/u.test(body)) {
+      if (!active) {
+        return undefined;
+      }
+      active.runs += 1;
+    }
+    const file =
+      /^✓\s+(?:\|[^|]+\||\S+)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s+>|\s+\(\d+ tests?)/u.exec(
+        body,
+      );
+    if (file && active) {
+      active.files.add(file[1]!);
+    }
+    if (/^Test Files\b/u.test(body)) {
+      if (!active || !/^Test Files\s+1 passed\s+\(1\)$/u.test(body)) {
+        return undefined;
+      }
+      active.summaries += 1;
+    }
+    if (/^Duration\b/u.test(body)) {
+      const duration = /^Duration\s+([\d.]+)(m?s)(?:\s|$)/u.exec(body);
+      if (!active || !duration) {
+        return undefined;
+      }
+      active.durations += 1;
+      active.duration = seconds(duration[1]!, duration[2]!);
+    }
+  }
+  return verified && passed && measured.size === declared.size ? measured : undefined;
+}
+
 function readCompactLog(
   text: string,
   labels: string[],
@@ -261,12 +373,17 @@ function readCompactLog(
   const ambiguousStarts = new Set<string>();
   const descriptors = readRuntimeTimingGroups(text);
   const runtimeModes = new Map<string, "runtime" | "private-qa">();
+  const singletonLogs = new Map<string, { key: string; lines: string[] }>();
   const jobWorkerCeiling = readJobWorkerCeiling(text);
   const resources = readWorkerResources(text);
   const runnerEnvironment = readLogEnv(text, "RUNNER_ENVIRONMENT");
   const frozenTarget = readLogEnv(text, "FROZEN_TARGET");
   const jobExtraArgs = readLogEnv(text, "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON");
   for (const line of text.split("\n")) {
+    const output = /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:([^\]]+)\]/u.exec(line);
+    if (output) {
+      singletonLogs.get(output[1]!)?.lines.push(line);
+    }
     const readiness =
       /\[shard:([^\]]+)\] \[test\] preparing (runtime|private-qa) runtime before Vitest workers/u.exec(
         line,
@@ -296,6 +413,24 @@ function readCompactLog(
       }
       starts.set(key, Date.parse(timestamp));
       runtimeModes.delete(key);
+      const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
+      const descriptor = matches.length === 1 ? matches[0] : undefined;
+      if (
+        descriptor?.shard_name.startsWith("changed-extensions-config") &&
+        descriptor.configs.length === 1 &&
+        isRuntimePlacementIncludePatterns(descriptor.includePatterns)
+      ) {
+        const processes = splitExtensionTestProcessTargets(
+          descriptor.configs[0]!,
+          descriptor.includePatterns,
+        );
+        if (
+          processes.length === descriptor.includePatterns.length &&
+          processes.every((files) => files.length === 1)
+        ) {
+          singletonLogs.set(descriptor.shard_name, { key, lines: [] });
+        }
+      }
       continue;
     }
     const started = starts.get(key);
@@ -339,27 +474,40 @@ function readCompactLog(
             : null;
       }
       const namedWorkers = [...key.matchAll(/#(?:workers|file-parallel)-([1-9]\d*)(?=#|$)/gu)];
+      const splitTiming = parseCompactSplitTimingKey(key);
+      const requiresWorkerCeiling =
+        namedWorkers.length > 0 || (exactInventoryOnly && splitTiming !== undefined);
       if (
-        typeof workerCeiling === "number" &&
-        namedWorkers.some((match) => Number(match[1]) !== workerCeiling)
+        (requiresWorkerCeiling && typeof workerCeiling !== "number") ||
+        (typeof workerCeiling === "number" &&
+          namedWorkers.some((match) => Number(match[1]) !== workerCeiling))
       ) {
-        // A successful fallback still carries the requested worker identity.
+        // A fallback or incomplete receipt cannot refresh the requested worker identity.
         workerCeiling = null;
       }
-      const splitTiming = parseCompactSplitTimingKey(key);
       const extensionGroup = group?.shard_name.startsWith("changed-extensions-config") === true;
-      let exactKey: string | undefined;
-      if (
-        group &&
-        !splitTiming &&
-        typeof workerCeiling === "number" &&
-        isRuntimePlacementIncludePatterns(group.includePatterns) &&
+      const selectedFiles = group?.includePatterns;
+      const hasExactSelection =
+        isRuntimePlacementIncludePatterns(selectedFiles) &&
         (jobExtraArgs === undefined || jobExtraArgs === "[]") &&
-        group.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON === undefined
-      ) {
+        group?.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON === undefined;
+      let matchesSplitSelection = false;
+      if (group && splitTiming && hasExactSelection) {
+        const selectedKey = createCompactSplitTimingGeneration({
+          configs: group.configs,
+          env: group.env,
+          parentShardName: key,
+          stripes: [selectedFiles],
+        }).timingKeys[0]!;
+        matchesSplitSelection = key.endsWith(
+          selectedKey.slice(selectedKey.lastIndexOf("#include-")),
+        );
+      }
+      let exactKey: string | undefined;
+      if (group && !splitTiming && typeof workerCeiling === "number" && hasExactSelection) {
         const env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) };
         if (extensionGroup && group.configs.length === 1) {
-          exactKey = createExtensionTestTimingKey(group.configs[0]!, group.includePatterns, env);
+          exactKey = createExtensionTestTimingKey(group.configs[0]!, selectedFiles, env);
         } else if (workerCeiling === 2 && key.endsWith("#file-parallel-2")) {
           // PR descriptors prove this selected inventory, never an unsplit family total.
           // Eight-worker command placement rewrites the name after its selector is made.
@@ -367,12 +515,50 @@ function readCompactLog(
             configs: group.configs,
             env,
             parentShardName: key,
-            stripes: [group.includePatterns],
+            stripes: [selectedFiles],
           }).timingKeys[0];
         }
       }
+      const singletonLog = group && singletonLogs.get(group.shard_name);
+      if (
+        extensionGroup &&
+        exactKey &&
+        group &&
+        singletonLog?.key === key &&
+        !runtimeModes.has(key)
+      ) {
+        const invocations = readSingletonExtensionInvocations(
+          singletonLog.lines,
+          group.configs[0]!,
+          group.includePatterns!,
+        );
+        if (invocations) {
+          const total = [...invocations.values()].reduce((sum, value) => sum + value, 0);
+          const overhead = (Date.parse(timestamp) - started) / 1000 - total;
+          if (overhead >= 0) {
+            const env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) };
+            for (const [file, duration] of invocations) {
+              recordSample(
+                samples[profile],
+                createExtensionTestTimingKey(
+                  group.configs[0]!,
+                  [file],
+                  env,
+                  "singleton-invocation",
+                )!,
+                duration,
+              );
+            }
+            recordSample(
+              samples[profile],
+              createExtensionTestTimingKey(group.configs[0]!, [], env, "wrapper-overhead")!,
+              overhead,
+            );
+          }
+        }
+      }
       const measuredKeys = [
-        ...(!extensionGroup && (!exactInventoryOnly || splitTiming) ? [key] : []),
+        ...(!extensionGroup && (!exactInventoryOnly || matchesSplitSelection) ? [key] : []),
         ...(exactKey ? [exactKey] : []),
       ];
       for (const measuredKey of measuredKeys) {
@@ -411,6 +597,11 @@ function readCompactLog(
       }
     }
     starts.delete(key);
+    for (const [shard, log] of singletonLogs) {
+      if (log.key === key) {
+        singletonLogs.delete(shard);
+      }
+    }
   }
 }
 

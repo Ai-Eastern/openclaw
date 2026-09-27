@@ -334,6 +334,8 @@ describe("startup corpus coverage", () => {
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 const RELEASE_REPORT_OWNER_TEST = "test/scripts/vitest-report-owner.test.ts";
 const PRIVATE_QA_TOOLING_TEST = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
+const MEASURED_STORAGE_RECOVERY_TEST =
+  "src/agents/main-session-recovery/main-session-restart-recovery.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
@@ -2661,11 +2663,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(job.pretestBuildMode).toBeUndefined();
       expect(job.predictedSeconds).toBeGreaterThanOrEqual(measuredCliWallFloor(job)!);
     }
+    const measuredStorageJobs = fallback.filter((job) =>
+      job.groups.some((group) => group.includePatterns?.includes(MEASURED_STORAGE_RECOVERY_TEST)),
+    );
+    expect(measuredStorageJobs).toHaveLength(1);
+    for (const job of measuredStorageJobs) {
+      expect(job).toMatchObject({ runner: EXTRA_LARGE_NODE_TEST_RUNNER, planConcurrency: 1 });
+      expect(job.groups).toHaveLength(1);
+      expect(job.groups[0]?.configs).toEqual(["test/vitest/vitest.infra.config.ts"]);
+      expect(job.pretestBuildMode).toBeUndefined();
+      expect(job.predictedTestSeconds).toBeGreaterThanOrEqual(279.963 + 20);
+      expect(job.predictedSeconds).toBeLessThanOrEqual(300);
+    }
     expect(
       fallback
         .filter(
           (shard) =>
-            !shard.requiresDist && shard !== commandRuntimeJob && !measuredCliJobs.includes(shard),
+            !shard.requiresDist &&
+            shard !== commandRuntimeJob &&
+            !measuredCliJobs.includes(shard) &&
+            !measuredStorageJobs.includes(shard),
         )
         .every(
           (shard) =>
@@ -2952,6 +2969,65 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       process.argv = originalArgv;
     }
   });
+
+  it.each([false, true])(
+    "retains measured storage module work despite a stale parent timing (companion: %s)",
+    async (companion) => {
+      const config = "test/vitest/vitest.infra.config.ts";
+      const longest = MEASURED_STORAGE_RECOVERY_TEST;
+      const ordinary = "src/infra/sqlite-readonly-location.copy.test.ts";
+      vi.resetModules();
+      vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+        fullSuiteVitestShards: [{ name: "core-runtime", config, projects: [config] }],
+      }));
+      vi.doMock("../vitest/vitest.database-worker-core-paths.mjs", async (importOriginal) => ({
+        ...(await importOriginal<
+          typeof import("../vitest/vitest.database-worker-core-paths.mjs")
+        >()),
+        databaseWorkerCoreTestFiles: [longest],
+      }));
+      vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
+        listTrackedTestFiles: (root: string) =>
+          companion && root === "src/infra" ? [ordinary] : [],
+      }));
+      vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
+        ...testTimings,
+        readCompactGroupTimings: () => ({ "core-runtime-infra-storage-state": 1 }),
+        readRuntimePlacementTimings: () => [],
+      }));
+      vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+        ...(await importOriginal<
+          typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
+        >()),
+        resolveVitestPretestBuildMode: () => undefined,
+      }));
+      try {
+        const { createNodeTestShardBundles: createPlan } =
+          await import("../../scripts/lib/ci-node-test-plan.mts");
+        const plan = createPlan({ compactMode: "push", runnerBackend: "blacksmith" });
+        expect(
+          plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
+        ).toEqual((companion ? [longest, ordinary] : [longest]).toSorted());
+        const longestJob = expectDefined(
+          plan.find((job) => job.groups.some((group) => group.includePatterns?.includes(longest))),
+          "measured storage file row",
+        );
+        // The measured file span is indivisible; its wrapper is paid once even at more workers.
+        expect(longestJob.predictedTestSeconds).toBeGreaterThanOrEqual(279.963 + 20);
+        expect(longestJob.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+        expect(plan.every((job) => job.predictedTestSeconds! <= 300)).toBe(true);
+      } finally {
+        vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
+        vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+        vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../vitest/vitest.database-worker-core-paths.mjs");
+        vi.doUnmock("../vitest/vitest.test-shards.mjs");
+        vi.resetModules();
+      }
+    },
+  );
 
   it("subdivides an oversized measured child without repricing its sibling inventory", async () => {
     const config = agentVitestProjectOwners.support.config;
@@ -3469,10 +3545,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             (group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner,
           );
           expect(selected.length, `${profile.name}: ${owner}`).toBeGreaterThan(0);
-          expect(
-            selected.every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER),
-            `${profile.name}: ${owner}`,
-          ).toBe(true);
+          for (const group of selected) {
+            const measuredStorage =
+              owner === "core-runtime-infra-storage-state" &&
+              profile.name !== "GitHub-hosted" &&
+              group.includePatterns?.includes(MEASURED_STORAGE_RECOVERY_TEST);
+            expect(group.runner, `${profile.name}: ${group.shard_name}`).toBe(
+              measuredStorage ? EXTRA_LARGE_NODE_TEST_RUNNER : DEFAULT_NODE_TEST_RUNNER,
+            );
+          }
         }
         for (const largeFile of profile.largeFiles) {
           const selected = groups.filter((group) => group.includePatterns?.includes(largeFile));
