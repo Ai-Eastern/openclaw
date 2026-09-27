@@ -227,7 +227,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         }
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : nothing,
-      workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
+      workspace: renderSessionWorkspaceRail(sessionWorkspace),
       tasks: renderChatTasksPanel({
         backgroundTasks,
         host: state,
@@ -242,8 +242,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         }),
       digest: observerDigest,
       activeRunId: observerRunId,
-      startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
-      lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
       companionFocusRequest: this.sessionCompanionFocusRequest,
@@ -257,7 +255,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           attachments,
           currentAgentId,
         ),
-      onCompanionVisibilityChange: this.setSessionObserverVisibility,
       connected: state.connected,
       onClearCompanion: () => void this.clearSessionCompanion(),
       onRefreshTasks: backgroundTasks.onRefresh,

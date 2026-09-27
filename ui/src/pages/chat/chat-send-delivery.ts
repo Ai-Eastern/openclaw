@@ -716,5 +716,4 @@ export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
       target: options.target,
     });
   },
-  setChatError,
 };

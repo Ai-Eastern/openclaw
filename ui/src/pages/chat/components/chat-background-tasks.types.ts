@@ -5,8 +5,6 @@ export type BackgroundTasksProps = {
   sessionKey: string;
   statusRowId: string;
   collapsed: boolean;
-  /** Narrow panes move the rail to a bottom strip. */
-  narrowLayout: boolean;
   connected: boolean;
   canCancel: boolean;
   loading: boolean;

@@ -253,30 +253,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             ? t("chat.sessionHeader.branchSwitchUnavailable")
             : null;
     const sharingSnapshot = this.context.gateway.snapshot;
-    // Sharing was introduced behind this advertised method. Keep the control
-    // hidden for older Gateways that omit method metadata.
     const sharingMethodsSupported =
       isGatewayMethodAdvertised(sharingSnapshot, "session.visibility.set") === true;
     const sharingReadAccess = readSessionMethodAccess(sharingSnapshot, {
       method: "session.members.listEvidence",
       requiredScope: "operator.read",
     });
-    const sharingVisibilityAccess = readSessionMethodAccess(sharingSnapshot, {
-      method: "session.visibility.set",
-      requiredScope: "operator.write",
-    });
-    const publicShareAccess = readSessionMethodAccess(sharingSnapshot, {
-      method: "session.publicShare.set",
-      requiredScope: "operator.write",
-    });
-    const sharingMemberAddAccess = readSessionMethodAccess(sharingSnapshot, {
-      method: "session.members.add",
-      requiredScope: "operator.write",
-    });
-    const sharingMemberRemoveAccess = readSessionMethodAccess(sharingSnapshot, {
-      method: "session.members.remove",
-      requiredScope: "operator.write",
-    });
+    const sharingWriteAccess = (method: string) =>
+      readSessionMethodAccess(sharingSnapshot, { method, requiredScope: "operator.write" });
+    const sharingVisibilityAccess = sharingWriteAccess("session.visibility.set");
+    const publicShareAccess = sharingWriteAccess("session.publicShare.set");
+    const sharingMemberAddAccess = sharingWriteAccess("session.members.add");
+    const sharingMemberRemoveAccess = sharingWriteAccess("session.members.remove");
     const sharingOpenDisabledReason =
       sharingReadAccess.allowed || sharingVisibilityAccess.allowed
         ? undefined
@@ -570,11 +558,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         currentLayout,
         panelDefinitions,
       )}${sidePanelAction}`,
-      discussionAction: nothing,
-      diffAction: nothing,
-      backgroundTasksAction: nothing,
-      sessionRailAction: nothing,
-      workspaceAction: nothing,
       presence: viewers?.length
         ? html`<openclaw-viewer-facepile
             class="chat-pane__presence"
@@ -584,7 +567,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             variant="session"
           ></openclaw-viewer-facepile>`
         : nothing,
-      faceControl: nothing,
       sharingControl:
         sharing &&
         (!canManageChatSessionSharing(sharing.session) || !sharing.openDisabledReason) &&
@@ -641,7 +623,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .onAction=${(action: HeaderMenuAction) => this.handleHeaderSessionAction(action, row)}
             ></openclaw-chat-header-session-menu>`
           : nothing,
-      onboarding: this.onboarding,
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;

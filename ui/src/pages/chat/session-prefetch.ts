@@ -85,14 +85,6 @@ function sessionActivityAt(row: GatewaySessionRow): number {
   return row.lastActivityAt ?? row.updatedAt ?? 0;
 }
 
-function debugSessionPrefetch(message: string, error?: unknown): void {
-  if (error === undefined) {
-    console.debug(`[chat-session-prefetch] ${message}`);
-  } else {
-    console.debug(`[chat-session-prefetch] ${message}`, error);
-  }
-}
-
 function sameKeys(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((key, index) => key === right[index]);
 }
@@ -203,7 +195,7 @@ class SessionPrefetcher {
         await this.prefetchEligibleSessions();
       }
     } catch (error) {
-      debugSessionPrefetch("cycle failed", error);
+      console.debug("[chat-session-prefetch] cycle failed", error);
     } finally {
       this.running = false;
       if (this.rescheduleDelayMs !== null) {
@@ -371,7 +363,10 @@ class SessionPrefetcher {
         cached,
       );
     } catch (error) {
-      debugSessionPrefetch(`history fetch failed for ${candidate.snapshotKey}`, error);
+      console.debug(
+        `[chat-session-prefetch] history fetch failed for ${candidate.snapshotKey}`,
+        error,
+      );
     }
   }
 

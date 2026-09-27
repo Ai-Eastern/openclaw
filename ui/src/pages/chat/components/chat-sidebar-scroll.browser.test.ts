@@ -81,7 +81,6 @@ class TaskActivityFixture extends LitElement {
     sessionKey: "agent:main:main",
     statusRowId: "task-status-resize",
     collapsed: false,
-    narrowLayout: false,
     connected: true,
     canCancel: false,
     loading: false,

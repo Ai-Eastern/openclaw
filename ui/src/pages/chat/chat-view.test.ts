@@ -713,7 +713,6 @@ function createBackgroundTasks(
     sessionKey: "agent:main:main",
     statusRowId: "chat-tasks-status-test",
     collapsed: false,
-    narrowLayout: false,
     connected: true,
     canCancel: false,
     loading: false,

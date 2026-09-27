@@ -564,7 +564,6 @@ export function refreshBackgroundTasks(
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
   opts: {
-    narrowLayout?: boolean;
     selectedTaskId?: string;
     onOpenTaskDetail?: (task: TaskSummary) => void;
     onOpenTaskList?: () => void;
@@ -613,7 +612,6 @@ export function createBackgroundTasksProps(
     sessionKey: state.sessionKey,
     statusRowId: state.statusRowId,
     collapsed: state.collapsed,
-    narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),

@@ -116,15 +116,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       if (!raw || typeof raw !== "object") {
         return [];
       }
-      const profile = raw as {
-        id?: unknown;
-        providerId?: unknown;
-        providerDisplayId?: unknown;
-        trust?: unknown;
-        executionModes?: unknown;
-        machines?: unknown;
-        operatingSystems?: unknown;
-      };
+      const profile = raw as { [K in keyof DraftCloudProfile]?: unknown };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
       if (!id || !providerId) {
@@ -289,24 +281,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       if (!raw || typeof raw !== "object") {
         return [];
       }
-      const environment = raw as {
-        id?: unknown;
-        type?: unknown;
-        label?: unknown;
-        status?: unknown;
-        platform?: unknown;
-        sessionHost?: unknown;
-        workerSlots?: unknown;
-        lastConnectedAtMs?: unknown;
-        lastDisconnectedAtMs?: unknown;
-        lastSeenAtMs?: unknown;
-        lastSeenReason?: unknown;
-        trust?: unknown;
-        capabilities?: unknown;
-        invocableCommands?: unknown;
-        requiredNodeCommand?: unknown;
-        issues?: unknown;
-      };
+      const environment = raw as { [K in keyof DraftEnvironment]?: unknown };
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
       if (

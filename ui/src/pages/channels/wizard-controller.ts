@@ -1,5 +1,3 @@
-// Drives a gateway channel-setup wizard session (wizard.start flow "channels")
-// as a step/answer state machine for the Control UI wizard modal.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -240,9 +238,9 @@ export class ChannelWizardController {
       }
       return;
     }
+    this.sessionId = null;
+    this.abortController = null;
     if (result.status === "done") {
-      this.sessionId = null;
-      this.abortController = null;
       // The gateway reports what the flow actually configured; the initially
       // requested channel is only a preselection and may have been skipped.
       const channels = result.channels ?? [];
@@ -255,14 +253,10 @@ export class ChannelWizardController {
       return;
     }
     if (result.status === "cancelled") {
-      this.sessionId = null;
-      this.abortController = null;
       this.channel = null;
       this.setState({ phase: "idle" });
       return;
     }
-    this.sessionId = null;
-    this.abortController = null;
     this.setState({
       phase: "error",
       channel: this.channel,

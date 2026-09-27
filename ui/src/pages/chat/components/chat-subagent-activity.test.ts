@@ -31,7 +31,6 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     sessionKey: "agent:main:current",
     statusRowId: "chat-tasks-status-test",
     collapsed: true,
-    narrowLayout: false,
     connected: true,
     canCancel: false,
     loading: false,

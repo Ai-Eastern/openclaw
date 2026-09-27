@@ -27,5 +27,5 @@ export function renderChatTasksPanel(params: {
         taskId,
         onBack: backgroundTasks.onOpenTaskList,
       })
-    : renderBackgroundTasksRail(backgroundTasks, { embedded: true });
+    : renderBackgroundTasksRail(backgroundTasks);
 }

@@ -89,13 +89,11 @@ export function createChatPaneRails(params: {
       paneLabel: params.paneLabel,
     },
     expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
-    narrowLayout: false,
     presented: params.presented,
   });
   const sessionWorkspace = {
     ...sessionWorkspaceBase,
     collapsed: !isPanelVisible("workspace"),
-    narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("workspace"),
     onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
     onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,
@@ -123,7 +121,6 @@ export function createChatPaneRails(params: {
     params.updateSidebarLayout(next);
   };
   const backgroundTasksBase = createBackgroundTasksProps(state, {
-    narrowLayout: false,
     selectedTaskId: sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "tasks")?.taskId,
@@ -134,7 +131,6 @@ export function createChatPaneRails(params: {
   const backgroundTasks = {
     ...backgroundTasksBase,
     collapsed: !isPanelVisible("tasks"),
-    narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };
   return {
