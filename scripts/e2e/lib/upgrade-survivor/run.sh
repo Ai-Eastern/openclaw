@@ -2474,10 +2474,10 @@ phase seed-state seed_state
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase configure-baseline-plugin-registry configure_plugin_registry baseline
   phase install-companion-plugin install_companion_plugins
+  phase seed-legacy-operator-gateway seed_legacy_operator_gateway
   if [ "$native_assignment_enabled" = "1" ]; then
     phase configure-native-assignment-fixture start_native_assignment_fixture
   fi
-  phase seed-legacy-operator-gateway seed_legacy_operator_gateway
   openclaw_e2e_stop_process "$plugin_registry_pid"
   phase configure-candidate-plugin-registry configure_plugin_registry
 fi

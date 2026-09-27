@@ -112,10 +112,11 @@ class WearAgentPulseProjectionTest {
   @OptIn(ExperimentalCoroutinesApi::class)
   fun phoneBudgetBoundsSlowSwarmRead() =
     runTest {
-      val result = readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
-        delay(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS * 2)
-        "swarm"
-      }
+      val result =
+        readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+          delay(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS * 2)
+          "swarm"
+        }
       assertEquals(null, result)
       assertEquals(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS, currentTime)
     }
@@ -123,11 +124,12 @@ class WearAgentPulseProjectionTest {
   @Test
   fun phoneBudgetPreservesCallerCancellation() =
     runTest {
-      val failure = runCatching {
-        readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
-          throw CancellationException("request retired")
-        }
-      }.exceptionOrNull()
+      val failure =
+        runCatching {
+          readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+            throw CancellationException("request retired")
+          }
+        }.exceptionOrNull()
       assertTrue(failure is CancellationException)
     }
 

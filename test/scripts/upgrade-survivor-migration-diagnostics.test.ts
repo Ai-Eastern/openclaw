@@ -21,6 +21,10 @@ const baselineGatewayLogs = [
   "missing-load-path/baseline-gateway-convergence-refusal.log",
 ];
 const cronCliLogs = [
+  "legacy-operator-add-survivor-default-owner.out",
+  "legacy-operator-add-survivor-default-owner.err",
+  "legacy-operator-add-survivor-ops-owner.out",
+  "legacy-operator-add-survivor-ops-owner.err",
   ...["default", "ops"].flatMap((owner) =>
     ["out", "err"].map((extension) => `legacy-operator-run-survivor-${owner}-owner.${extension}`),
   ),
