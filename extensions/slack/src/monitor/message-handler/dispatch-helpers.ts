@@ -85,18 +85,32 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
-export function resolveSlackProgressStyle(entry: SlackProgressConfigEntry): "card" | "compact" {
-  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+export function resolveSlackProgressStyle(
+  entry: SlackProgressConfigEntry,
+  hasReplyThread: boolean,
+): "card" | "compact" | "none" {
   const progress = entry?.streaming?.progress;
+  if (
+    !hasReplyThread &&
+    progress?.style === undefined &&
+    progress?.toolProgress === undefined &&
+    progress?.nativeTaskCards !== false
+  ) {
+    return "none";
+  }
+  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
   return progress?.style ?? (progress?.toolProgress === false ? "compact" : "card");
 }
 
 // Slack's native agent card is the default progress surface; operators opt out
 // with an explicit `false`, which falls back to the Block Kit progress card.
-export function resolveSlackNativeProgressTaskCards(entry: SlackProgressConfigEntry): boolean {
+export function resolveSlackNativeProgressTaskCards(
+  entry: SlackProgressConfigEntry,
+  style: ReturnType<typeof resolveSlackProgressStyle>,
+): boolean {
   // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
   // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
-  if (resolveSlackProgressStyle(entry) === "compact") {
+  if (style !== "card") {
     return false;
   }
   return entry?.streaming?.progress?.nativeTaskCards !== false;
