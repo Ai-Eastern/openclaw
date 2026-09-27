@@ -64,6 +64,9 @@ The name appears in the sidebar and picker and survives switching Gateways,
 reconnecting, app restarts, and discovery updates. The secondary address still
 distinguishes Gateways with the same name. Clear the name to restore the default.
 Renaming does not change the Gateway's address, identity, or saved credentials.
+Downgrading to an older Android build can discard these local names when that
+build starts and rewrites the registry. Gateway addresses and credentials are
+unaffected; after upgrading again, choose the local names again if needed.
 
 Unsent text and finished attachments stay with their Gateway, agent, and session
 when you switch away and back. Finish recording, stop dictation or Talk, and let
