@@ -1,6 +1,4 @@
 // Runtime bridge for web-search providers supplied by plugins.
-import type { PluginLoadOptions } from "./loader.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -49,31 +47,21 @@ function resolveLazyBundledWebSearchProviders(
   );
 }
 
-export function resolvePluginWebSearchProviders(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  activate?: boolean;
-  cache?: boolean;
-  mode?: "runtime" | "setup";
-  origin?: PluginManifestRecord["origin"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): PluginWebSearchProviderEntry[] {
+export function resolvePluginWebSearchProviders(
+  params: Omit<Parameters<typeof resolvePluginWebProviders>[0], "sandboxed">,
+): PluginWebSearchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     ...providerResolution,
     resolveBundledPublicArtifactProviders: resolveBundledWebSearchProvidersFromPublicArtifacts,
   });
 }
 
-export function resolveRuntimeWebSearchProviders(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): PluginWebSearchProviderEntry[] {
+export function resolveRuntimeWebSearchProviders(
+  params: Omit<
+    Parameters<typeof resolvePluginWebSearchProviders>[0],
+    "activate" | "cache" | "mode"
+  >,
+): PluginWebSearchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     ...providerResolution,
     resolveBundledRuntimeArtifactProviders: resolveLazyBundledWebSearchProviders,

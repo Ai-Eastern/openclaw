@@ -600,34 +600,24 @@ function validateClawHubArchiveMetaJson(params: {
 }
 
 function mapClawHubArchiveReadFailure(error: unknown): ClawHubInstallFailure {
-  if (error instanceof ArchiveLimitError) {
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
-        "ClawHub archive fallback verification exceeded the archive entry limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
-        "ClawHub archive fallback verification rejected the downloaded archive because it exceeds the ZIP archive size limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
-        "ClawHub archive fallback verification exceeded the total extracted-size limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
-        "ClawHub archive fallback verification exceeded the per-file size limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
-  }
+  const limitMessages = new Map<string, string>([
+    [ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT, "exceeded the archive entry limit."],
+    [
+      ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT,
+      "rejected the downloaded archive because it exceeds the ZIP archive size limit.",
+    ],
+    [
+      ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT,
+      "exceeded the total extracted-size limit.",
+    ],
+    [
+      ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT,
+      "exceeded the per-file size limit.",
+    ],
+  ]);
+  const detail = error instanceof ArchiveLimitError ? limitMessages.get(error.code) : undefined;
   return buildClawHubInstallFailure(
-    "ClawHub archive fallback verification failed while reading the downloaded archive.",
+    `ClawHub archive fallback verification ${detail ?? "failed while reading the downloaded archive."}`,
     CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
   );
 }

@@ -1,6 +1,4 @@
 /** Runtime resolver for plugin-contributed web fetch providers. */
-import type { PluginLoadOptions } from "./loader.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 import {
   resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,
@@ -30,18 +28,9 @@ const providerResolution = {
 } satisfies WebProviderRuntimeResolution<PluginWebFetchProviderEntry>;
 
 /** Resolves web fetch providers, activating plugin runtimes when requested. */
-export function resolvePluginWebFetchProviders(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  activate?: boolean;
-  cache?: boolean;
-  mode?: "runtime" | "setup";
-  origin?: PluginManifestRecord["origin"];
-  sandboxed?: boolean;
-  manifestRecords?: readonly PluginManifestRecord[];
-}): PluginWebFetchProviderEntry[] {
+export function resolvePluginWebFetchProviders(
+  params: Parameters<typeof resolvePluginWebProviders>[0],
+): PluginWebFetchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     ...providerResolution,
     resolveBundledPublicArtifactProviders: resolveBundledWebFetchProvidersFromPublicArtifacts,
@@ -51,14 +40,12 @@ export function resolvePluginWebFetchProviders(params: {
 }
 
 /** Resolves already-eligible runtime web fetch providers without setup-mode activation. */
-export function resolveRuntimeWebFetchProviders(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): PluginWebFetchProviderEntry[] {
+export function resolveRuntimeWebFetchProviders(
+  params: Omit<
+    Parameters<typeof resolvePluginWebFetchProviders>[0],
+    "activate" | "cache" | "mode" | "sandboxed"
+  >,
+): PluginWebFetchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     ...providerResolution,
     resolveBundledRuntimeArtifactProviders:

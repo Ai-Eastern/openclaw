@@ -66,11 +66,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       return;
     }
     const next = { pluginId: record.id, runtime };
-    if (existing) {
-      registry.detachedTaskRuntimes.splice(0, 1, next);
-    } else {
-      registry.detachedTaskRuntimes.push(next);
-    }
+    registry.detachedTaskRuntimes.splice(0, existing ? 1 : 0, next);
   };
 
   const registerInteractiveHandler = (
@@ -134,10 +130,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
   ) => {
-    const id = normalizeOptionalString(
-      (provider as Partial<Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0]> | null)
-        ?.id,
-    );
+    const id = normalizeOptionalString(provider?.id);
     if (!id) {
       reportRegistrationError(record, "compaction provider registration missing id");
       return;
