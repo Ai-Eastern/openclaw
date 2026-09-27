@@ -62,7 +62,7 @@ function createTrackedRunState(params: ChannelRunQueueParams) {
   });
 
   return {
-    isActive: runState.isActive,
+    isActive: () => runState.isActive(),
     deactivate: runState.deactivate,
     onRunStart() {
       const handle = Symbol("channel-run");
@@ -118,6 +118,12 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
   };
 }
 
+function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
+  return new Promise<void>((resolve) => {
+    resolve(onAbort?.());
+  });
+}
+
 /**
  * Return a promise that resolves when the signal is aborted.
  *
@@ -130,11 +136,7 @@ export function waitUntilAbort(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const complete = () => {
-      try {
-        Promise.resolve(onAbort?.()).then(() => resolve(), reject);
-      } catch (error) {
-        reject(error);
-      }
+      void runAbortCleanup(onAbort).then(resolve, reject);
     };
     if (!signal) {
       return;
@@ -187,7 +189,7 @@ export async function keepHttpServerTaskAlive(params: {
       return;
     }
     abortTriggered = true;
-    abortTask = new Promise<void>((resolve) => resolve(onAbort?.()));
+    abortTask = runAbortCleanup(onAbort);
     // Cleanup can reject before close; retain that error for the task's final await.
     void abortTask.catch(() => {});
   };

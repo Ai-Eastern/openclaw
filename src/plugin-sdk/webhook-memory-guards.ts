@@ -152,7 +152,7 @@ export function createFixedWindowRateLimiter(options: {
       return nextCount > maxRequests;
     },
     size: state.size,
-    clear: state.clear,
+    clear: () => state.clear(),
   };
 }
 
@@ -196,7 +196,7 @@ export function createBoundedCounter(options: {
       return nextCount;
     },
     size: counters.size,
-    clear: counters.clear,
+    clear: () => counters.clear(),
   };
 }
 

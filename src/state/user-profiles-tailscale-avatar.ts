@@ -35,7 +35,9 @@ export async function fetchTailscaleAvatar(
       readIdleTimeoutMs: timeoutMs,
       requestInit: { headers: { Accept: USER_PROFILE_AVATAR_MIME_TYPES.join(",") } },
     });
-    const mime = USER_PROFILE_AVATAR_MIME_TYPES.find((mime) => mime === loaded.contentType);
+    const mime = USER_PROFILE_AVATAR_MIME_TYPES.find(
+      (candidate) => candidate === loaded.contentType,
+    );
     const detected = await fileTypeFromBuffer(loaded.buffer);
     return mime && detected?.mime === mime ? { bytes: loaded.buffer, mime } : null;
   } catch {
