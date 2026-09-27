@@ -509,12 +509,10 @@ it("waits for a missing projection and serves the original history request", asy
       }
     });
   } catch (error) {
-    console.error("History projection recovery failed", {
-      pid: process.pid,
-      projectionWaits,
-      timings,
-      droppedTimings,
-    });
+    console.error(
+      "History projection recovery failed",
+      JSON.stringify({ pid: process.pid, projectionWaits, timings, droppedTimings }),
+    );
     throw error;
   } finally {
     // Cleanup drains workers; retain their settlement timings after the request deadline.
