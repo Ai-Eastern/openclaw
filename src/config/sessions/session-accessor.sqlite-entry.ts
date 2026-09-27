@@ -466,8 +466,21 @@ async function patchSqliteSessionEntrySnapshot(
         if (!writeBase) {
           return null;
         }
+        let contextEntry = existing;
+        let contextEntryBorrowed = true;
         const patch = await params.update(cloneSessionEntry(writeBase), {
-          existingEntry: existing ? cloneSessionEntry(existing) : undefined,
+          // Most updaters ignore context; detach its snapshot only when they consume it.
+          get existingEntry() {
+            if (contextEntryBorrowed) {
+              contextEntry = contextEntry ? cloneSessionEntry(contextEntry) : undefined;
+              contextEntryBorrowed = false;
+            }
+            return contextEntry;
+          },
+          set existingEntry(entry) {
+            contextEntry = entry;
+            contextEntryBorrowed = false;
+          },
         });
         // A fallback supplies identity, not an existing node's immutable creation policy.
         const mergeBase = existing ? writeBase : undefined;
