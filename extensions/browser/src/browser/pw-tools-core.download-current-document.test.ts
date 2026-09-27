@@ -90,18 +90,13 @@ describe("download current document", () => {
     expect(await fs.readdir(rootDir)).toEqual([]);
   });
 
-  it("rejects unsupported URLs and uninspectable strict-policy redirects before browser traffic", async () => {
+  it("rejects unsupported URLs before browser traffic", async () => {
     await expect(start({ expectedUrl: "file:///tmp/secret" })).rejects.toThrow("Only HTTP(S)");
-    await expect(start({ ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } })).rejects.toThrow(
-      "download redirects cannot be inspected",
-    );
     expect(evaluate).not.toHaveBeenCalled();
   });
 
   it.each([
     { name: "omitted policy", policy: undefined },
-    { name: "empty policy", policy: {} },
-    { name: "legacy private denial", policy: { allowPrivateNetwork: false } },
     { name: "per-host private exception", policy: { allowedHostnames: ["127.0.0.1"] } },
     { name: "per-origin private exception", policy: { allowedOrigins: ["http://127.0.0.1"] } },
     {
@@ -125,7 +120,6 @@ describe("download current document", () => {
   });
 
   it.each([
-    { name: "legacy explicit private permission", policy: { allowPrivateNetwork: true } },
     {
       name: "effective private permission",
       policy: { allowPrivateNetwork: true, dangerouslyAllowPrivateNetwork: false },

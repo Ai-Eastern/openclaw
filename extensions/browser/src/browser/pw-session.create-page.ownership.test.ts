@@ -110,17 +110,11 @@ describe("Playwright created-page ownership", () => {
       getChromeWebSocketUrlSpy.mockResolvedValue({
         url: "ws://127.0.0.1:18792/devtools/browser/authority-fixture",
       });
-      let started!: () => void;
-      let resume!: () => void;
-      const entered = new Promise<void>((resolve) => {
-        started = resolve;
-      });
-      const pending = new Promise<void>((resolve) => {
-        resume = resolve;
-      });
+      const entered = Promise.withResolvers<void>();
+      const pending = Promise.withResolvers<void>();
       const pause = async <T>(result: T) => {
-        started();
-        await pending;
+        entered.resolve();
+        await pending.promise;
         return result;
       };
       if (stage === "connect") {
@@ -152,16 +146,16 @@ describe("Playwright created-page ownership", () => {
       });
       try {
         await Promise.race([
-          entered,
+          entered.promise,
           creation.then(() => {
             throw new Error(`Creation completed before the ${stage} rendezvous`);
           }),
         ]);
         current = false;
-        resume();
+        pending.resolve();
         await expect(creation).rejects.toThrow("caller receipt expired");
       } finally {
-        resume();
+        pending.resolve();
         await creation.catch(() => {});
       }
       expect(fixture.pageGoto).not.toHaveBeenCalled();
@@ -227,19 +221,13 @@ describe("Playwright created-page ownership", () => {
 
   it("does not navigate when cancellation wins navigation validation", async () => {
     const { pageGoto, page } = installBrowserMocks();
-    let started!: () => void;
-    const validationStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    let release!: () => void;
-    const validationPending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const validationStarted = Promise.withResolvers<void>();
+    const validationPending = Promise.withResolvers<void>();
     const validation = vi
       .spyOn(await import("./navigation-guard.js"), "assertBrowserNavigationAllowed")
       .mockImplementationOnce(async () => {
-        started();
-        await validationPending;
+        validationStarted.resolve();
+        await validationPending.promise;
       });
     const controller = new AbortController();
     try {
@@ -249,32 +237,26 @@ describe("Playwright created-page ownership", () => {
         signal: controller.signal,
       });
       const rejected = expect(creation).rejects.toThrow("cancelled validation");
-      await validationStarted;
+      await validationStarted.promise;
       controller.abort(new Error("cancelled validation"));
-      release();
+      validationPending.resolve();
       await rejected;
 
       expect(pageGoto).not.toHaveBeenCalled();
       expect(page.context().pages()).toEqual([]);
     } finally {
-      release();
+      validationPending.resolve();
       validation.mockRestore();
     }
   });
 
   it("closes a new page when cancellation wins target resolution", async () => {
     const { pageClose, sessionSend } = installBrowserMocks();
-    let releaseTargetInfo: (() => void) | undefined;
-    let markTargetInfoStarted: (() => void) | undefined;
-    const targetInfoStarted = new Promise<void>((resolve) => {
-      markTargetInfoStarted = resolve;
-    });
-    const targetInfoReleased = new Promise<void>((resolve) => {
-      releaseTargetInfo = resolve;
-    });
+    const targetInfoStarted = Promise.withResolvers<void>();
+    const targetInfoReleased = Promise.withResolvers<void>();
     sessionSend.mockImplementationOnce(async () => {
-      markTargetInfoStarted?.();
-      await targetInfoReleased;
+      targetInfoStarted.resolve();
+      await targetInfoReleased.promise;
       return { targetInfo: { targetId: "TARGET_1", title: "" } };
     });
     const controller = new AbortController();
@@ -284,9 +266,9 @@ describe("Playwright created-page ownership", () => {
       url: "about:blank",
       signal: controller.signal,
     });
-    await targetInfoStarted;
+    await targetInfoStarted.promise;
     controller.abort(new Error("cancelled page creation"));
-    releaseTargetInfo?.();
+    targetInfoReleased.resolve();
 
     await expect(creation).rejects.toThrow("cancelled page creation");
     expect(pageClose).toHaveBeenCalledOnce();
