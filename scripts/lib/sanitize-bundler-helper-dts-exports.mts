@@ -87,10 +87,7 @@ function scanDts(
   parser?: NativeTypeScriptParser,
 ): DtsSanitization {
   // Escaped identifiers and string names still need the native parser.
-  if (
-    !sourceText.includes("\\") &&
-    !BUNDLER_RUNTIME_HELPER_EXPORT_NAMES.some((name) => sourceText.includes(name))
-  ) {
+  if (!sourceText.includes("\\") && !sourceText.includes("__exportAll")) {
     return { edits: [], removed: [] };
   }
   using ownedParser = parser ? undefined : createNativeTypeScriptParser();
