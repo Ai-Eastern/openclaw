@@ -279,6 +279,7 @@ type WireWorkerHostOptions = {
   workerGatewayUrl?: string;
   workspaceGatewayUrl?: (frame: NodeInvokeRequestPayload) => string;
   workerEnv?: NodeJS.ProcessEnv;
+  nativeInferenceConfig?: string;
   bundlePrewarm?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
@@ -314,14 +315,12 @@ export async function createPairedNodeWorkerHost(
     { loadOrCreateDeviceIdentity },
     { handleInvoke },
     { NodeWorkerBundleInstaller },
-    { parseNodeWorkerLaunchInput },
     { createNodeWorkerSupervisor },
     { NodeWorkerWorkspaceRuntime },
   ] = await Promise.all([
     import("../../../../src/infra/device-identity.js"),
     import("../../../../src/node-host/invoke.js"),
     import("../../../../src/node-host/node-worker-bundle-installer.js"),
-    import("../../../../src/node-host/node-worker-supervisor-contract.js"),
     import("../../../../src/node-host/node-worker-supervisor.js"),
     import("../../../../src/node-host/node-worker-workspace.js"),
   ]);
@@ -346,7 +345,6 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const launchIds = new Set<string>();
   const identity = loadOrCreateDeviceIdentity({
     path: path.join(options.root, `${label}-identity.sqlite`),
   });
@@ -371,6 +369,7 @@ export async function createPairedNodeWorkerHost(
     workspace,
     capacity: options.capacity,
     capacityWaitMs: options.capacityWaitMs,
+    nativeInferenceConfig: options.nativeInferenceConfig,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),
     onCapacityChanged: (nextCapacity) => {
@@ -386,9 +385,6 @@ export async function createPairedNodeWorkerHost(
     const frame = event.payload as NodeInvokeRequestPayload;
     commands.push(frame.command);
     frames.push(frame);
-    if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND) {
-      launchIds.add(parseNodeWorkerLaunchInput(frame.paramsJSON).launchId);
-    }
     options.onInvoke?.(frame);
     const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
       workerBundleInstaller: bundleInstaller,
@@ -470,14 +466,9 @@ export async function createPairedNodeWorkerHost(
     },
     async waitForWorkersIdle() {
       await waitUntil(async () => {
-        const receipts = await Promise.all(
-          [...launchIds].map(async (launchId) => await supervisor.status(launchId)),
-        );
-        // Finished turns do not prove the physical worker or container has been removed.
-        return capacity.available === capacity.total &&
-          receipts.every(
-            (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
-          )
+        // Refused launches have no receipt; completed turns may still own a process.
+        // The supervisor owns physical, admission, recovery and durable liveness.
+        return capacity.available === capacity.total && !(await supervisor.hasActiveWork())
           ? true
           : undefined;
       });
@@ -533,15 +524,18 @@ export async function createPairedNodeWorkerHost(
 export async function startPairedNodeWorkerGateway(params: {
   owner: ReturnType<typeof createQaGatewayChild>;
   providerBaseUrl: string;
+  command?: Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0]["command"];
   executionIdentity?: boolean;
   repoRoot?: string;
   useRepoCli?: boolean;
   workspaceDir?: string;
   controlUiEnabled?: boolean;
   fullAccess?: boolean;
+  nativeWorkerDeviceId?: string;
 }): Promise<WireGateway> {
   return await params.owner.start({
     repoRoot: params.repoRoot ?? process.cwd(),
+    command: params.command,
     useRepoCli: params.useRepoCli ?? true,
     providerBaseUrl: `${params.providerBaseUrl}/v1`,
     providerMode: "mock-openai",
@@ -562,6 +556,18 @@ export async function startPairedNodeWorkerGateway(params: {
           },
         },
       },
+      ...(params.nativeWorkerDeviceId
+        ? {
+            cloudWorkers: {
+              profiles: {
+                native: {
+                  provider: "device",
+                  settings: { device: params.nativeWorkerDeviceId, inference: "worker" },
+                },
+              },
+            },
+          }
+        : {}),
       logging: params.executionIdentity
         ? {
             ...config.logging,
