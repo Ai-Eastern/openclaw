@@ -83,6 +83,31 @@ struct GatewayBrowserRenewalTests {
         #expect(!manual)
     }
 
+    @Test func `consecutive daily tokens each renew inside their own window`() throws {
+        var schedule = MacGatewayProfileStore.BrowserRenewalSchedule()
+        let hour = 3600.0
+        func admit(_ session: GatewayBrowserSession, after elapsed: Double) -> Bool {
+            schedule.admit(
+                profileID: "saved",
+                session: session,
+                now: self.now.addingTimeInterval(elapsed),
+                userPresent: true,
+                inUse: true,
+                alreadySigningIn: false)
+        }
+        // Hour 18 of a 24-hour token: its six-hour window is open.
+        let first = try self.session(lifetime: 24 * hour, remaining: 6 * hour)
+        #expect(admit(first, after: 0))
+        // A failed attempt retries the same token after half its window.
+        #expect(!admit(first, after: 2 * hour))
+        #expect(admit(first, after: 3 * hour))
+        // The renewed token expires 24 hours after the first renewal; its window
+        // opens at its own hour 18, well before the previous attempt's day ends.
+        let second = try self.session(lifetime: 24 * hour, remaining: 24 * hour)
+        #expect(!admit(second, after: 17 * hour))
+        #expect(admit(second, after: 18 * hour))
+    }
+
     @Test func `automatic attempts are limited per profile for a full day even after failure`() throws {
         var schedule = MacGatewayProfileStore.BrowserRenewalSchedule()
         let session = try self.session(lifetime: 720 * 3600, remaining: 7 * 86400)

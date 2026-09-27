@@ -111,7 +111,7 @@ actor MacGatewayProfileStore {
     private var browserRenewalSchedule = BrowserRenewalSchedule()
 
     struct BrowserRenewalSchedule {
-        private var lastAttempts: [String: Date] = [:]
+        private var lastAttempts: [String: (credential: String, at: Date)] = [:]
 
         mutating func admit(
             profileID: String,
@@ -124,9 +124,13 @@ actor MacGatewayProfileStore {
             guard userPresent, inUse, !alreadySigningIn, let session,
                   session.expiresAt > now,
                   session.expiresAt.timeIntervalSince(now) <= session.renewalLeadTime,
-                  self.lastAttempts[profileID].map({ now.timeIntervalSince($0) >= 24 * 60 * 60 }) ?? true
+                  // Each renewed token starts fresh; one token retries after half its window.
+                  self.lastAttempts[profileID].map({
+                      $0.credential != session.credentialFingerprint ||
+                          now.timeIntervalSince($0.at) >= min(24 * 60 * 60, session.renewalLeadTime / 2)
+                  }) ?? true
             else { return false }
-            self.lastAttempts[profileID] = now
+            self.lastAttempts[profileID] = (session.credentialFingerprint, now)
             return true
         }
     }
