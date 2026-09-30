@@ -2,10 +2,12 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpSessionResetControls } from "../acp/control-plane/manager.reset-controls.js";
-import { createSupersededActorError } from "../acp/control-plane/manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "../acp/control-plane/manager.runtime-owner.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
-import { resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
+import {
+  createSupersededActorError,
+  resolveAcpSessionTarget,
+} from "../acp/control-plane/manager.utils.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
   listAcpSessionEntries,
@@ -15,7 +17,7 @@ import {
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
-import { listTasksForRelatedSessionKey } from "../tasks/task-registry-query.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 async function runAcpCleanupStep(
   op: () => Promise<void>,
@@ -212,30 +214,25 @@ export async function closeChildAcpRuntimesForParent(params: {
     }
     params.assertCurrent?.();
     children = (await listAcpSessionEntries({ cfg: params.cfg })).filter(
-      ({ entry, sessionKey, agentId }) => {
-        if (entry?.spawnedBy !== params.parentKey && entry?.parentSessionKey !== params.parentKey) {
+      ({ entry, sessionKey }) => {
+        if (
+          !entry ||
+          (entry.spawnedBy !== params.parentKey && entry.parentSessionKey !== params.parentKey)
+        ) {
           return false;
         }
-        const requesterOwners = new Set(
-          listTasksForRelatedSessionKey(sessionKey)
-            .filter(
-              (task) =>
-                task.runtime === "acp" &&
-                task.childSessionKey === sessionKey &&
-                task.agentId === agentId &&
-                (task.requesterSessionKey === params.parentKey ||
-                  task.ownerKey === params.parentKey),
-            )
-            .flatMap((task) => (task.requesterAgentId ? [task.requesterAgentId] : [])),
-        );
+        const requesterAgentId =
+          entry.createdVia === "spawn" && entry.createdActor?.type === "agent"
+            ? entry.createdActor.id
+            : parseAgentSessionKey(params.parentKey)?.agentId;
         try {
-          if (requesterOwners.size > 1) {
-            throw new Error("ACP parent ownership is ambiguous");
+          if (!requesterAgentId) {
+            throw new Error("ACP parent ownership is not recorded for this unqualified key");
           }
           const parent = resolveAcpSessionTarget({
             cfg: params.cfg,
             sessionKey: params.parentKey,
-            agentId: requesterOwners.values().next().value,
+            agentId: requesterAgentId,
           });
           return parent.agentId === params.parentAgentId;
         } catch (error) {
@@ -309,14 +306,11 @@ async function ensureFreshAcpResetState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-  reason: "session-reset" | "session-delete";
+  reason: "session-reset";
   acpMeta: SessionAcpMeta;
   assertCurrent?: () => void;
   shouldApply?: () => boolean;
 }): Promise<SessionAcpMeta | undefined> {
-  if (params.reason !== "session-reset") {
-    return undefined;
-  }
   const latestMeta =
     (await readAcpSessionMetaAsync({
       sessionKey: params.sessionKey,

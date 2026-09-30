@@ -1,14 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../../infra/agent-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
-import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import {
+  prepareSubagentKillSession,
+  type SubagentKillSession,
+} from "./subagent-control-session.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -18,13 +24,17 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
-import { completeTerminalEffects } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import {
   freezeRunResultAtCompletion,
   refreshPendingFinalDeliveryPayload,
-  finalizeSubagentTaskRun,
 } from "./subagent-registry-lifecycle-delivery.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  captureSubagentRunMutationSnapshot,
+  publishSubagentRunPostimages,
+} from "./subagent-registry-persistence.js";
+import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   resolveSubagentRunDeadlineMs,
@@ -46,9 +56,6 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
 
 function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
-    typeof entry.runTimeoutSeconds !== "number" ||
-    !Number.isFinite(entry.runTimeoutSeconds) ||
-    entry.runTimeoutSeconds <= 0 ||
     entry.execution.outcome?.status !== "timeout" ||
     typeof entry.execution.endedAt !== "number"
   ) {
@@ -65,19 +72,6 @@ function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): bo
     entry.delivery?.status === "delivered" ||
     typeof entry.delivery?.announcedAt === "number"
   );
-}
-
-function resolveExpiredExplicitRunDeadlineMs(params: {
-  entry: SubagentRunRecord;
-  nextEndedAt: number;
-  observedStartedAt?: number;
-}): number | undefined {
-  const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(
-    params.entry,
-    params.nextEndedAt,
-    params.observedStartedAt,
-  );
-  return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
 }
 
 function isOlderEquivalentTerminalCallback(params: {
@@ -98,24 +92,26 @@ function isOlderEquivalentTerminalCallback(params: {
   return current.status !== "error" || current.error === params.outcome.error;
 }
 
-function taskCancellationPreventsCompletion(
-  task: DetachedTaskFindResult["task"],
-  entry: SubagentRunRecord,
-  endedAt: number,
-): boolean {
-  const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
-  return (
-    task?.status === "cancelled" &&
-    !isProvisionalSubagentKillTask(task) &&
-    !(typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt)
-  );
-}
-
 export async function completeSubagentRunAttempt(
   context: SubagentLifecycleCompletionContext,
   completeParams: SubagentCompletionRequest,
 ): Promise<void> {
   const params = context.options;
+  const stateContext = captureOpenClawStateWorkerContext();
+  const selectedEntry = params.runs.get(completeParams.runId);
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const selectedGeneration = selectedEntry?.generation;
+  const isSelectedEntryCurrent = () =>
+    isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+    params.runs.get(completeParams.runId) === selectedEntry &&
+    selectedEntry?.generation === selectedGeneration &&
+    completeParams.recoveryCurrent?.isHostCurrent() !== false;
+  const assertCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    if (!isSelectedEntryCurrent()) {
+      throw new Error("Subagent terminal publication lost its original owner");
+    }
+  };
   const releaseCompletionLock = await context.acquireTerminalCompletionLock(completeParams.runId);
   let entry: SubagentRunRecord | undefined;
   let terminalGeneration = 0;
@@ -124,64 +120,68 @@ export async function completeSubagentRunAttempt(
   let sessionSuperseded = false;
   let suppressSessionEffects = completeParams.suppressSessionEffects === true;
   let provisionalKillSnapshot: SubagentRunRecord | undefined;
-  let postCaptureTaskResolution: DetachedTaskFindResult | undefined;
   let entrySnapshot: SubagentRunRecord | undefined;
+  let collectorSession: SubagentKillSession | undefined;
   try {
+    if (!isSelectedEntryCurrent()) {
+      return;
+    }
+    assertCurrent();
     entry = params.runs.get(completeParams.runId);
     if (!entry) {
       return;
     }
+    const currentEntry = entry;
+    const ownerPauseReason = currentEntry.pauseReason;
+    if (completeParams.expectedEntry && entry !== completeParams.expectedEntry) {
+      return;
+    }
+    suppressSessionEffects ||= await context.shouldSuppressSessionEffects(
+      entry,
+      completeParams.sessionEffects,
+    );
     if (
-      (completeParams.expectedEntry && entry !== completeParams.expectedEntry) ||
-      completeParams.isRecoveryCurrent?.() === false
+      (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+      !isSelectedEntryCurrent() ||
+      currentEntry.pauseReason !== ownerPauseReason
     ) {
       return;
     }
-    context.bindTerminalSessionEffects(entry, completeParams.isChildSessionEffectsCurrent);
-    suppressSessionEffects ||= context.shouldSuppressSessionEffects(entry);
-    params.clearPendingLifecycleError(completeParams.runId);
-    const currentEntry = entry;
-    const resolveCurrentTask = async (candidate: SubagentRunRecord) => {
-      const generation = currentEntry.generation;
-      const execution = currentEntry.execution;
-      const cancellation = currentEntry.killReconciliation;
-      const killIntent = currentEntry.killIntent;
-      const terminalOwner = currentEntry.terminalOwner;
-      const pauseReason = currentEntry.pauseReason;
-      const suppressCompletionDelivery = currentEntry.suppressCompletionDelivery;
-      const suppressAnnounceReason = currentEntry.suppressAnnounceReason;
-      const taskResolution = await params.resolveSubagentTaskAsync(candidate);
+    assertCurrent();
+    if (entry.collect && !entry.collectorCompletion) {
+      collectorSession = await prepareSubagentKillSession(
+        params.getRuntimeConfig(),
+        entry.childSessionKey,
+        assertCurrent,
+        entry.execution.transcriptTarget,
+      );
       if (
-        params.runs.get(completeParams.runId) !== currentEntry ||
-        currentEntry.generation !== generation ||
-        currentEntry.execution !== execution ||
-        currentEntry.killReconciliation !== cancellation ||
-        currentEntry.killIntent !== killIntent ||
-        currentEntry.terminalOwner !== terminalOwner ||
-        currentEntry.pauseReason !== pauseReason ||
-        currentEntry.suppressCompletionDelivery !== suppressCompletionDelivery ||
-        currentEntry.suppressAnnounceReason !== suppressAnnounceReason ||
-        completeParams.isRecoveryCurrent?.() === false
+        (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+        !isSelectedEntryCurrent() ||
+        currentEntry.pauseReason !== ownerPauseReason
       ) {
-        return undefined;
-      }
-      return taskResolution;
-    };
-    // The first asynchronous arbitration precedes every tentative change to the live row.
-    // An observed abort may normalize to timeout after its explicit deadline.
-    const needsInitialArbitration =
-      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED && entry.killReconciliation !== undefined;
-    const initialTaskResolution = needsInitialArbitration
-      ? await resolveCurrentTask(entry)
-      : undefined;
-    if (needsInitialArbitration && !initialTaskResolution) {
-      return;
-    }
-    entrySnapshot = structuredClone(entry);
-    const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
-      if (!snapshot) {
         return;
       }
+      assertCurrent();
+    }
+    context.bindTerminalSessionEffects(entry, completeParams.sessionEffects);
+    params.clearPendingLifecycleError(completeParams.runId);
+    entrySnapshot = captureSubagentRunMutationSnapshot(entry);
+    const commit = async (previous: SubagentRunRecord, onPublished?: () => void) => {
+      const result = await publishSubagentRunPostimages({
+        runs: params.runs,
+        previous: new Map([[currentEntry, previous]]),
+        context: stateContext,
+        persist: params.persistAsyncOrThrow,
+        assertCurrent: () => {
+          assertCurrent();
+          collectorSession?.assertCurrent();
+        },
+        onPublished,
+      });
+      return result.publication === "published";
+    };
+    const restoreEntrySnapshot = (snapshot: SubagentRunRecord) => {
       for (const key of Object.keys(currentEntry)) {
         Reflect.deleteProperty(currentEntry, key);
       }
@@ -250,7 +250,7 @@ export async function completeSubagentRunAttempt(
           endedAt,
           outcome,
           interruptedAt: undefined,
-          interruptionReason: undefined,
+          interruptionReason: "gateway-restart",
           suppressSessionEffects: suppressSessionEffects ? true : undefined,
         };
         entry.completion = {
@@ -261,15 +261,12 @@ export async function completeSubagentRunAttempt(
         entry.cleanupHandled = false;
         entry.terminalOwner = "interrupted-recovery";
         mutated = true;
-        try {
-          params.persistOrThrow(completeParams.runId);
-        } catch (error) {
-          restoreEntrySnapshot(entrySnapshot);
-          throw error;
+        if (!(await commit(entrySnapshot))) {
+          return;
         }
         // Any later delivery-payload write rolls back to this durable owner,
         // never to the pre-recovery running row.
-        entrySnapshot = structuredClone(entry);
+        entrySnapshot = captureSubagentRunMutationSnapshot(entry);
         mutated = false;
       }
     }
@@ -341,15 +338,11 @@ export async function completeSubagentRunAttempt(
       Number.isFinite(completeParams.startedAt)
         ? completeParams.startedAt
         : undefined;
-    const expiredDeadlineMs = recoveryRequested
-      ? undefined
-      : resolveExpiredExplicitRunDeadlineMs({
-          entry,
-          nextEndedAt: endedAt,
-          observedStartedAt,
-        });
-    if (expiredDeadlineMs !== undefined) {
-      endedAt = expiredDeadlineMs;
+    const effectiveEndedAt = recoveryRequested
+      ? endedAt
+      : resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
+    if (effectiveEndedAt < endedAt) {
+      endedAt = effectiveEndedAt;
       completionOutcome = { status: "timeout" };
       completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
     }
@@ -407,19 +400,16 @@ export async function completeSubagentRunAttempt(
       entry.killReconciliation !== undefined
     ) {
       const killReconciliation = entry.killReconciliation;
-      const taskResolution = initialTaskResolution;
-      if (!taskResolution) {
-        return;
-      }
-      if (
-        taskResolution.lookup === "available" &&
-        taskCancellationPreventsCompletion(taskResolution.task, entry, endedAt)
-      ) {
-        // tasks.cancel promotes the provisional marker to durable operator
+      const stableTaskCancellation = entry.killReconciliation?.taskCancellationAccepted === true;
+      const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
+      const completionPredatesCancellation =
+        typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
+      if (stableTaskCancellation && !completionPredatesCancellation) {
+        // Native cancellation promotes the provisional marker to durable operator
         // intent. Only an already-durable earlier completion may reopen it.
         return;
       }
-      provisionalKillSnapshot = structuredClone(currentEntry);
+      provisionalKillSnapshot = captureSubagentRunMutationSnapshot(currentEntry);
       // The sweeper uses marker identity to reject a concurrently replaced
       // kill generation. A completion rollback must retain the same marker.
       provisionalKillSnapshot.killReconciliation = killReconciliation;
@@ -498,10 +488,12 @@ export async function completeSubagentRunAttempt(
     const retainedRestartRecovery = suppressSessionEffects
       ? entry.execution.restartRecovery
       : undefined;
+    const interruptionReason = recoveryRequested ? "gateway-restart" : undefined;
     if (
       entry.execution.status !== "terminal" ||
       entry.execution.endedAt !== endedAt ||
       entry.execution.outcome !== executionOutcome ||
+      entry.execution.interruptionReason !== interruptionReason ||
       entry.execution.restartRecovery !== retainedRestartRecovery ||
       entry.execution.suppressSessionEffects !== (suppressSessionEffects ? true : undefined)
     ) {
@@ -511,7 +503,7 @@ export async function completeSubagentRunAttempt(
         endedAt,
         outcome: executionOutcome,
         interruptedAt: undefined,
-        interruptionReason: undefined,
+        interruptionReason,
         restartRecovery: retainedRestartRecovery,
         suppressSessionEffects: suppressSessionEffects ? true : undefined,
       };
@@ -567,7 +559,7 @@ export async function completeSubagentRunAttempt(
       entry.delivery?.disposition !== "intentional_non_delivery";
     if (closesAsIntentionalNonDelivery) {
       // Producer-owned empty success is a terminal fact, not a failed send.
-      // Close it before task finalization so no requester delivery can start.
+      // Close it before terminal persistence so no requester delivery can start.
       entry.delivery = {
         status: "not_required",
         disposition: "intentional_non_delivery",
@@ -586,7 +578,24 @@ export async function completeSubagentRunAttempt(
         mutated = true;
       }
     } else {
-      const didFreezeResult = await freezeRunResultAtCompletion(context, entry, executionOutcome);
+      const executionBeforeCapture = currentEntry.execution;
+      const didFreezeResult = await freezeRunResultAtCompletion(
+        context,
+        entry,
+        executionOutcome,
+        assertCurrent,
+      );
+      // Native persistence is now the sole terminal commit. Capture must not give
+      // an old callback authority over a replacement row or a newer cancellation.
+      if (
+        (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+        !isSelectedEntryCurrent() ||
+        currentEntry.execution !== executionBeforeCapture ||
+        currentEntry.pauseReason === "sessions_yield"
+      ) {
+        return;
+      }
+      assertCurrent();
       sessionSuperseded = context.newerGenerationOwnsSession(entry);
       if (sessionSuperseded) {
         const completion = ensureCompletionState(entry);
@@ -599,24 +608,22 @@ export async function completeSubagentRunAttempt(
     }
     if (
       entry.collect
-        ? updateSwarmCollectorCompletion(entry, params.getRuntimeConfig())
+        ? updateSwarmCollectorCompletion(entry, params.getRuntimeConfig(), {
+            entry: collectorSession?.entry,
+          })
         : updateSubagentArchiveAtMs(entry, params.getRuntimeConfig())
     ) {
       mutated = true;
     }
     if (provisionalKillSnapshot) {
-      // Keep the tombstone's superseded generation boundary through task
-      // commit. Clearing it on the canonical registry row must not let a
-      // late old-run result select a newer task sharing the session key.
-      const taskResolution = await resolveCurrentTask(provisionalKillSnapshot);
-      if (!taskResolution) {
-        return;
-      }
-      postCaptureTaskResolution = taskResolution;
-      if (
-        taskResolution.lookup === "available" &&
-        taskCancellationPreventsCompletion(taskResolution.task, provisionalKillSnapshot, endedAt)
-      ) {
+      // Capture may race cancellation on this exact physical execution.
+      // Recheck the live marker before replacing the staged native outcome.
+      const stableTaskCancellation =
+        currentEntry.killReconciliation?.taskCancellationAccepted === true;
+      const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
+      const completionPredatesCancellation =
+        typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
+      if (stableTaskCancellation && !completionPredatesCancellation) {
         // Cancellation can become durable while completion capture yields.
         // The provider transition is staged, so the live tombstone is intact.
         return;
@@ -626,81 +633,29 @@ export async function completeSubagentRunAttempt(
       mutated = true;
     }
 
-    const opaqueTaskArbitration =
-      provisionalKillSnapshot !== undefined && postCaptureTaskResolution?.lookup === "unavailable";
-    // A steer abort ends one agent run but continues the same detached task.
-    // The successor must remain able to publish its eventual terminal state.
+    // Native cancellation and completion share this exact run generation.
     if (provisionalKillSnapshot) {
-      const finalizedTasks = await finalizeSubagentTaskRun(params, {
-        entry,
-        outcome: executionOutcome,
-        taskResolution: postCaptureTaskResolution,
-      });
-      const taskWasAbsent =
-        postCaptureTaskResolution?.lookup === "available" &&
-        postCaptureTaskResolution.task === undefined;
-      if ((!finalizedTasks || finalizedTasks.length === 0) && !taskWasAbsent) {
-        if (opaqueTaskArbitration) {
-          // The optional lookup cannot prove cancellation. Let the legacy
-          // runtime's own finalizer decide whether provider completion won.
-          return;
-        }
-        const latestTaskResolution = await resolveCurrentTask(provisionalKillSnapshot);
-        if (!latestTaskResolution) {
-          return;
-        }
-        if (
-          taskCancellationPreventsCompletion(
-            latestTaskResolution.task,
-            provisionalKillSnapshot,
-            endedAt,
-          )
-        ) {
-          return;
-        }
-        throw new Error("subagent task projection did not finalize");
-      }
-
-      // Task results do not auto-publish for subagents. Commit that durable,
-      // idempotent projection first: after a crash the persisted kill marker
-      // can replay it, while the inverse ordering could strand a provisional task.
       entry.browserCleanupDispatchedAt ??= currentEntry.browserCleanupDispatchedAt;
       if (currentEntry.killReconciliation?.suppressTaskDelivery === true) {
         entry.suppressCompletionDelivery = true;
       }
-      const liveBeforeCommit = structuredClone(currentEntry);
+      const liveBeforeCommit = captureSubagentRunMutationSnapshot(currentEntry);
       restoreEntrySnapshot(entry);
       entry = currentEntry;
-      try {
-        params.persistOrThrow(completeParams.runId);
-      } catch (error) {
-        restoreEntrySnapshot(liveBeforeCommit);
-        throw error;
+      if (!(await commit(liveBeforeCommit, () => context.bumpCleanupGeneration(currentEntry)))) {
+        return;
       }
-      // A provider result supersedes provisional cleanup only after both
-      // durable owners accept it. Rejected callbacks leave the kill tail live.
-      context.bumpCleanupGeneration(entry);
-    } else {
-      try {
-        if (mutated) {
-          params.persistOrThrow(completeParams.runId);
-        }
-      } catch (error) {
-        restoreEntrySnapshot(entrySnapshot);
-        throw error;
-      }
-      if (!isSteerRestartKill) {
-        await finalizeSubagentTaskRun(params, {
-          entry,
-          outcome: executionOutcome,
-        });
-      }
+      // A provider result supersedes provisional cleanup only after its native
+      // terminal commit. Rejected callbacks leave the kill tail live.
+    } else if (mutated && !(await commit(entrySnapshot))) {
+      return;
     }
     terminalGeneration = context.bumpTerminalGeneration(entry);
   } finally {
     // Only the canonical state/capture transition is serialized. Cleanup
     // remains re-entrant so a stalled browser close cannot strand a duplicate callback.
     releaseCompletionLock();
+    collectorSession?.release();
   }
 
   if (!entry) {
@@ -714,6 +669,8 @@ export async function completeSubagentRunAttempt(
     sessionSuperseded,
     suppressSessionEffects,
     terminalGeneration,
+    stateContext,
+    assertCurrent,
     loadCleanupBrowserSessionsForLifecycleEnd:
       params.loadCleanupBrowserSessionsForLifecycleEnd ?? loadCleanupBrowserSessionsForLifecycleEnd,
   });

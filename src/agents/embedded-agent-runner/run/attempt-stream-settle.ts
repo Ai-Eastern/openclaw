@@ -54,10 +54,6 @@ import {
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt-context-engine-helpers.js";
-import {
-  resolveAttemptStreamAuthProfileId,
-  resolveAttemptToolPolicyMessageProvider,
-} from "./attempt-run-decisions.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 import { normalizeCompactionRecoveryTranscriptTail } from "./attempt-transcript-helpers.js";
 import {
@@ -130,7 +126,7 @@ export async function settleEmbeddedAttemptStream(input: {
 
   try {
     if (
-      await shouldWaitForCompletionRequiredAsyncTasks({
+      shouldWaitForCompletionRequiredAsyncTasks({
         sessionKey: attempt.sessionKey,
         toolMetas: subscription.toolMetas,
         yieldDetected: state.yieldAborted,
@@ -405,6 +401,7 @@ export async function settleEmbeddedAttemptStream(input: {
 }
 
 export async function prepareEmbeddedAttemptTransport(input: {
+  assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
   settingsManager: SettingsManager;
@@ -427,10 +424,16 @@ export async function prepareEmbeddedAttemptTransport(input: {
 }) {
   const attempt = input.attempt;
   const session = input.session;
-  const assertRunCurrent = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedCurrent = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     input.abortSignal,
   );
+  const assertRunCurrent = input.assertCronRootCurrent
+    ? () => {
+        assertAdmittedCurrent?.();
+        input.assertCronRootCurrent?.();
+      }
+    : assertAdmittedCurrent;
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -523,7 +526,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedApiKey: attempt.resolvedApiKey,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
-    authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+    authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
   });
@@ -567,7 +570,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
-    messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+    messageProvider: attempt.messageProvider ?? attempt.messageChannel,
     agentAccountId: attempt.agentAccountId,
     groupId: attempt.groupId,
     groupChannel: attempt.groupChannel,

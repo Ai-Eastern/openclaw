@@ -1,7 +1,3 @@
-/**
- * Builds the skills, tools, capability profile, and system prompt used by one
- * prepared direct compaction attempt.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -10,7 +6,6 @@ import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { attachModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -51,7 +46,6 @@ import {
   buildAgentRuntimePlan,
   resolvePreparedProviderRuntimeHandle,
 } from "../runtime-plan/build.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
@@ -106,7 +100,7 @@ export async function buildPreparedCompactionRuntime(
     sandbox,
     effectiveWorkspace,
     effectiveCwd,
-    effectiveSkillAgentId: sessionAgentId,
+    sessionAgentId,
   } = prepared;
   const mode = params.execOverrides?.mode
     ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
@@ -201,21 +195,19 @@ export async function buildPreparedCompactionRuntime(
     );
     // Apply contextTokens cap to model so session runtime's auto-compaction
     // threshold uses the effective limit, not the native context window.
-    const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
       modelId,
-      model: runtimeModelWithContext,
-      agentId: sessionAgentId,
+      model: runtimeModel,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
-        contextTokenBudget < (runtimeModelWithContext.contextWindow ?? Infinity)
-          ? { ...runtimeModelWithContext, contextWindow: contextTokenBudget }
-          : runtimeModelWithContext,
+        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
+          ? { ...runtimeModel, contextWindow: contextTokenBudget }
+          : runtimeModel,
         apiKeyInfo,
       ),
       // Skip header injection when runtime auth exchange produced a
@@ -347,12 +339,10 @@ export async function buildPreparedCompactionRuntime(
       modelApi: effectiveModel.api,
       model: effectiveModel,
     };
-    const normalizableToolProjection = filterProviderNormalizableTools(
-      toolsEnabled ? toolsRaw : [],
-    );
-    logRuntimeToolSchemaQuarantine({
+    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
+    await logRuntimeToolSchemaQuarantine({
       diagnostics: normalizableToolProjection.diagnostics,
-      tools: toolsEnabled ? toolsRaw : [],
+      tools: toolsRaw,
       runId,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
@@ -389,7 +379,7 @@ export async function buildPreparedCompactionRuntime(
     });
     const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
     if (normalizableBundledToolProjection.diagnostics.length > 0) {
-      logRuntimeToolSchemaQuarantine({
+      await logRuntimeToolSchemaQuarantine({
         diagnostics: normalizableBundledToolProjection.diagnostics,
         tools: filteredBundledTools,
         runId,
@@ -407,7 +397,7 @@ export async function buildPreparedCompactionRuntime(
         : filteredBundledTools;
     const projectedEffectiveTools = [...tools, ...normalizedBundledTools];
     const toolSchemaProjection = filterRuntimeCompatibleTools(projectedEffectiveTools);
-    logRuntimeToolSchemaQuarantine({
+    await logRuntimeToolSchemaQuarantine({
       diagnostics: toolSchemaProjection.diagnostics,
       tools: projectedEffectiveTools,
       runId,
@@ -514,9 +504,7 @@ export async function buildPreparedCompactionRuntime(
       cwd: effectiveCwd,
       moduleUrl: import.meta.url,
     });
-    const promptContributionContext: Parameters<
-      AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
-    >[0] = {
+    const buildPromptContributionContext = () => ({
       config: params.config,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -526,9 +514,10 @@ export async function buildPreparedCompactionRuntime(
       runtimeChannel,
       runtimeCapabilities,
       agentId: sessionAgentId,
-    };
-    const promptContribution =
-      runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
+    });
+    const promptContribution = runtimePlan.prompt.resolveSystemPromptContribution(
+      buildPromptContributionContext(),
+    );
     const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
       enabled: promptMode === "full",
       toolNames: promptTools.map((tool) => tool.name),
@@ -589,15 +578,7 @@ export async function buildPreparedCompactionRuntime(
         config: params.config,
         workspaceDir: effectiveWorkspace,
         context: {
-          config: params.config,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          provider,
-          modelId,
-          promptMode,
-          runtimeChannel,
-          runtimeCapabilities,
-          agentId: sessionAgentId,
+          ...buildPromptContributionContext(),
           systemPrompt: builtSystemPrompt,
         },
       });
@@ -614,7 +595,6 @@ export async function buildPreparedCompactionRuntime(
       allowedToolNames,
       buildSystemPromptText,
       resolvedMessageProvider,
-      sessionAgentId,
     };
   } catch (err) {
     restoreSkillEnvironment();

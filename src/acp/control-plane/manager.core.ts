@@ -1,12 +1,11 @@
-/** Main ACP session manager implementation and public control-plane facade. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { recordSubagentTerminalState } from "../../sessions/subagent-terminal-state.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runAcceptedManagerTurn, type AcceptedTurns } from "./manager.accepted-turns.js";
-import { recordQueuedBackgroundTaskCancellation } from "./manager.background-task.js";
 import { cancelManagerAcceptedTurn, runManagerCancelSession } from "./manager.cancel-session.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
@@ -14,10 +13,7 @@ import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
 import { registerAcpSessionResetControls } from "./manager.reset-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import {
-  createSupersededActorError,
-  ensureManagerRuntimeHandle,
-} from "./manager.runtime-handle-ensure.js";
+import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
   runResetManagerSessionRuntimeOptions,
   runSetManagerSessionConfigOption,
@@ -30,6 +26,7 @@ import { runManagerGetSessionStatus } from "./manager.status.js";
 import { runManagerTurn } from "./manager.turn-runner.js";
 import { emitCancelledAcpTurn } from "./manager.turn-stream.js";
 import {
+  DEFAULT_DEPS,
   type AcpCloseSessionInput,
   type AcpCloseSessionResult,
   type AcpInitializeSessionInput,
@@ -42,19 +39,19 @@ import {
   type AcpSessionTarget,
   type AcpStartupIdentityReconcileResult,
   type ActiveTurnState,
-  DEFAULT_DEPS,
-  type SessionAcpMeta,
-  type SessionEntry,
-  type TurnLatencyStats,
   type EnsureManagerRuntimeHandle,
   type ReconcileManagerRuntimeSessionIdentifiers,
+  type SessionAcpMeta,
+  type SessionEntry,
   type SetManagerSessionState,
+  type TurnLatencyStats,
   type WriteManagerSessionMeta,
 } from "./manager.types.js";
 import {
-  resolveAcpSessionTarget,
-  normalizeAcpErrorCode,
+  createSupersededActorError,
   acpSessionActorKey,
+  normalizeAcpErrorCode,
+  resolveAcpSessionTarget,
   resolveStoredAcpSession,
 } from "./manager.utils.js";
 import {
@@ -65,7 +62,6 @@ import {
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
 
-/** Coordinates ACP session metadata, runtime handles, per-session queues, and turn execution. */
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
   private readonly runtimeHandles = new ManagerRuntimeHandleCache();
@@ -335,15 +331,44 @@ export class AcpSessionManager {
       ...target,
       stopping: this.stopping,
       turns: this.acceptedTurns,
+      captureSessionActor: () => this.actorQueue.capture(acpSessionActorKey(target)),
       withSessionActor: this.withSessionActor.bind(this),
-      onQueuedCancellation: async (assertCurrent) => {
-        await recordQueuedBackgroundTaskCancellation({
-          input,
-          ...target,
-          deps: this.deps,
-          startedAt,
-          assertCurrent,
-        });
+      onQueuedCancellation: async (assertCurrent, acpControl, revalidateCancel) => {
+        assertCurrent();
+        const firstAccepted = [...(this.acceptedTurns.get(acpSessionActorKey(target)) ?? [])].find(
+          (turn) => turn.requestId === input.requestId,
+        );
+        // The signal is keyed by run id; an earlier accepted instance still owns it.
+        if (
+          input.mode === "prompt" &&
+          firstAccepted?.instanceId === input.admittedRunContext.operationalRunInstance.instanceId
+        ) {
+          const entry = (
+            await this.deps.loadSessionEntryAsync({
+              cfg: input.cfg,
+              ...target,
+              assertCurrent,
+            })
+          )?.entry;
+          assertCurrent();
+          const requesterSessionKey =
+            normalizeText(entry?.spawnedBy) ?? normalizeText(entry?.parentSessionKey);
+          if (requesterSessionKey) {
+            await recordSubagentTerminalState(
+              {
+                childSessionKey: target.sessionKey,
+                runId: input.requestId,
+                requesterSessionKey,
+                outcomeStatus: "cancelled",
+              },
+              assertCurrent,
+              acpControl,
+            );
+            assertCurrent();
+          }
+        }
+        // Signal persistence is best effort; revalidate delivery even when its write was refused.
+        await revalidateCancel?.("publication");
         assertCurrent();
         await emitCancelledAcpTurn(input.onEvent);
         this.recordTurnCompletion({ startedAt });
@@ -389,8 +414,10 @@ export class AcpSessionManager {
       acceptedTurns: this.acceptedTurns,
       activeTurnBySession: this.activeTurnBySession,
       withSessionActor: this.withSessionActor.bind(this),
-      resolveSession: this.resolveSession.bind(this),
+      resolveSession: this.resolveSessionAsync.bind(this),
+      prepareSessionControlRead: this.deps.prepareSessionControlRead,
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
+      runtimeHandles: this.runtimeHandles,
       setSessionState: this.setSessionState.bind(this),
     });
   }
@@ -523,7 +550,11 @@ export class AcpSessionManager {
       skipMaintenance: true,
       takeCacheOwnership: true,
       isCurrentActor: params.isCurrentActor,
+      assertCommitAllowed: params.assertCurrent,
+      failOnError: params.assertCurrent !== undefined,
+      acpControl: params.acpControl,
       mutate: (base, entry) => {
+        params.assertCurrent?.();
         if (!entry || !base) {
           return null;
         }
@@ -569,7 +600,7 @@ export class AcpSessionManager {
     params: Parameters<WriteManagerSessionMeta>[0],
   ): ReturnType<WriteManagerSessionMeta> {
     try {
-      return await this.deps.upsertSessionMeta({
+      const input: Parameters<AcpSessionManagerDeps["upsertSessionMeta"]>[0] = {
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
@@ -585,7 +616,10 @@ export class AcpSessionManager {
         },
         ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
         ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
-      });
+      };
+      return params.acpControl
+        ? await this.deps.upsertSessionMetaForControl(input, params.acpControl)
+        : await this.deps.upsertSessionMeta(input);
     } catch (error) {
       if (params.isCurrentActor && !params.isCurrentActor()) {
         throw createSupersededActorError(params.sessionKey);

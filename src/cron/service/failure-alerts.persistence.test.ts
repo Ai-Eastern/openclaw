@@ -18,7 +18,7 @@ import {
 } from "./notification.test-helpers.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
-import { applyJobResult } from "./timer.js";
+import { applyJobResult } from "./timer-outcomes.js";
 
 const fixtures = setupCronRegressionFixtures({
   prefix: "cron-failure-alert-persistence-",
@@ -325,7 +325,7 @@ describe("cron failure alert persistence", () => {
     });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_failure_alert_terminal_write
+      CREATE TRIGGER reject_failure_alert_terminal_write
       BEFORE UPDATE ON cron_jobs
       WHEN NEW.store_key = '${cronStoreKey(store.storePath)}' AND NEW.job_id = '${job.id}'
       BEGIN

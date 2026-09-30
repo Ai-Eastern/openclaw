@@ -17,9 +17,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
+  DEFAULT_PARALLELISM,
   DEFAULT_RESOURCE_LIMITS,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
+import { isUpdateFirstHopCompatLane } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import {
   appendBoundedShellCapture,
   buildLaneRerunCommand,
@@ -1129,6 +1131,52 @@ process.exit(0);
     ).toBe(true);
   });
 
+  it.each([
+    { firstHops: 0, survivor: false, admitted: true },
+    { firstHops: 1, survivor: false, admitted: true },
+    { firstHops: 2, survivor: false, admitted: false },
+    { firstHops: 0, survivor: true, admitted: true },
+    { firstHops: 1, survivor: true, admitted: false },
+  ])(
+    "bounds self-upgrade admission with $firstHops first hops and survivor=$survivor",
+    ({ firstHops, survivor, admitted }) => {
+      const { orderedLanes } = resolveDockerE2ePlan({
+        includeOpenWebUI: false,
+        liveMode: "all",
+        orderLanes: (lanes) => lanes,
+        planReleaseAll: false,
+        profile: "release-path",
+        releaseChunk: "package-update-self-upgrade",
+        selectedLaneNames: [],
+      });
+      const hops = orderedLanes.filter((lane) => isUpdateFirstHopCompatLane(lane.name));
+      const running = [
+        ...hops.slice(0, firstHops),
+        ...orderedLanes.filter((lane) => survivor && lane.name === "upgrade-survivor"),
+      ];
+      const active = activePool();
+      for (const lane of running) {
+        active.count += 1;
+        active.weight += lane.weight;
+        for (const resource of new Set(["docker", ...lane.resources])) {
+          active.resources.set(resource, (active.resources.get(resource) ?? 0) + lane.weight);
+        }
+      }
+
+      expect(hops.length).toBeGreaterThan(2);
+      expect(running).toHaveLength(firstHops + Number(survivor));
+      for (const candidate of hops.slice(firstHops)) {
+        expect(
+          canStartSchedulerLane(candidate, active, DEFAULT_PARALLELISM, {
+            resourceLimits: DEFAULT_RESOURCE_LIMITS,
+            weightLimit: DEFAULT_PARALLELISM,
+          }),
+          candidate.name,
+        ).toBe(admitted);
+      }
+    },
+  );
+
   it("preserves the parallelism count cap", () => {
     expect(
       canStartSchedulerLane(
@@ -1518,7 +1566,15 @@ await runShellCommand({
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });
+      let runnerStderr = "";
+      runner.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        runnerStderr += chunk;
+      });
       await waitFor(() => {
+        // A runner that fails to load never becomes ready; report its error, not a timeout.
+        if (runner?.exitCode !== null) {
+          throw new Error(`runner exited before readiness:\n${runnerStderr}`);
+        }
         grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
         return existsSync(readyPath) && grandchildPid > 0;
       });

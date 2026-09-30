@@ -16,6 +16,10 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
@@ -36,10 +40,6 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -440,6 +440,8 @@ function createCronPromptExecutor(
         const buildCommonRunParams = () =>
           ({
             preparedRunAdmission,
+            ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
+            cwd: params.executionRoot ?? params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionTarget,
@@ -539,8 +541,6 @@ function createCronPromptExecutor(
                   sessionFile,
                   storePath: params.cronSession.storePath,
                   persistAssistantTranscript: true,
-                  workspaceDir: params.executionRoot ?? params.workspaceDir,
-                  bootstrapWorkspaceDir: params.workspaceDir,
                   rootedExecution,
                   modelProvider: providerOverride,
                   requesterModel: { provider: providerOverride, model: modelOverride },
@@ -632,7 +632,6 @@ function createCronPromptExecutor(
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
           agentDir: params.agentDir,
-          ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
           provider: providerOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           requestedRouteResolution: "resolved",
@@ -815,19 +814,18 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     let hasFreshDescendants = false;
     let hasActiveDescendants = false;
     if (shouldRetryInterimAck) {
-      const { countActiveDescendantRuns, listDescendantRunsForRequester } =
-        await cronSubagentRegistryRuntimeLoader.load();
-      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
-        const descendantStartedAt =
-          typeof entry.execution.startedAt === "number"
-            ? entry.execution.startedAt
-            : entry.createdAt;
-        return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
-      });
-      hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
+      const { readDescendantExecutionState } = await cronSubagentRegistryRuntimeLoader.load();
+      const descendants = await readDescendantExecutionState(params.runSessionKey, runStartedAt);
+      hasFreshDescendants = descendants.hasFreshDescendants;
+      hasActiveDescendants = descendants.hasActiveDescendants;
     }
 
-    if (shouldRetryInterimAck && !hasFreshDescendants && !hasActiveDescendants) {
+    if (
+      shouldRetryInterimAck &&
+      !params.isAborted() &&
+      !hasFreshDescendants &&
+      !hasActiveDescendants
+    ) {
       // Retry a bare acknowledgement only when no descendant subagent was
       // spawned; otherwise delivery waits for the subagent follow-up path.
       const continuationPrompt = [

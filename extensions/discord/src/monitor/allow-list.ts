@@ -2,12 +2,10 @@ import {
   type AllowlistMatch,
   resolveAllowlistMatchByCandidates,
 } from "openclaw/plugin-sdk/allow-from";
-import {
-  resolveBotThreadMentionPolicy,
-  type InboundImplicitMentionKind,
-} from "openclaw/plugin-sdk/channel-mention-gating";
+import type { InboundMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   buildChannelKeyCandidates,
+  normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
   type ChannelMatchSource,
@@ -83,10 +81,7 @@ export function normalizeDiscordAllowList(raw: string[] | undefined, prefixes: s
 }
 
 export function normalizeDiscordSlug(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return normalizeChannelSlug(value);
 }
 
 export function normalizeDiscordDisplaySlug(value: string) {
@@ -377,7 +372,7 @@ function resolveDiscordChannelEntryMatch(
   });
 }
 
-function hasConfiguredDiscordChannels(
+export function hasConfiguredDiscordChannels(
   channels: DiscordGuildEntryResolved["channels"] | undefined,
 ): channels is NonNullable<DiscordGuildEntryResolved["channels"]> {
   return Boolean(channels && Object.keys(channels).length > 0);
@@ -478,10 +473,8 @@ export function resolveDiscordShouldRequireMention(params: DiscordMentionPolicyP
 }
 
 export function resolveDiscordMentionPolicy(
-  params: DiscordMentionPolicyParams & {
-    implicitMentionKinds?: readonly InboundImplicitMentionKind[];
-  },
-) {
+  params: DiscordMentionPolicyParams,
+): Pick<InboundMentionPolicy, "requireMention" | "allowedImplicitMentionKinds"> {
   const botId = params.botId?.trim();
   const threadOwnerId = params.threadOwnerId?.trim();
   const isBotOwnedThread = Boolean(
@@ -491,17 +484,18 @@ export function resolveDiscordMentionPolicy(
   );
   const isAutoThreadOwnedByBot =
     params.isAutoThreadOwnedByBot ?? (isBotOwnedThread && params.channelConfig?.autoThread);
-  return resolveBotThreadMentionPolicy({
-    isBotOwnedThread,
-    requireMentionInBotThreads:
-      params.channelConfig?.requireMentionInBotThreads ??
-      params.guildInfo?.requireMentionInBotThreads,
+  const requireMentionInBotThreads = isBotOwnedThread
+    ? (params.channelConfig?.requireMentionInBotThreads ??
+      params.guildInfo?.requireMentionInBotThreads)
+    : undefined;
+  return {
     requireMention:
-      params.isGuildMessage && !isAutoThreadOwnedByBot
+      requireMentionInBotThreads ??
+      (params.isGuildMessage && !isAutoThreadOwnedByBot
         ? (params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true)
-        : false,
-    implicitMentionKinds: params.implicitMentionKinds,
-  });
+        : false),
+    allowedImplicitMentionKinds: requireMentionInBotThreads === true ? ["native"] : undefined,
+  };
 }
 
 export function isDiscordGroupAllowedByPolicy(params: {
